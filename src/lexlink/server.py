@@ -139,15 +139,21 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             # 3. Map to upstream format
             upstream_params = map_params_to_upstream(snake_params)
 
-            # 4. Execute request
+            # 4. Determine if we need to fetch more results for ranking
+            original_display = display
+            ranking_enabled = (type == "XML" and should_apply_ranking(query))
+
+            if ranking_enabled and original_display < 50:
+                # Fetch more results to rank (up to 50) for better relevance
+                upstream_params["numOfRows"] = "50"
+                logger.debug(f"Ranking enabled: fetching 50 results instead of {original_display}")
+
+            # 5. Execute request
             client = _get_client()
             response = client.get("/DRF/lawSearch.do", upstream_params, type)
 
-            # 5. Apply relevance ranking if XML response and appropriate query
-            if (response.get("status") == "ok" and
-                type == "XML" and
-                should_apply_ranking(query)):
-
+            # 6. Apply relevance ranking if XML response and appropriate query
+            if response.get("status") == "ok" and ranking_enabled:
                 raw_content = response.get("raw_content", "")
                 if raw_content:
                     # Parse XML
@@ -158,8 +164,16 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
                         if laws:
                             # Rank by relevance (exact matches first)
                             ranked_laws = rank_search_results(laws, query, "법령명한글")
+
+                            # Trim to original requested display amount
+                            if len(ranked_laws) > original_display:
+                                ranked_laws = ranked_laws[:original_display]
+                                logger.debug(f"Trimmed results from {len(laws)} to {original_display}")
+
                             # Update parsed data with ranked results
                             parsed_data = update_law_list(parsed_data, ranked_laws)
+                            # Update numOfRows to reflect trimmed results
+                            parsed_data["numOfRows"] = str(original_display)
                             # Add ranked data to response for LLM consumption
                             response["ranked_data"] = parsed_data
 
@@ -251,14 +265,21 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
                 snake_params["knd"] = knd
 
             upstream_params = map_params_to_upstream(snake_params)
+
+            # Determine if we need to fetch more results for ranking
+            original_display = display
+            ranking_enabled = (type == "XML" and should_apply_ranking(query))
+
+            if ranking_enabled and original_display < 50:
+                # Fetch more results to rank (up to 50) for better relevance
+                upstream_params["numOfRows"] = "50"
+                logger.debug(f"Ranking enabled: fetching 50 results instead of {original_display}")
+
             client = _get_client()
             response = client.get("/DRF/lawSearch.do", upstream_params, type)
 
             # Apply relevance ranking if XML response and appropriate query
-            if (response.get("status") == "ok" and
-                type == "XML" and
-                should_apply_ranking(query)):
-
+            if response.get("status") == "ok" and ranking_enabled:
                 raw_content = response.get("raw_content", "")
                 if raw_content:
                     parsed_data = parse_xml_response(raw_content)
@@ -266,7 +287,15 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
                         laws = extract_law_list(parsed_data)
                         if laws:
                             ranked_laws = rank_search_results(laws, query, "법령명한글")
+
+                            # Trim to original requested display amount
+                            if len(ranked_laws) > original_display:
+                                ranked_laws = ranked_laws[:original_display]
+                                logger.debug(f"Trimmed results from {len(laws)} to {original_display}")
+
                             parsed_data = update_law_list(parsed_data, ranked_laws)
+                            # Update numOfRows to reflect trimmed results
+                            parsed_data["numOfRows"] = str(original_display)
                             response["ranked_data"] = parsed_data
 
             return response
@@ -809,16 +838,22 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             # Map to upstream format
             upstream_params = map_params_to_upstream(params)
 
+            # Determine if we need to fetch more results for ranking
+            original_display = display
+            ranking_enabled = (type == "XML" and should_apply_ranking(query))
+
+            if ranking_enabled and original_display < 50:
+                # Fetch more results to rank (up to 50) for better relevance
+                upstream_params["numOfRows"] = "50"
+                logger.debug(f"Ranking enabled: fetching 50 results instead of {original_display}")
+
             # Call API
             client = _get_client()
             response = client.get("/DRF/lawSearch.do", upstream_params, response_type=type)
 
             # Apply relevance ranking for English-translated laws
             # elaw target accepts both Korean and English queries, so detect language
-            if (response.get("status") == "ok" and
-                type == "XML" and
-                should_apply_ranking(query)):
-
+            if response.get("status") == "ok" and ranking_enabled:
                 raw_content = response.get("raw_content", "")
                 if raw_content:
                     parsed_data = parse_xml_response(raw_content)
@@ -836,7 +871,15 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
                                 name_field = "법령명한글" if name_field == "법령명영문" else "법령명영문"
 
                             ranked_laws = rank_search_results(laws, query, name_field)
+
+                            # Trim to original requested display amount
+                            if len(ranked_laws) > original_display:
+                                ranked_laws = ranked_laws[:original_display]
+                                logger.debug(f"Trimmed results from {len(laws)} to {original_display}")
+
                             parsed_data = update_law_list(parsed_data, ranked_laws)
+                            # Update numOfRows to reflect trimmed results
+                            parsed_data["numOfRows"] = str(original_display)
                             response["ranked_data"] = parsed_data
 
             return response
@@ -1050,15 +1093,21 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             # Map to upstream format
             upstream_params = map_params_to_upstream(params)
 
+            # Determine if we need to fetch more results for ranking
+            original_display = display
+            ranking_enabled = (type == "XML" and should_apply_ranking(query))
+
+            if ranking_enabled and original_display < 50:
+                # Fetch more results to rank (up to 50) for better relevance
+                upstream_params["numOfRows"] = "50"
+                logger.debug(f"Ranking enabled: fetching 50 results instead of {original_display}")
+
             # Call API
             client = _get_client()
             response = client.get("/DRF/lawSearch.do", upstream_params, response_type=type)
 
             # Apply relevance ranking for administrative rules
-            if (response.get("status") == "ok" and
-                type == "XML" and
-                should_apply_ranking(query)):
-
+            if response.get("status") == "ok" and ranking_enabled:
                 raw_content = response.get("raw_content", "")
                 if raw_content:
                     parsed_data = parse_xml_response(raw_content)
@@ -1070,7 +1119,15 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
                         if rules:
                             # Administrative rules use "행정규칙명" field
                             ranked_rules = rank_search_results(rules, query, "행정규칙명")
+
+                            # Trim to original requested display amount
+                            if len(ranked_rules) > original_display:
+                                ranked_rules = ranked_rules[:original_display]
+                                logger.debug(f"Trimmed results from {len(rules)} to {original_display}")
+
                             parsed_data["admrul"] = ranked_rules
+                            # Update numOfRows to reflect trimmed results
+                            parsed_data["numOfRows"] = str(original_display)
                             response["ranked_data"] = parsed_data
 
             return response

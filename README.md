@@ -458,6 +458,27 @@ This project is open source. See LICENSE file for details.
 
 ## Changelog
 
+### v1.0.5 - 2025-11-10
+**Fix: Improve ranking by fetching more results before ranking**
+
+- **Issue:** v1.0.4 ranking was not working properly because it only ranked the limited results returned by the API (e.g., with `display=5`, only 5 alphabetically-ordered results were fetched). If "민법" wasn't in those first 5 results, ranking couldn't help.
+- **Root Cause:** Ranking logic was applied AFTER API returned limited results, so relevant matches outside the initial page were never considered.
+- **Solution:**
+  - When ranking is enabled and `display < 50`, automatically fetch up to 50 results from API
+  - Apply ranking to the larger result set (50 results)
+  - Trim back to original requested `display` amount after ranking
+  - Update `numOfRows` in response to reflect actual number of results returned
+- **Implementation:**
+  - Updated all 4 search tools: `eflaw_search`, `law_search`, `elaw_search`, `admrul_search`
+  - Added `original_display` tracking and `ranking_enabled` flag
+  - Fetch 50 results when ranking applies, then trim to requested amount
+- **Examples:**
+  - User requests `display=5` for query "민법"
+  - System fetches 50 results (includes "민법" even if it's not in first 5 alphabetically)
+  - Ranking places "민법" first
+  - System returns top 5 ranked results (now "민법" appears first)
+- **Impact:** Ranking now actually works - exact matches appear first regardless of alphabetical position in API results
+
 ### v1.0.4 - 2025-11-10
 **Feature: Add relevance ranking to search results**
 
