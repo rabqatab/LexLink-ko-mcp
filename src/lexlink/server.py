@@ -20,6 +20,8 @@ from .config import LexLinkConfig
 from .errors import ErrorCode, create_error_response
 from .params import map_params_to_upstream, resolve_oc
 from .validation import validate_date_range
+from .parser import parse_xml_response, extract_law_list, update_law_list
+from .ranking import rank_search_results, should_apply_ranking, detect_query_language
 
 # Set up logging
 logging.basicConfig(
@@ -139,7 +141,29 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
 
             # 4. Execute request
             client = _get_client()
-            return client.get("/DRF/lawSearch.do", upstream_params, type)
+            response = client.get("/DRF/lawSearch.do", upstream_params, type)
+
+            # 5. Apply relevance ranking if XML response and appropriate query
+            if (response.get("status") == "ok" and
+                type == "XML" and
+                should_apply_ranking(query)):
+
+                raw_content = response.get("raw_content", "")
+                if raw_content:
+                    # Parse XML
+                    parsed_data = parse_xml_response(raw_content)
+                    if parsed_data:
+                        # Extract law list
+                        laws = extract_law_list(parsed_data)
+                        if laws:
+                            # Rank by relevance (exact matches first)
+                            ranked_laws = rank_search_results(laws, query, "법령명한글")
+                            # Update parsed data with ranked results
+                            parsed_data = update_law_list(parsed_data, ranked_laws)
+                            # Add ranked data to response for LLM consumption
+                            response["ranked_data"] = parsed_data
+
+            return response
 
         except ValueError as e:
             # Configuration or validation error
@@ -228,7 +252,24 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
 
             upstream_params = map_params_to_upstream(snake_params)
             client = _get_client()
-            return client.get("/DRF/lawSearch.do", upstream_params, type)
+            response = client.get("/DRF/lawSearch.do", upstream_params, type)
+
+            # Apply relevance ranking if XML response and appropriate query
+            if (response.get("status") == "ok" and
+                type == "XML" and
+                should_apply_ranking(query)):
+
+                raw_content = response.get("raw_content", "")
+                if raw_content:
+                    parsed_data = parse_xml_response(raw_content)
+                    if parsed_data:
+                        laws = extract_law_list(parsed_data)
+                        if laws:
+                            ranked_laws = rank_search_results(laws, query, "법령명한글")
+                            parsed_data = update_law_list(parsed_data, ranked_laws)
+                            response["ranked_data"] = parsed_data
+
+            return response
 
         except ValueError as e:
             logger.warning(f"Validation error in law_search: {e}")
@@ -770,7 +811,35 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
 
             # Call API
             client = _get_client()
-            return client.get("/DRF/lawSearch.do", upstream_params, response_type=type)
+            response = client.get("/DRF/lawSearch.do", upstream_params, response_type=type)
+
+            # Apply relevance ranking for English-translated laws
+            # elaw target accepts both Korean and English queries, so detect language
+            if (response.get("status") == "ok" and
+                type == "XML" and
+                should_apply_ranking(query)):
+
+                raw_content = response.get("raw_content", "")
+                if raw_content:
+                    parsed_data = parse_xml_response(raw_content)
+                    if parsed_data:
+                        laws = extract_law_list(parsed_data)
+                        if laws:
+                            # Detect query language and rank by matching field
+                            # Korean query "가정폭력방지" → rank by 법령명한글
+                            # English query "insurance" → rank by 법령명영문
+                            query_lang = detect_query_language(query)
+                            name_field = "법령명영문" if query_lang == "english" else "법령명한글"
+
+                            # Verify the field exists in results, fall back if needed
+                            if laws and name_field not in laws[0]:
+                                name_field = "법령명한글" if name_field == "법령명영문" else "법령명영문"
+
+                            ranked_laws = rank_search_results(laws, query, name_field)
+                            parsed_data = update_law_list(parsed_data, ranked_laws)
+                            response["ranked_data"] = parsed_data
+
+            return response
 
         except ValueError as e:
             logger.error(f"Validation error in elaw_search: {e}")
@@ -983,7 +1052,28 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
 
             # Call API
             client = _get_client()
-            return client.get("/DRF/lawSearch.do", upstream_params, response_type=type)
+            response = client.get("/DRF/lawSearch.do", upstream_params, response_type=type)
+
+            # Apply relevance ranking for administrative rules
+            if (response.get("status") == "ok" and
+                type == "XML" and
+                should_apply_ranking(query)):
+
+                raw_content = response.get("raw_content", "")
+                if raw_content:
+                    parsed_data = parse_xml_response(raw_content)
+                    if parsed_data:
+                        # Extract administrative rules list (key might be "admrul" instead of "law")
+                        rules = parsed_data.get("admrul", [])
+                        if not isinstance(rules, list):
+                            rules = [rules] if rules else []
+                        if rules:
+                            # Administrative rules use "행정규칙명" field
+                            ranked_rules = rank_search_results(rules, query, "행정규칙명")
+                            parsed_data["admrul"] = ranked_rules
+                            response["ranked_data"] = parsed_data
+
+            return response
 
         except ValueError as e:
             logger.error(f"Validation error in admrul_search: {e}")

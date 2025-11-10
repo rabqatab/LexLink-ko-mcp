@@ -458,6 +458,25 @@ This project is open source. See LICENSE file for details.
 
 ## Changelog
 
+### v1.0.4 - 2025-11-10
+**Feature: Add relevance ranking to search results**
+
+- **Issue:** law.go.kr API returns results in alphabetical order, causing irrelevant matches to appear first (e.g., searching "민법" returned "난민법" first instead of exact match "민법")
+- **Solution:**
+  - Added intelligent relevance ranking that prioritizes exact matches over alphabetical ordering
+  - Ranking applies automatically to XML responses for keyword searches
+  - Results are reordered: exact match → starts with query → contains query → other matches
+- **Implementation:**
+  - Added `ranking.py` module with `rank_search_results()`, `should_apply_ranking()`, and `detect_query_language()` functions
+  - Added `parser.py` module for XML parsing and structured data extraction
+  - Updated 4 major search tools: `eflaw_search`, `law_search`, `elaw_search`, `admrul_search`
+  - Ranking preserves raw XML while adding `ranked_data` field for LLM consumption
+  - Special handling for `elaw_search`: Detects query language (Korean vs English) and ranks by matching name field
+- **Examples:**
+  - Query "민법" now returns: "민법" (exact) → "민법 시행령" (starts with) → "난민법" (alphabetical)
+  - Query "insurance" ranks: "Insurance Act" → "Insurance Business Act" → other matches
+- **Impact:** Significantly improves search relevance, reducing LLM confusion and providing better user experience
+
 ### v1.0.3 - 2025-11-10
 **Fix: Clarify article number format in tool descriptions**
 
