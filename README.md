@@ -1,10 +1,12 @@
 # LexLink - Korean National Law Information MCP Server
 
+**🌐 Read this in other languages:** **English** | [한국어 (Korean)](README_kr.md)
+
 [![smithery badge](https://smithery.ai/badge/@rabqatab/lexlink-ko-mcp)](https://smithery.ai/server/@rabqatab/lexlink-ko-mcp)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-blue)](https://modelcontextprotocol.io)
 [![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
-LexLink is an MCP (Model Context Protocol) server that exposes the Korean National Law Information API ([law.go.kr](http://www.law.go.kr)) to AI agents and LLM applications. It enables AI systems to search, retrieve, and analyze Korean legal information through standardized MCP tools.
+LexLink is an MCP (Model Context Protocol) server that exposes the Korean National Law Information API ([open.law.go.kr](http://open.law.go.kr)) to AI agents and LLM applications. It enables AI systems to search, retrieve, and analyze Korean legal information through standardized MCP tools.
 
 ## Features
 
@@ -19,7 +21,7 @@ LexLink is an MCP (Model Context Protocol) server that exposes the Korean Nation
 - **Session Configuration** - Configure once, use across all tool calls
 - **Error Handling** - Actionable error messages with resolution hints
 - **Korean Text Support** - Proper UTF-8 encoding for Korean characters
-- **Response Formats** - HTML, XML, or JSON (multiple formats supported)
+- **Response Formats** - HTML or XML (multiple formats supported)
 
 ## Project Status
 
@@ -29,7 +31,7 @@ LexLink is an MCP (Model Context Protocol) server that exposes the Korean Nation
 |--------|--------|
 | **Tools Implemented** | 15/15 (100%) ✅ |
 | **Semantic Validation** | 15/15 (100%) ✅ |
-| **API Coverage** | ~10% of 150+ endpoints |
+| **API Coverage** | essential ~10% of 150+ endpoints |
 | **LLM Integration** | ✅ Validated (Gemini) |
 | **Code Quality** | Clean, documented, tested |
 
@@ -39,7 +41,7 @@ LexLink is an MCP (Model Context Protocol) server that exposes the Korean Nation
 
 - **Python 3.10+**
 - **Smithery API key** (optional, for deployment): Get yours at [smithery.ai/account/api-keys](https://smithery.ai/account/api-keys)
-- **law.go.kr OC identifier**: Your email local part (e.g., `g4c@korea.kr` → `g4c`)
+- **law.go.kr OC identifier**: Get key from [open.law.go.kr](https://open.law.go.kr)
 
 ## Quick Start
 
@@ -283,14 +285,14 @@ When resolving the OC identifier:
 result = eflaw_search(
     query="자동차관리법",
     display=5,
-    type="JSON"
+    type="XML"
 )
 
 # Returns:
 {
     "status": "ok",
     "request_id": "uuid",
-    "upstream_type": "JSON",
+    "upstream_type": "XML",
     "data": {
         # Law search results...
     }
@@ -304,7 +306,7 @@ result = eflaw_search(
 result = eflaw_search(
     query="교통",
     ef_yd="20240101~20241231",
-    type="JSON"
+    type="XML"
 )
 ```
 
@@ -340,21 +342,6 @@ lexlink-ko-mcp/
 │   ├── validation.py   # Input validation
 │   ├── client.py       # HTTP client for law.go.kr API
 │   └── errors.py       # Error codes & responses
-├── docs/
-│   ├── DEVELOPMENT.md              # Project status & history
-│   ├── API_SPEC.md                 # API endpoint specifications
-│   ├── API_ROADMAP.md              # Implementation plan
-│   ├── API_COVERAGE_ANALYSIS.md    # Coverage analysis
-│   ├── all_apis.md                 # Complete API catalog
-│   └── reference/                  # Historical docs
-├── test/
-│   ├── test_semantic_validation.py      # Semantic data validation
-│   ├── test_llm_integration.py          # LLM + MCP integration
-│   ├── test_e2e_with_gemini.py          # E2E workflow tests
-│   ├── COMPREHENSIVE_TEST_SUMMARY.md    # Overall test results
-│   ├── SEMANTIC_VALIDATION_SUMMARY.md   # Data quality report
-│   ├── VALIDATOR_INVESTIGATION_REPORT.md # 100% validation report
-│   └── logs/                            # Test execution logs
 ├── pyproject.toml       # Project configuration
 └── README.md            # This file
 ```
@@ -382,10 +369,9 @@ uv run pytest tests/e2e/
 **Current Status:** 15/15 core tools implemented and validated
 
 For implementing additional tools from the 150+ available APIs:
-1. See `docs/all_apis.md` for complete API catalog
-2. Follow the pattern established in `src/lexlink/server.py`
-3. Use Context injection for session configuration
-4. Add semantic validation tests
+1. Follow the pattern established in `src/lexlink/server.py`
+2. Use Context injection for session configuration
+3. Add semantic validation tests
 
 **Tool Implementation Pattern:**
 - Each tool is a decorated function with MCP schema
@@ -409,23 +395,6 @@ For implementing additional tools from the 150+ available APIs:
 2. Deploy at [smithery.ai/new](https://smithery.ai/new)
 
 3. Configure session settings in Smithery UI
-
-## Documentation
-
-### Core Documentation
-- **[DEVELOPMENT.md](docs/DEVELOPMENT.md)** - Current project status and development history
-- **[API Specification](docs/API_SPEC.md)** - law.go.kr API endpoint specifications
-- **[API Roadmap](docs/API_ROADMAP.md)** - API implementation plan and progress
-- **[All APIs](docs/all_apis.md)** - Complete list of available law.go.kr APIs (150+ endpoints)
-
-### Test Reports
-- **[Comprehensive Test Summary](test/COMPREHENSIVE_TEST_SUMMARY.md)** - Overall test results (15/15 tools)
-- **[Semantic Validation Summary](test/SEMANTIC_VALIDATION_SUMMARY.md)** - Data quality validation
-- **[Validator Investigation Report](test/VALIDATOR_INVESTIGATION_REPORT.md)** - 100% validation achievement
-
-### Reference Documentation
-- **[API Coverage Analysis](docs/API_COVERAGE_ANALYSIS.md)** - API implementation coverage analysis
-- **[Reference Documents](docs/reference/)** - Historical design docs and research
 
 ## Troubleshooting
 
@@ -483,13 +452,24 @@ This project is open source. See LICENSE file for details.
 
 - **Issues:** [GitHub Issues](https://github.com/rabqatab/LexLink-ko-mcp/issues)
 - **Documentation:** See `docs/` directory
-- **law.go.kr API:** [Official Documentation](http://www.law.go.kr)
+- **law.go.kr API:** [Official Documentation](http://open.law.go.kr)
 
 ---
 
 ## Changelog
 
-### 2025-11-10 - v1.0.1
+### v1.0.2 - 2025-11-10
+**Fix: Accept both string and integer for id/mst parameters**
+
+- **Issue:** LLMs extract numeric values from XML responses as integers (e.g., `<법령일련번호>188376</법령일련번호>` → `mst=188376`), but tools expected strings, causing Pydantic validation errors
+- **Solution:** Changed parameter types to accept both strings and integers with automatic conversion
+- **Changes:**
+  - Updated 7 tool signatures: `id: Optional[str]` → `id: Optional[Union[str, int]]`
+  - Added automatic string conversion at start of each affected tool
+  - Applied to: `eflaw_service`, `law_service`, `eflaw_josub`, `law_josub`, `elaw_service`, `admrul_service`, `lsDelegated_service`
+- **Impact:** LLMs can now pass numeric IDs as integers without validation errors
+
+### v1.0.1 - 2025-11-10
 **Fix: Remove JSON format option from all tools**
 
 - **Issue:** LLMs were selecting JSON format, but law.go.kr API does not support JSON despite documentation (returns HTML error pages with "미신청된 목록/본문" message)
@@ -500,7 +480,7 @@ This project is open source. See LICENSE file for details.
   - Tool defaults remain XML (working format)
 - **Impact:** Prevents LLMs from requesting JSON format and receiving error pages
 
-### 2025-11-10 - v1.0.0
+### v1.0.0 - 2025-11-10
 **Initial Release**
 
 - 15 MCP tools for Korean law information access
