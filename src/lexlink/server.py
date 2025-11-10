@@ -10,7 +10,7 @@ documentation. All tools default to XML format. Use XML or HTML only.
 
 import logging
 import os
-from typing import Optional
+from typing import Optional, Union
 
 from mcp.server.fastmcp import FastMCP, Context
 from smithery.decorators import smithery
@@ -246,8 +246,8 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
     # ==================== TOOL 3: eflaw_service ====================
     @server.tool()
     def eflaw_service(
-        id: Optional[str] = None,
-        mst: Optional[str] = None,
+        id: Optional[Union[str, int]] = None,
+        mst: Optional[Union[str, int]] = None,
         ef_yd: Optional[int] = None,
         jo: Optional[str] = None,
         chr_cls_cd: Optional[str] = None,
@@ -284,6 +284,12 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             >>> eflaw_service(mst="166520", ef_yd=20151007, jo="000300", type="XML")
         """
         try:
+            # Convert id/mst to strings if they're integers (LLMs may extract numbers as ints)
+            if id is not None:
+                id = str(id)
+            if mst is not None:
+                mst = str(mst)
+
             # Access session config from Context at REQUEST time
             config = ctx.session_config if ctx else None
             session_oc = config.oc if config else None
@@ -346,8 +352,8 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
     # ==================== TOOL 4: law_service ====================
     @server.tool()
     def law_service(
-        id: Optional[str] = None,
-        mst: Optional[str] = None,
+        id: Optional[Union[str, int]] = None,
+        mst: Optional[Union[str, int]] = None,
         lm: Optional[str] = None,
         ld: Optional[int] = None,
         ln: Optional[int] = None,
@@ -384,6 +390,12 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             >>> law_service(mst="261457", type="XML")
         """
         try:
+            # Convert id/mst to strings if they're integers (LLMs may extract numbers as ints)
+            if id is not None:
+                id = str(id)
+            if mst is not None:
+                mst = str(mst)
+
             # Access session config from Context at REQUEST time
             config = ctx.session_config if ctx else None
             session_oc = config.oc if config else None
@@ -493,6 +505,12 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             ... )
         """
         try:
+            # Convert id/mst to strings if they're integers (LLMs may extract numbers as ints)
+            if id is not None:
+                id = str(id)
+            if mst is not None:
+                mst = str(mst)
+
             # Access session config from Context at REQUEST time
             config = ctx.session_config if ctx else None
             session_oc = config.oc if config else None
@@ -600,6 +618,12 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             ... )
         """
         try:
+            # Convert id/mst to strings if they're integers (LLMs may extract numbers as ints)
+            if id is not None:
+                id = str(id)
+            if mst is not None:
+                mst = str(mst)
+
             # Access session config from Context at REQUEST time
             config = ctx.session_config if ctx else None
             session_oc = config.oc if config else None
@@ -756,8 +780,8 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
     # ==================== TOOL 8: elaw_service ====================
     @server.tool()
     def elaw_service(
-        id: Optional[str] = None,
-        mst: Optional[str] = None,
+        id: Optional[Union[str, int]] = None,
+        mst: Optional[Union[str, int]] = None,
         lm: Optional[str] = None,
         ld: Optional[int] = None,
         ln: Optional[int] = None,
@@ -792,6 +816,12 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             >>> elaw_service(mst="127280", type="XML")
         """
         try:
+            # Convert id/mst to strings if they're integers (LLMs may extract numbers as ints)
+            if id is not None:
+                id = str(id)
+            if mst is not None:
+                mst = str(mst)
+
             # Require either id or mst
             if not id and not mst:
                 return create_error_response(
@@ -963,8 +993,8 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
     # ==================== TOOL 10: admrul_service ====================
     @server.tool()
     def admrul_service(
-        id: Optional[str] = None,
-        lid: Optional[str] = None,
+        id: Optional[Union[str, int]] = None,
+        lid: Optional[Union[str, int]] = None,
         lm: Optional[str] = None,
         oc: Optional[str] = None,
         type: str = "XML",
@@ -995,6 +1025,12 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             >>> admrul_service(lid="10000005747", type="XML")
         """
         try:
+            # Convert id/lid to strings if they're integers (LLMs may extract numbers as ints)
+            if id is not None:
+                id = str(id)
+            if lid is not None:
+                lid = str(lid)
+
             # Require at least one identifier
             if not id and not lid and not lm:
                 return create_error_response(
@@ -1350,8 +1386,8 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
     # ==================== TOOL 15: lsDelegated_service ====================
     @server.tool()
     def lsDelegated_service(
-        id: Optional[str] = None,
-        mst: Optional[str] = None,
+        id: Optional[Union[str, int]] = None,
+        mst: Optional[Union[str, int]] = None,
         oc: Optional[str] = None,
         type: str = "XML",
         ctx: Context = None,
@@ -1380,6 +1416,12 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             >>> lsDelegated_service(id="000900", type="XML")
         """
         try:
+            # Convert id/mst to strings if they're integers (LLMs may extract numbers as ints)
+            if id is not None:
+                id = str(id)
+            if mst is not None:
+                mst = str(mst)
+
             # Require either id or mst
             if not id and not mst:
                 return create_error_response(
