@@ -458,6 +458,21 @@ This project is open source. See LICENSE file for details.
 
 ## Changelog
 
+### v1.0.3 - 2025-11-10
+**Fix: Clarify article number format in tool descriptions**
+
+- **Issue:** LLMs misinterpreted the 6-digit article number format (`jo` parameter), generating "000200" for Article 20 (제20조) instead of correct "002000", resulting in wrong article retrieval
+- **Root Cause:** Tool descriptions used ambiguous example "000200" for "Article 2", leading LLMs to incorrectly pattern-match Article 20 → "000200"
+- **Solution:**
+  - Added comprehensive article number format documentation with multiple examples
+  - Added `format_article_number()` helper function in `validation.py` for future use
+  - Clarified that XXXXXX format = first 4 digits (article number, zero-padded) + last 2 digits (branch article suffix)
+- **Changes:**
+  - Updated 4 tools: `eflaw_service`, `law_service`, `eflaw_josub`, `law_josub`
+  - Updated `lnkLsOrdJo_search` which uses separate 4+2 digit format
+  - Added clear examples: "000200" (Art. 2), "002000" (Art. 20), "001502" (Art. 15-2)
+- **Impact:** LLMs will now correctly format article numbers, preventing queries from returning wrong articles
+
 ### v1.0.2 - 2025-11-10
 **Fix: Accept both string and integer for id/mst parameters**
 

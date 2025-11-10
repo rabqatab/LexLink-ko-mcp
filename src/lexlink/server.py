@@ -265,7 +265,9 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             id: Law ID (either id or mst is required)
             mst: Law serial number (MST/lsi_seq)
             ef_yd: Effective date (YYYYMMDD) - required when using mst
-            jo: Article number (6 digits, e.g., "000200" for Article 2)
+            jo: Article number in XXXXXX format (first 4 digits = article number zero-padded,
+                last 2 digits = branch article suffix where 00=main article).
+                Examples: "000200" (Article 2), "002000" (Article 20), "001502" (Article 15-2)
             chr_cls_cd: Language code - "010202" (Korean, default) or "010201" (Original)
             oc: Optional OC override (defaults to session config or env)
             type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
@@ -374,7 +376,9 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             lm: Law modification parameter
             ld: Law date parameter (YYYYMMDD)
             ln: Law number parameter
-            jo: Article number (6 digits)
+            jo: Article number in XXXXXX format (first 4 digits = article number zero-padded,
+                last 2 digits = branch article suffix where 00=main article).
+                Examples: "000200" (Article 2), "002000" (Article 20), "001502" (Article 15-2)
             lang: Language - "KO" (Korean) or "ORI" (Original)
             oc: Optional OC override (defaults to session config or env)
             type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
@@ -482,7 +486,9 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             id: Law ID (either id or mst is required)
             mst: Law serial number (MST)
             ef_yd: Effective date (YYYYMMDD) - required when using mst
-            jo: Article number (6 digits, e.g., "000300")
+            jo: Article number in XXXXXX format (first 4 digits = article number zero-padded,
+                last 2 digits = branch article suffix where 00=main article).
+                Examples: "000200" (Article 2), "002000" (Article 20), "001502" (Article 15-2)
             hang: Paragraph number (6 digits, e.g., "000100")
             ho: Item number (6 digits, e.g., "000200")
             mok: Subitem (UTF-8 encoded, e.g., "다")
@@ -596,7 +602,9 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
         Args:
             id: Law ID (either id or mst is required)
             mst: Law serial number (MST)
-            jo: Article number (6 digits, e.g., "000300")
+            jo: Article number in XXXXXX format (first 4 digits = article number zero-padded,
+                last 2 digits = branch article suffix where 00=main article).
+                Examples: "000200" (Article 2), "002000" (Article 20), "001502" (Article 15-2)
             hang: Paragraph number (6 digits, e.g., "000100")
             ho: Item number (6 digits, e.g., "000200")
             mok: Subitem (UTF-8 encoded, e.g., "다")
@@ -1186,8 +1194,8 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             oc: Optional OC override (defaults to session config or env)
             type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
             knd: Law type code (to filter by specific law)
-            jo: Article number (4 digits, e.g., 20 → 0020)
-            jobr: Article branch number (2 digits, e.g., 02)
+            jo: Article number (4 digits, zero-padded). Examples: "0002" (Article 2), "0020" (Article 20), "0100" (Article 100)
+            jobr: Branch article suffix (2 digits, zero-padded). Examples: "00" (main article), "02" (Article X-2)
             sort: Sort order
             ctx: MCP context (injected automatically)
 
