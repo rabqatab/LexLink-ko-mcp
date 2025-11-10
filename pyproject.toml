@@ -1,0 +1,46 @@
+[build-system]
+requires = ["uv_build>=0.8.15,<0.9.0"]
+build-backend = "uv_build"
+
+[project]
+name = "lexlink"
+version = "0.1.0"
+description = "MCP server for Korean National Law Information API"
+authors = [
+    {name = "LexLink Team", email = "minhan.nick.cho@gmail.com"}
+]
+
+requires-python = ">=3.10"
+dependencies = [
+    "mcp>=1.15.0",
+    "smithery>=0.4.2",
+    "httpx>=0.27.0",
+    "pydantic>=2.0.0",
+]
+
+[project.scripts]
+dev = "smithery.cli.dev:main" # Run the MCP server in development mode
+start = "smithery.cli.start:main" # Run the MCP server in production mode
+playground = "smithery.cli.playground:main" # Run server with interactive testing playground
+
+[tool.smithery]
+server = "lexlink.server:create_server" # Function that returns a patched FastMCP server
+log_level = "warning" # Production log level (optional, defaults to "warning")
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+markers = [
+    "unit: Unit tests (fast, isolated)",
+    "integration: Integration tests (with mocks)",
+    "e2e: End-to-end tests (requires dev server)",
+    "critical: Critical path tests (must pass)",
+    "slow: Slow tests (> 5s)",
+]
+
+[dependency-groups]
+dev = [
+    "google-generativeai>=0.8.5",
+]
