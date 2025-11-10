@@ -86,7 +86,7 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
 
         Args:
             query: Search keyword (law name or content)
-            display: Number of results per page (max 100, default 20)
+            display: Number of results per page (max 100, default 20). **Recommend 50-100 for law searches (법령 검색) to ensure exact matches are found.**
             page: Page number (1-based, default 1)
             oc: Optional OC override (defaults to session config or env)
             type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
@@ -150,10 +150,10 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             original_display = display
             ranking_enabled = (type == "XML" and should_apply_ranking(query))
 
-            if ranking_enabled and original_display < 50:
-                # Fetch more results to rank (up to 50) for better relevance
-                upstream_params["numOfRows"] = "50"
-                logger.debug(f"Ranking enabled: fetching 50 results instead of {original_display}")
+            if ranking_enabled and original_display < 100:
+                # Fetch more results to rank (up to 100, API max) for better relevance
+                upstream_params["numOfRows"] = "100"
+                logger.debug(f"Ranking enabled: fetching 100 results instead of {original_display}")
 
             # 5. Execute request
             client = _get_client()
@@ -236,7 +236,7 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
 
         Args:
             query: Search keyword (law name or content)
-            display: Number of results per page (max 100, default 20)
+            display: Number of results per page (max 100, default 20). **Recommend 50-100 for law searches (법령 검색) to ensure exact matches are found.**
             page: Page number (1-based, default 1)
             oc: Optional OC override (defaults to session config or env)
             type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
@@ -283,10 +283,10 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             original_display = display
             ranking_enabled = (type == "XML" and should_apply_ranking(query))
 
-            if ranking_enabled and original_display < 50:
-                # Fetch more results to rank (up to 50) for better relevance
-                upstream_params["numOfRows"] = "50"
-                logger.debug(f"Ranking enabled: fetching 50 results instead of {original_display}")
+            if ranking_enabled and original_display < 100:
+                # Fetch more results to rank (up to 100, API max) for better relevance
+                upstream_params["numOfRows"] = "100"
+                logger.debug(f"Ranking enabled: fetching 100 results instead of {original_display}")
 
             client = _get_client()
             response = client.get("/DRF/lawSearch.do", upstream_params, type)
@@ -338,7 +338,7 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
         id: Optional[Union[str, int]] = None,
         mst: Optional[Union[str, int]] = None,
         ef_yd: Optional[int] = None,
-        jo: Optional[str] = None,
+        jo: Optional[Union[str, int]] = None,
         chr_cls_cd: Optional[str] = None,
         oc: Optional[str] = None,
         type: str = "XML",
@@ -375,11 +375,13 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             >>> eflaw_service(mst="166520", ef_yd=20151007, jo="000300", type="XML")
         """
         try:
-            # Convert id/mst to strings if they're integers (LLMs may extract numbers as ints)
+            # Convert id/mst/jo to strings if they're integers (LLMs may extract numbers as ints)
             if id is not None:
                 id = str(id)
             if mst is not None:
                 mst = str(mst)
+            if jo is not None:
+                jo = str(jo)
 
             # Access session config from Context at REQUEST time
             config = ctx.session_config if ctx else None
@@ -454,7 +456,7 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
         lm: Optional[str] = None,
         ld: Optional[int] = None,
         ln: Optional[int] = None,
-        jo: Optional[str] = None,
+        jo: Optional[Union[str, int]] = None,
         lang: Optional[str] = None,
         oc: Optional[str] = None,
         type: str = "XML",
@@ -489,11 +491,13 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             >>> law_service(mst="261457", type="XML")
         """
         try:
-            # Convert id/mst to strings if they're integers (LLMs may extract numbers as ints)
+            # Convert id/mst/jo to strings if they're integers (LLMs may extract numbers as ints)
             if id is not None:
                 id = str(id)
             if mst is not None:
                 mst = str(mst)
+            if jo is not None:
+                jo = str(jo)
 
             # Access session config from Context at REQUEST time
             config = ctx.session_config if ctx else None
@@ -569,7 +573,7 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
         id: Optional[str] = None,
         mst: Optional[str] = None,
         ef_yd: Optional[int] = None,
-        jo: Optional[str] = None,
+        jo: Optional[Union[str, int]] = None,
         hang: Optional[str] = None,
         ho: Optional[str] = None,
         mok: Optional[str] = None,
@@ -612,11 +616,13 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             ... )
         """
         try:
-            # Convert id/mst to strings if they're integers (LLMs may extract numbers as ints)
+            # Convert id/mst/jo to strings if they're integers (LLMs may extract numbers as ints)
             if id is not None:
                 id = str(id)
             if mst is not None:
                 mst = str(mst)
+            if jo is not None:
+                jo = str(jo)
 
             # Access session config from Context at REQUEST time
             config = ctx.session_config if ctx else None
@@ -692,7 +698,7 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
     def law_josub(
         id: Optional[str] = None,
         mst: Optional[str] = None,
-        jo: Optional[str] = None,
+        jo: Optional[Union[str, int]] = None,
         hang: Optional[str] = None,
         ho: Optional[str] = None,
         mok: Optional[str] = None,
@@ -733,11 +739,13 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             ... )
         """
         try:
-            # Convert id/mst to strings if they're integers (LLMs may extract numbers as ints)
+            # Convert id/mst/jo to strings if they're integers (LLMs may extract numbers as ints)
             if id is not None:
                 id = str(id)
             if mst is not None:
                 mst = str(mst)
+            if jo is not None:
+                jo = str(jo)
 
             # Access session config from Context at REQUEST time
             config = ctx.session_config if ctx else None
@@ -827,7 +835,7 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
 
         Args:
             query: Search keyword (Korean or English, default "*")
-            display: Number of results per page (max 100, default 20)
+            display: Number of results per page (max 100, default 20). **Recommend 50-100 for law searches (법령 검색) to ensure exact matches are found.**
             page: Page number (1-based, default 1)
             oc: Optional OC override (defaults to session config or env)
             type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
@@ -885,10 +893,10 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             original_display = display
             ranking_enabled = (type == "XML" and should_apply_ranking(query))
 
-            if ranking_enabled and original_display < 50:
-                # Fetch more results to rank (up to 50) for better relevance
-                upstream_params["numOfRows"] = "50"
-                logger.debug(f"Ranking enabled: fetching 50 results instead of {original_display}")
+            if ranking_enabled and original_display < 100:
+                # Fetch more results to rank (up to 100, API max) for better relevance
+                upstream_params["numOfRows"] = "100"
+                logger.debug(f"Ranking enabled: fetching 100 results instead of {original_display}")
 
             # Call API
             client = _get_client()
@@ -1082,7 +1090,7 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
 
         Args:
             query: Search keyword (default "*")
-            display: Number of results per page (max 100, default 20)
+            display: Number of results per page (max 100, default 20). **Recommend 50-100 for law searches (법령 검색) to ensure exact matches are found.**
             page: Page number (1-based, default 1)
             oc: Optional OC override (defaults to session config or env)
             type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
@@ -1152,10 +1160,10 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             original_display = display
             ranking_enabled = (type == "XML" and should_apply_ranking(query))
 
-            if ranking_enabled and original_display < 50:
-                # Fetch more results to rank (up to 50) for better relevance
-                upstream_params["numOfRows"] = "50"
-                logger.debug(f"Ranking enabled: fetching 50 results instead of {original_display}")
+            if ranking_enabled and original_display < 100:
+                # Fetch more results to rank (up to 100, API max) for better relevance
+                upstream_params["numOfRows"] = "100"
+                logger.debug(f"Ranking enabled: fetching 100 results instead of {original_display}")
 
             # Call API
             client = _get_client()
@@ -1325,7 +1333,7 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
 
         Args:
             query: Search keyword (default "*")
-            display: Number of results per page (max 100, default 20)
+            display: Number of results per page (max 100, default 20). **Recommend 50-100 for law searches (법령 검색) to ensure exact matches are found.**
             page: Page number (1-based, default 1)
             oc: Optional OC override (defaults to session config or env)
             type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
@@ -1409,7 +1417,7 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
 
         Args:
             query: Search keyword (default "*")
-            display: Number of results per page (max 100, default 20)
+            display: Number of results per page (max 100, default 20). **Recommend 50-100 for law searches (법령 검색) to ensure exact matches are found.**
             page: Page number (1-based, default 1)
             oc: Optional OC override (defaults to session config or env)
             type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
@@ -1502,7 +1510,7 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
 
         Args:
             org: Ministry/department code (required, e.g., "1400000")
-            display: Number of results per page (max 100, default 20)
+            display: Number of results per page (max 100, default 20). **Recommend 50-100 for law searches (법령 검색) to ensure exact matches are found.**
             page: Page number (1-based, default 1)
             oc: Optional OC override (defaults to session config or env)
             type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)

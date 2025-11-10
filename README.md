@@ -458,6 +458,30 @@ This project is open source. See LICENSE file for details.
 
 ## Changelog
 
+### v1.0.7 - 2025-11-10
+**Fix: Improve search reliability and LLM guidance**
+
+- **Issue:** LLMs often failed to find common laws like "민법" (Civil Code) because:
+  1. Ranking fetch limit (50 results) was too small for large result sets (e.g., 77 results for "민법")
+  2. LLMs defaulted to small `display` values (e.g., 5), missing exact matches
+  3. `jo` parameter rejected integers, causing validation errors and retry loops
+- **Root Cause:**
+  - v1.0.5 ranking fetched only 50 results; "민법" was beyond position 50 alphabetically
+  - Tool descriptions didn't guide LLMs to use larger display values
+  - Parameter type strictness caused UX friction
+- **Solution:**
+  - Increased ranking fetch limit from 50 to **100 results** (API maximum)
+  - Updated `jo` parameter to accept `Union[str, int]` with auto-conversion
+  - Added guidance in tool descriptions: **"Recommend 50-100 for law searches (법령 검색) to ensure exact matches are found"**
+- **Changes:**
+  - All 4 search tools now fetch up to 100 results for ranking
+  - All 4 tools with `jo` parameter (`eflaw_service`, `law_service`, `eflaw_josub`, `law_josub`) now accept integers
+  - All 7 search tool descriptions updated with display recommendations
+- **Impact:**
+  - LLMs now find "민법" correctly even with small initial display values
+  - No more validation errors when LLMs pass article numbers as integers
+  - Better guidance leads to more efficient searches
+
 ### v1.0.6 - 2025-11-10
 **Enhancement: Improve MCP server quality score (Smithery.ai optimization)**
 
