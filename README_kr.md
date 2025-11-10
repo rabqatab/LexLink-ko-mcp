@@ -1,4 +1,7 @@
-# LexLink - 대한민국 법령정보 MCP 서버
+<div align="center">
+  <img src="assets/LexLink_logo.png" alt="LexLink Logo" width="200"/>
+  <h1>LexLink - 대한민국 법령정보 MCP 서버</h1>
+</div>
 
 **🌐 Read this in other languages:** [English](README.md) | **한국어**
 

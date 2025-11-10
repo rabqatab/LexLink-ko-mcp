@@ -1,4 +1,7 @@
-# LexLink - Korean National Law Information MCP Server
+<div align="center">
+  <img src="assets/LexLink_logo.png" alt="LexLink Logo" width="200"/>
+  <h1>LexLink - Korean National Law Information MCP Server</h1>
+</div>
 
 **🌐 Read this in other languages:** **English** | [한국어 (Korean)](README_kr.md)
 
