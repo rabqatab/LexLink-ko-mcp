@@ -481,9 +481,34 @@ This project is open source. See LICENSE file for details.
 
 ## Support
 
-- **Issues:** [GitHub Issues](https://github.com/YOUR_USERNAME/lexlink-ko-mcp/issues)
+- **Issues:** [GitHub Issues](https://github.com/rabqatab/LexLink-ko-mcp/issues)
 - **Documentation:** See `docs/` directory
 - **law.go.kr API:** [Official Documentation](http://www.law.go.kr)
+
+---
+
+## Changelog
+
+### 2025-11-10 - v1.0.1
+**Fix: Remove JSON format option from all tools**
+
+- **Issue:** LLMs were selecting JSON format, but law.go.kr API does not support JSON despite documentation (returns HTML error pages with "미신청된 목록/본문" message)
+- **Solution:** Removed JSON as an option from all 14 tool descriptions
+- **Changes:**
+  - Updated `type` parameter documentation to explicitly state "JSON not supported by API"
+  - Added warning in module docstring about JSON format limitation
+  - Tool defaults remain XML (working format)
+- **Impact:** Prevents LLMs from requesting JSON format and receiving error pages
+
+### 2025-11-10 - v1.0.0
+**Initial Release**
+
+- 15 MCP tools for Korean law information access
+- 6 core law APIs (eflaw/law search and retrieval)
+- 9 extended APIs (English laws, administrative rules, law-ordinance linkage)
+- Session configuration via Context injection
+- 100% semantic validation
+- Production-ready for Smithery deployment
 
 ---
 
