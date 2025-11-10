@@ -19,9 +19,10 @@ class LexLinkConfig(BaseModel):
     """
 
     oc: str = Field(
+        default="test",
         description=(
             "User identifier (email local part). Required for law.go.kr API. "
-            "Example: g4c@korea.kr → g4c"
+            "Example: g4c@korea.kr → g4c. Defaults to 'test' for demo purposes."
         )
     )
 

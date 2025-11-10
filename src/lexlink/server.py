@@ -13,6 +13,7 @@ import os
 from typing import Optional, Union
 
 from mcp.server.fastmcp import FastMCP, Context
+from mcp.types import ToolAnnotations
 from smithery.decorators import smithery
 
 from .client import LawAPIClient
@@ -58,7 +59,13 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
         return LawAPIClient()
 
     # ==================== TOOL 1: eflaw_search ====================
-    @server.tool()
+    @server.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True
+        )
+    )
     def eflaw_search(
         query: str,
         display: int = 20,
@@ -203,7 +210,13 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             )
 
     # ==================== TOOL 2: law_search ====================
-    @server.tool()
+    @server.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True
+        )
+    )
     def law_search(
         query: str,
         display: int = 20,
@@ -314,7 +327,13 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             )
 
     # ==================== TOOL 3: eflaw_service ====================
-    @server.tool()
+    @server.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True
+        )
+    )
     def eflaw_service(
         id: Optional[Union[str, int]] = None,
         mst: Optional[Union[str, int]] = None,
@@ -422,7 +441,13 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             )
 
     # ==================== TOOL 4: law_service ====================
-    @server.tool()
+    @server.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True
+        )
+    )
     def law_service(
         id: Optional[Union[str, int]] = None,
         mst: Optional[Union[str, int]] = None,
@@ -533,7 +558,13 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             )
 
     # ==================== TOOL 5: eflaw_josub ====================
-    @server.tool()
+    @server.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True
+        )
+    )
     def eflaw_josub(
         id: Optional[str] = None,
         mst: Optional[str] = None,
@@ -651,7 +682,13 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             )
 
     # ==================== TOOL 6: law_josub ====================
-    @server.tool()
+    @server.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True
+        )
+    )
     def law_josub(
         id: Optional[str] = None,
         mst: Optional[str] = None,
@@ -763,7 +800,13 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             )
 
     # ==================== TOOL 7: elaw_search ====================
-    @server.tool()
+    @server.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True
+        )
+    )
     def elaw_search(
         query: str = "*",
         display: int = 20,
@@ -898,7 +941,13 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             )
 
     # ==================== TOOL 8: elaw_service ====================
-    @server.tool()
+    @server.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True
+        )
+    )
     def elaw_service(
         id: Optional[Union[str, int]] = None,
         mst: Optional[Union[str, int]] = None,
@@ -1002,7 +1051,13 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             )
 
     # ==================== TOOL 9: admrul_search ====================
-    @server.tool()
+    @server.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True
+        )
+    )
     def admrul_search(
         query: str = "*",
         display: int = 20,
@@ -1146,7 +1201,13 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             )
 
     # ==================== TOOL 10: admrul_service ====================
-    @server.tool()
+    @server.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True
+        )
+    )
     def admrul_service(
         id: Optional[Union[str, int]] = None,
         lid: Optional[Union[str, int]] = None,
@@ -1240,7 +1301,13 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             )
 
     # ==================== TOOL 11: lnkLs_search ====================
-    @server.tool()
+    @server.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True
+        )
+    )
     def lnkLs_search(
         query: str = "*",
         display: int = 20,
@@ -1314,7 +1381,13 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             )
 
     # ==================== TOOL 12: lnkLsOrdJo_search ====================
-    @server.tool()
+    @server.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True
+        )
+    )
     def lnkLsOrdJo_search(
         query: str = "*",
         display: int = 20,
@@ -1405,7 +1478,13 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             )
 
     # ==================== TOOL 13: lnkDep_search ====================
-    @server.tool()
+    @server.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True
+        )
+    )
     def lnkDep_search(
         org: str,
         display: int = 20,
@@ -1479,7 +1558,13 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             )
 
     # ==================== TOOL 14: drlaw_search ====================
-    @server.tool()
+    @server.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True
+        )
+    )
     def drlaw_search(
         oc: Optional[str] = None,
         ctx: Context = None,
@@ -1539,7 +1624,13 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             )
 
     # ==================== TOOL 15: lsDelegated_service ====================
-    @server.tool()
+    @server.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True
+        )
+    )
     def lsDelegated_service(
         id: Optional[Union[str, int]] = None,
         mst: Optional[Union[str, int]] = None,
@@ -1633,10 +1724,120 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
                 message=f"Unexpected error: {str(e)}"
             )
 
-    logger.info("LexLink server initialized with 15 tools")
+    # ==================== PROMPTS ====================
+
+    @server.prompt(
+        name="search-korean-law",
+        description="Search for a Korean law by name or keyword and provide a summary"
+    )
+    def search_korean_law(law_name: str) -> list:
+        """
+        Prompt to help users search for a Korean law by name.
+
+        Args:
+            law_name: Name or keyword of the law (e.g., '민법', '자동차관리법', 'civil code')
+
+        Returns:
+            List of messages to guide the AI assistant
+        """
+        return [
+            {
+                "role": "user",
+                "content": {
+                    "type": "text",
+                    "text": f"""Please search for the Korean law named '{law_name}' using the eflaw_search tool.
+
+Once you find the law, provide:
+1. The official Korean name (법령명한글) and English name if available
+2. The law ID and announcement date
+3. A brief summary of what this law covers
+4. The current status (effective or historical)
+
+If the law is found, offer to retrieve specific articles if needed."""
+                }
+            }
+        ]
+
+    @server.prompt(
+        name="get-law-article",
+        description="Retrieve and explain a specific article from a Korean law"
+    )
+    def get_law_article(law_id: str, article_number: int) -> list:
+        """
+        Prompt to help users retrieve a specific article from a law.
+
+        Args:
+            law_id: Law ID (e.g., '000001' for 민법)
+            article_number: Article number (e.g., 20 for 제20조)
+
+        Returns:
+            List of messages to guide the AI assistant
+        """
+        # Format article number to 6-digit format (XXXXXX)
+        formatted_jo = f"{article_number:04d}00"
+
+        return [
+            {
+                "role": "user",
+                "content": {
+                    "type": "text",
+                    "text": f"""Please retrieve Article {article_number} (제{article_number}조) from law ID '{law_id}' using the eflaw_service tool with jo parameter '{formatted_jo}'.
+
+After retrieving the article:
+1. Display the full text of the article in Korean
+2. Provide a clear explanation in English of what the article means
+3. Highlight any important conditions, requirements, or exceptions
+4. If relevant, explain how this article relates to other parts of the law
+
+Note: The jo parameter format is XXXXXX where first 4 digits are the article number (zero-padded) and last 2 digits are for branch articles (00 for main article)."""
+                }
+            }
+        ]
+
+    @server.prompt(
+        name="search-admin-rules",
+        description="Search Korean administrative rules (행정규칙) by keyword"
+    )
+    def search_admin_rules(keyword: str) -> list:
+        """
+        Prompt to help users search for administrative rules.
+
+        Args:
+            keyword: Search keyword for administrative rules (e.g., '학교', '환경')
+
+        Returns:
+            List of messages to guide the AI assistant
+        """
+        return [
+            {
+                "role": "user",
+                "content": {
+                    "type": "text",
+                    "text": f"""Please search for Korean administrative rules (행정규칙) related to '{keyword}' using the admrul_search tool.
+
+Administrative rules include:
+- 훈령 (directives)
+- 예규 (regulations)
+- 고시 (public notices)
+- 공고 (announcements)
+- 지침 (guidelines)
+
+After searching:
+1. List the top relevant administrative rules found
+2. For each rule, provide the rule name and issuing ministry
+3. Note the announcement date and current status
+4. Offer to retrieve the full text of any specific rule if needed
+
+Use display=10 to get a good sample of results."""
+                }
+            }
+        ]
+
+    logger.info("LexLink server initialized with 15 tools and 3 prompts")
     logger.info("Tools: eflaw_search, law_search, eflaw_service, law_service, eflaw_josub, law_josub")
     logger.info("       elaw_search, elaw_service, admrul_search, admrul_service")
     logger.info("       lnkLs_search, lnkLsOrdJo_search, lnkDep_search, drlaw_search, lsDelegated_service")
+    logger.info("Prompts: search-korean-law, get-law-article, search-admin-rules")
     logger.info(f"Session config: {session_config is not None}")
 
     return server

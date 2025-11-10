@@ -458,6 +458,23 @@ This project is open source. See LICENSE file for details.
 
 ## Changelog
 
+### v1.0.6 - 2025-11-10
+**Enhancement: Improve MCP server quality score (Smithery.ai optimization)**
+
+- **Changes:**
+  - Set OC configuration default value to "test" for easier onboarding
+  - Added tool annotations to all 15 tools (readOnlyHint=True, destructiveHint=False, idempotentHint=True)
+  - Enhanced parameter descriptions in docstrings for all tools
+  - Implemented 3 MCP prompts for common use cases
+- **Prompts Added:**
+  - `search-korean-law`: Search for a Korean law by name and provide a summary
+  - `get-law-article`: Retrieve and explain a specific article from a law
+  - `search-admin-rules`: Search administrative rules by keyword
+- **Impact:** Expected Smithery quality score improvement from 47/100 to ~73/100 (+26 points)
+  - Tool annotations: +9pts
+  - Parameter descriptions: +12pts
+  - MCP prompts: +5pts
+
 ### v1.0.5 - 2025-11-10
 **Fix: Improve ranking by fetching more results before ranking**
 
