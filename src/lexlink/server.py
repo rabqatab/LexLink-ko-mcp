@@ -3,6 +3,9 @@ LexLink MCP Server - Korean National Law Information API.
 
 This server exposes the law.go.kr Open API through MCP tools,
 enabling AI agents to search and retrieve Korean legal information.
+
+⚠️ IMPORTANT: The law.go.kr API does NOT support JSON format despite
+documentation. All tools default to XML format. Use XML or HTML only.
 """
 
 import logging
@@ -77,7 +80,7 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             display: Number of results per page (max 100, default 20)
             page: Page number (1-based, default 1)
             oc: Optional OC override (defaults to session config or env)
-            type: Response format - "HTML", "XML", or "JSON" (default "XML")
+            type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
             sort: Sort order - "lasc"|"ldes"|"dasc"|"ddes"|"nasc"|"ndes"|"efasc"|"efdes"
             ef_yd: Effective date range (YYYYMMDD~YYYYMMDD, e.g., "20240101~20241231")
             org: Ministry/department code filter
@@ -185,7 +188,7 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             display: Number of results per page (max 100, default 20)
             page: Page number (1-based, default 1)
             oc: Optional OC override (defaults to session config or env)
-            type: Response format - "HTML", "XML", or "JSON" (default "XML")
+            type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
             sort: Sort order
             date: Announcement date (YYYYMMDD)
             org: Ministry/department code filter
@@ -265,7 +268,7 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             jo: Article number (6 digits, e.g., "000200" for Article 2)
             chr_cls_cd: Language code - "010202" (Korean, default) or "010201" (Original)
             oc: Optional OC override (defaults to session config or env)
-            type: Response format - "HTML", "XML", or "JSON" (default "XML")
+            type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
 
         Returns:
             Full law content or error
@@ -368,7 +371,7 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             jo: Article number (6 digits)
             lang: Language - "KO" (Korean) or "ORI" (Original)
             oc: Optional OC override (defaults to session config or env)
-            type: Response format - "HTML", "XML", or "JSON" (default "XML")
+            type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
 
         Returns:
             Full law content or error
@@ -472,7 +475,7 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             ho: Item number (6 digits, e.g., "000200")
             mok: Subitem (UTF-8 encoded, e.g., "다")
             oc: Optional OC override (defaults to session config or env)
-            type: Response format - "HTML", "XML", or "JSON" (default "XML")
+            type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
 
         Returns:
             Specific law section content or error
@@ -580,7 +583,7 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             ho: Item number (6 digits, e.g., "000200")
             mok: Subitem (UTF-8 encoded, e.g., "다")
             oc: Optional OC override (defaults to session config or env)
-            type: Response format - "HTML", "XML", or "JSON" (default "XML")
+            type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
 
         Returns:
             Specific law section content or error
@@ -682,7 +685,7 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             display: Number of results per page (max 100, default 20)
             page: Page number (1-based, default 1)
             oc: Optional OC override (defaults to session config or env)
-            type: Response format - "HTML", "XML", or "JSON" (default "XML")
+            type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
             sort: Sort order - "lasc"|"ldes"|"dasc"|"ddes"|"nasc"|"ndes"|"efasc"|"efdes"
             ef_yd: Effective date range (YYYYMMDD~YYYYMMDD)
             org: Ministry/department code filter
@@ -775,7 +778,7 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             ld: Announcement date (YYYYMMDD)
             ln: Announcement number
             oc: Optional OC override (defaults to session config or env)
-            type: Response format - "HTML", "XML", or "JSON" (default "XML")
+            type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
             ctx: MCP context (injected automatically)
 
         Returns:
@@ -877,7 +880,7 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             display: Number of results per page (max 100, default 20)
             page: Page number (1-based, default 1)
             oc: Optional OC override (defaults to session config or env)
-            type: Response format - "HTML", "XML", or "JSON" (default "XML")
+            type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
             nw: 1=현행 (current), 2=연혁 (historical), default 1
             search: 1=규칙명 (rule name), 2=본문검색 (full text), default 1
             org: Ministry/department code filter
@@ -978,7 +981,7 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             lid: Rule ID (alternative to id)
             lm: Rule name (exact match search)
             oc: Optional OC override (defaults to session config or env)
-            type: Response format - "HTML", "XML", or "JSON" (default "XML")
+            type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
             ctx: MCP context (injected automatically)
 
         Returns:
@@ -1067,7 +1070,7 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             display: Number of results per page (max 100, default 20)
             page: Page number (1-based, default 1)
             oc: Optional OC override (defaults to session config or env)
-            type: Response format - "HTML", "XML", or "JSON" (default "XML")
+            type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
             sort: Sort order - "lasc"|"ldes"|"dasc"|"ddes"|"nasc"|"ndes"
             ctx: MCP context (injected automatically)
 
@@ -1145,7 +1148,7 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             display: Number of results per page (max 100, default 20)
             page: Page number (1-based, default 1)
             oc: Optional OC override (defaults to session config or env)
-            type: Response format - "HTML", "XML", or "JSON" (default "XML")
+            type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
             knd: Law type code (to filter by specific law)
             jo: Article number (4 digits, e.g., 20 → 0020)
             jobr: Article branch number (2 digits, e.g., 02)
@@ -1232,7 +1235,7 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             display: Number of results per page (max 100, default 20)
             page: Page number (1-based, default 1)
             oc: Optional OC override (defaults to session config or env)
-            type: Response format - "HTML", "XML", or "JSON" (default "XML")
+            type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
             sort: Sort order
             ctx: MCP context (injected automatically)
 
@@ -1366,7 +1369,7 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
             id: Law ID (required if mst not provided)
             mst: Law master number (required if id not provided)
             oc: Optional OC override (defaults to session config or env)
-            type: Response format - "XML" or "JSON" (default "XML", no HTML)
+            type: Response format - "XML" only (JSON not supported by API, HTML not available)
             ctx: MCP context (injected automatically)
 
         Returns:
