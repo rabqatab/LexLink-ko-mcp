@@ -570,8 +570,8 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
         )
     )
     def eflaw_josub(
-        id: Optional[str] = None,
-        mst: Optional[str] = None,
+        id: Optional[Union[str, int]] = None,
+        mst: Optional[Union[str, int]] = None,
         ef_yd: Optional[int] = None,
         jo: Optional[Union[str, int]] = None,
         hang: Optional[str] = None,
@@ -696,8 +696,8 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
         )
     )
     def law_josub(
-        id: Optional[str] = None,
-        mst: Optional[str] = None,
+        id: Optional[Union[str, int]] = None,
+        mst: Optional[Union[str, int]] = None,
         jo: Optional[Union[str, int]] = None,
         hang: Optional[str] = None,
         ho: Optional[str] = None,
@@ -1403,7 +1403,7 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
         oc: Optional[str] = None,
         type: str = "XML",
         knd: Optional[str] = None,
-        jo: Optional[int] = None,
+        jo: Optional[Union[str, int]] = None,
         jobr: Optional[int] = None,
         sort: Optional[str] = None,
         ctx: Context = None,

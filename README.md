@@ -461,6 +461,27 @@ This project is open source. See LICENSE file for details.
 
 ## Changelog
 
+### v1.0.8 - 2025-11-13
+**Fix: Complete parameter type consistency across all tools**
+
+- **Issue:** v1.0.2 fixed 7 tools but missed 2 additional tools (`eflaw_josub`, `law_josub`), creating inconsistency where same parameters had different types across tools
+- **Root Cause:**
+  - `eflaw_josub` and `law_josub` still had `id: Optional[str]` and `mst: Optional[str]` instead of `Union[str, int]`
+  - `lnkLsOrdJo_search` had `jo: Optional[int]` instead of `Union[str, int]`
+  - Caused validation errors when LLMs passed integers to these specific tools
+- **Solution:**
+  - Fixed `eflaw_josub`: `id` and `mst` now accept `Union[str, int]`
+  - Fixed `law_josub`: `id` and `mst` now accept `Union[str, int]`
+  - Fixed `lnkLsOrdJo_search`: `jo` now accepts `Union[str, int]`
+- **Verification:**
+  - All 7 tools with `id` parameter now consistently `Optional[Union[str, int]]`
+  - All 6 tools with `mst` parameter now consistently `Optional[Union[str, int]]`
+  - All 5 tools with `jo` parameter now consistently `Optional[Union[str, int]]`
+- **Impact:**
+  - 100% parameter type consistency achieved
+  - No validation errors regardless of which tool LLMs choose
+  - Better developer experience - same parameters work identically everywhere
+
 ### v1.0.7 - 2025-11-10
 **Fix: Improve search reliability and LLM guidance**
 

@@ -460,6 +460,27 @@ uv sync --reinstall
 
 ## 변경 로그
 
+### v1.0.8 - 2025-11-13
+**수정: 모든 도구에서 매개변수 타입 일관성 완성**
+
+- **문제:** v1.0.2에서 7개 도구를 수정했지만 2개 추가 도구(`eflaw_josub`, `law_josub`)를 누락하여 동일한 매개변수가 도구마다 다른 타입을 가지는 불일치 발생
+- **원인:**
+  - `eflaw_josub`와 `law_josub`가 여전히 `id: Optional[str]`과 `mst: Optional[str]`을 사용 (`Union[str, int]` 대신)
+  - `lnkLsOrdJo_search`가 `jo: Optional[int]`를 사용 (`Union[str, int]` 대신)
+  - LLM이 이 특정 도구들에 정수를 전달할 때 유효성 검증 오류 발생
+- **해결책:**
+  - `eflaw_josub` 수정: `id`와 `mst`가 이제 `Union[str, int]` 허용
+  - `law_josub` 수정: `id`와 `mst`가 이제 `Union[str, int]` 허용
+  - `lnkLsOrdJo_search` 수정: `jo`가 이제 `Union[str, int]` 허용
+- **검증:**
+  - `id` 매개변수를 가진 7개 도구 모두 이제 일관되게 `Optional[Union[str, int]]`
+  - `mst` 매개변수를 가진 6개 도구 모두 이제 일관되게 `Optional[Union[str, int]]`
+  - `jo` 매개변수를 가진 5개 도구 모두 이제 일관되게 `Optional[Union[str, int]]`
+- **영향:**
+  - 100% 매개변수 타입 일관성 달성
+  - LLM이 어떤 도구를 선택하든 유효성 검증 오류 없음
+  - 더 나은 개발자 경험 - 동일한 매개변수가 모든 곳에서 동일하게 작동
+
 ### v1.0.7 - 2025-11-10
 **수정: 검색 안정성 및 LLM 가이드 개선**
 
