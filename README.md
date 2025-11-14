@@ -425,6 +425,93 @@ result = eflaw_search(query="test")
 }
 ```
 
+## Golden MCP Tool Trajectories
+
+These examples demonstrate real-world conversation flows showing how LLMs interact with LexLink tools to answer legal research questions.
+
+### Trajectory 1: Basic Law Research
+**User Query:** "What is Article 20 of the Civil Code?"
+
+**Tool Calls:**
+1. `law_search(query="민법", display=50, type="XML")` → Find Civil Code ID
+2. `law_service(id="000021", jo="002000", type="XML")` → Retrieve Article 20 text
+
+**Result:** LLM provides formatted explanation of Civil Code Article 20 with full legal text and context.
+
+---
+
+### Trajectory 2: Court Precedent Analysis
+**User Query:** "Find recent Supreme Court precedents about security interests"
+
+**Tool Calls:**
+1. `prec_search(query="담보권", curt="대법원", display=50, type="XML")` → Search Supreme Court precedents
+2. `prec_service(id="228541", type="XML")` → Retrieve top precedent details
+
+**Result:** LLM summarizes key precedents with case numbers, dates, and holdings related to security interests.
+
+---
+
+### Trajectory 3: Cross-Phase Legal Research
+**User Query:** "How does the Labor Standards Act handle overtime, and are there relevant court precedents?"
+
+**Tool Calls:**
+1. `eflaw_search(query="근로기준법", display=50, type="XML")` → Find Labor Standards Act
+2. `eflaw_service(id="001234", jo="005000", type="XML")` → Retrieve Article 50 (overtime provisions)
+3. `prec_search(query="근로기준법 연장근로", display=30, type="XML")` → Search overtime precedents
+4. `prec_service(id="234567", type="XML")` → Retrieve leading precedent
+
+**Result:** LLM provides comprehensive analysis combining statutory text with judicial interpretation, showing how courts apply the overtime provisions.
+
+---
+
+### Trajectory 4: Constitutional Review
+**User Query:** "Has the Constitutional Court reviewed laws about fines?"
+
+**Tool Calls:**
+1. `detc_search(query="벌금", display=50, type="XML")` → Search Constitutional Court decisions
+2. `detc_service(id="58386", type="XML")` → Retrieve decision full text
+3. `law_search(query=<law_name_from_decision>, type="XML")` → Find related law for context
+
+**Result:** LLM explains Constitutional Court holdings on fine-related provisions and their impact on specific laws.
+
+---
+
+### Trajectory 5: Administrative Law Research
+**User Query:** "What administrative rules exist for schools, and are there related legal interpretations?"
+
+**Tool Calls:**
+1. `admrul_search(query="학교", display=50, type="XML")` → Search school-related administrative rules
+2. `admrul_service(id="62505", type="XML")` → Retrieve rule content
+3. `expc_search(query="학교", display=30, type="XML")` → Search legal interpretations
+4. `expc_service(id="334617", type="XML")` → Retrieve interpretation details
+
+**Result:** LLM provides overview of administrative framework for schools with official agency interpretations.
+
+---
+
+### Trajectory 6: Comprehensive Legal Analysis
+**User Query:** "I'm researching rental housing disputes. Show me the relevant law, court precedents, and administrative appeal decisions."
+
+**Tool Calls:**
+1. `eflaw_search(query="주택임대차보호법", display=50, type="XML")` → Find Housing Lease Protection Act
+2. `eflaw_service(id="002876", type="XML")` → Retrieve full law text
+3. `prec_search(query="주택임대차", display=50, type="XML")` → Search housing lease precedents
+4. `prec_service(id="156789", type="XML")` → Retrieve key precedent
+5. `decc_search(query="주택임대차", display=30, type="XML")` → Search administrative appeal decisions
+6. `decc_service(id="243263", type="XML")` → Retrieve appeal decision
+
+**Result:** LLM provides comprehensive legal research report covering statutory framework, judicial interpretation, and administrative precedents for rental housing disputes.
+
+---
+
+### Key Patterns
+
+1. **Search First, Then Retrieve**: Always search to find IDs before calling service tools
+2. **Use display=50-100 for Law Searches**: Ensures exact matches are found due to relevance ranking
+3. **Combine Phases**: Mix Phase 1 (laws), Phase 2 (administrative rules), and Phase 3 (precedents) for complete research
+4. **Type Parameter**: Always specify `type="XML"` for consistent, parseable results
+5. **Article Numbers**: Use 6-digit format (e.g., "002000" for Article 20) when querying specific articles
+
 ## Development
 
 ### Project Structure
