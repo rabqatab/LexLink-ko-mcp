@@ -13,14 +13,19 @@ LexLink is an MCP (Model Context Protocol) server that exposes the Korean Nation
 
 ## Features
 
-- **15 MCP Tools** for comprehensive Korean law information access
+- **23 MCP Tools** for comprehensive Korean law information access
   - Search and retrieve Korean laws (effective date & announcement date)
   - Search and retrieve English-translated laws
   - Search and retrieve administrative rules (행정규칙)
   - Query specific articles, paragraphs, and sub-items
   - Law-ordinance linkage (법령-자치법규 연계)
   - Delegated law information (위임법령)
-- **100% Semantic Validation** - All 15 tools confirmed returning real law data
+  - **NEW: Phase 3 - Case Law & Legal Research**
+    - Court precedents (판례)
+    - Constitutional Court decisions (헌재결정례)
+    - Legal interpretations (법령해석례)
+    - Administrative appeal decisions (행정심판례)
+- **100% Semantic Validation** - All 23 tools confirmed returning real law data
 - **Session Configuration** - Configure once, use across all tool calls
 - **Error Handling** - Actionable error messages with resolution hints
 - **Korean Text Support** - Proper UTF-8 encoding for Korean characters
@@ -28,17 +33,18 @@ LexLink is an MCP (Model Context Protocol) server that exposes the Korean Nation
 
 ## Project Status
 
-🎉 **Production Ready!**
+🎉 **Production Ready - Phase 3 Complete!**
 
 | Metric | Status |
 |--------|--------|
-| **Tools Implemented** | 15/15 (100%) ✅ |
-| **Semantic Validation** | 15/15 (100%) ✅ |
-| **API Coverage** | essential ~10% of 150+ endpoints |
+| **Tools Implemented** | 23/23 (100%) ✅ |
+| **Semantic Validation** | 23/23 (100%) ✅ |
+| **API Coverage** | ~15% of 150+ endpoints |
 | **LLM Integration** | ✅ Validated (Gemini) |
 | **Code Quality** | Clean, documented, tested |
+| **Version** | v1.1.0 |
 
-**Achievement:** All 15 tools confirmed returning real Korean law data through comprehensive validation testing.
+**Latest Achievement:** Phase 3 complete! Added 8 new tools for case law and legal research (+53% tool increase).
 
 ## Prerequisites
 
@@ -257,6 +263,93 @@ lsDelegated_service(
 )
 ```
 
+### Phase 3: Case Law & Legal Research (8 tools - NEW!)
+
+#### 16. `prec_search` - Search Court Precedents
+Search Korean court precedents from Supreme Court and lower courts.
+
+```python
+prec_search(
+    query="담보권",
+    display=10,
+    type="XML",
+    curt="대법원"             # Optional: Court name filter
+)
+```
+
+#### 17. `prec_service` - Retrieve Court Precedent Full Text
+Get complete court precedent text with case details.
+
+```python
+prec_service(
+    id="228541",
+    type="XML"
+)
+```
+
+#### 18. `detc_search` - Search Constitutional Court Decisions
+Search Korean Constitutional Court decisions.
+
+```python
+detc_search(
+    query="벌금",
+    display=10,
+    type="XML"
+)
+```
+
+#### 19. `detc_service` - Retrieve Constitutional Court Decision Full Text
+Get complete Constitutional Court decision text.
+
+```python
+detc_service(
+    id="58386",
+    type="XML"
+)
+```
+
+#### 20. `expc_search` - Search Legal Interpretations
+Search legal interpretation precedents issued by government agencies.
+
+```python
+expc_search(
+    query="임차",
+    display=10,
+    type="XML"
+)
+```
+
+#### 21. `expc_service` - Retrieve Legal Interpretation Full Text
+Get complete legal interpretation text.
+
+```python
+expc_service(
+    id="334617",
+    type="XML"
+)
+```
+
+#### 22. `decc_search` - Search Administrative Appeal Decisions
+Search Korean administrative appeal decisions.
+
+```python
+decc_search(
+    query="*",                # Search all decisions
+    display=10,
+    type="XML"
+)
+```
+
+#### 23. `decc_service` - Retrieve Administrative Appeal Decision Full Text
+Get complete administrative appeal decision text.
+
+```python
+decc_service(
+    id="243263",
+    type="XML"
+)
+```
+
 ## Configuration
 
 ### Session Configuration Schema
@@ -339,10 +432,12 @@ result = eflaw_search(query="test")
 ```
 lexlink-ko-mcp/
 ├── src/lexlink/
-│   ├── server.py       # Main MCP server with 15 tools
+│   ├── server.py       # Main MCP server with 23 tools
 │   ├── config.py       # Session configuration schema
 │   ├── params.py       # Parameter resolution & mapping
 │   ├── validation.py   # Input validation
+│   ├── parser.py       # XML parsing utilities
+│   ├── ranking.py      # Relevance ranking
 │   ├── client.py       # HTTP client for law.go.kr API
 │   └── errors.py       # Error codes & responses
 ├── pyproject.toml       # Project configuration
@@ -369,17 +464,19 @@ uv run pytest tests/e2e/
 
 ### Adding New Tools
 
-**Current Status:** 15/15 core tools implemented and validated
+**Current Status:** 23/23 tools implemented and validated (Phase 1-3 complete)
 
-For implementing additional tools from the 150+ available APIs:
+For implementing additional tools from the 127+ remaining APIs:
 1. Follow the pattern established in `src/lexlink/server.py`
 2. Use Context injection for session configuration
-3. Add semantic validation tests
+3. Use generic parser functions (`extract_items_list`, `update_items_list`)
+4. Add semantic validation tests
 
 **Tool Implementation Pattern:**
 - Each tool is a decorated function with MCP schema
 - Uses `ctx: Context = None` parameter for session config
 - 3-tier parameter resolution: tool arg > session > env
+- Generic parser functions work with any XML tag
 - Comprehensive error handling with actionable hints
 
 ## Deployment
@@ -454,12 +551,31 @@ This project is open source. See LICENSE file for details.
 ## Support
 
 - **Issues:** [GitHub Issues](https://github.com/rabqatab/LexLink-ko-mcp/issues)
-- **Documentation:** See `docs/` directory
 - **law.go.kr API:** [Official Documentation](http://open.law.go.kr)
 
 ---
 
 ## Changelog
+
+### v1.1.0 - 2025-11-14
+**Feature: Phase 3 - Case Law & Legal Research APIs**
+
+- **Changes:**
+  - Added 8 new tools for case law and legal research (15 → 23 tools)
+  - `prec_search`, `prec_service` - Court precedents (판례)
+  - `detc_search`, `detc_service` - Constitutional Court decisions (헌재결정례)
+  - `expc_search`, `expc_service` - Legal interpretations (법령해석례)
+  - `decc_search`, `decc_service` - Administrative appeal decisions (행정심판례)
+- **Implementation:**
+  - Added generic parser functions (`extract_items_list`, `update_items_list`) that work with any XML tag
+  - Added 13 new Phase 3 parameters: `prnc_yd`, `dat_src_nm`, `ed_yd`, `reg_yd`, `expl_yd`, `dpa_yd`, `rsl_yd`, `curt`, `inq`, `rpl`, `itmno`, `cls`
+  - All ranking and validation functions compatible with Phase 3 tools
+  - Zero breaking changes to existing Phase 1 & 2 tools
+- **Impact:**
+  - Tool count increased by 53% (15 → 23 tools)
+  - API coverage increased from ~10% to ~15%
+  - Legal research categories expanded by 133% (3 → 7 categories)
+  - All 23 tools validated and working in production
 
 ### v1.0.8 - 2025-11-13
 **Fix: Complete parameter type consistency across all tools**

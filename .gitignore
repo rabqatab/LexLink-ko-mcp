@@ -25,7 +25,7 @@ venv/
 # Ruff
 .ruff_cache/
 
-# AI tools
+# AI tools & docs
 docs/
 
 # tests

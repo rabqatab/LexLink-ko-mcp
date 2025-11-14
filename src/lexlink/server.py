@@ -21,7 +21,7 @@ from .config import LexLinkConfig
 from .errors import ErrorCode, create_error_response
 from .params import map_params_to_upstream, resolve_oc
 from .validation import validate_date_range
-from .parser import parse_xml_response, extract_law_list, update_law_list
+from .parser import parse_xml_response, extract_law_list, update_law_list, extract_items_list, update_items_list
 from .ranking import rank_search_results, should_apply_ranking, detect_query_language
 
 # Set up logging
@@ -1732,6 +1732,897 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
                 message=f"Unexpected error: {str(e)}"
             )
 
+    # ==================== PHASE 3: CASE LAW & LEGAL RESEARCH ====================
+
+    # ==================== TOOL 16: prec_search ====================
+    @server.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True
+        )
+    )
+    def prec_search(
+        query: str = "*",
+        display: int = 20,
+        page: int = 1,
+        oc: Optional[str] = None,
+        type: str = "XML",
+        search: Optional[int] = None,
+        sort: Optional[str] = None,
+        org: Optional[str] = None,
+        curt: Optional[str] = None,
+        jo: Optional[str] = None,
+        gana: Optional[str] = None,
+        date: Optional[int] = None,
+        prnc_yd: Optional[str] = None,
+        nb: Optional[str] = None,
+        dat_src_nm: Optional[str] = None,
+        pop_yn: Optional[str] = None,
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Search court precedents (판례 목록 조회).
+
+        Search Korean court precedents from Supreme Court and lower courts.
+
+        Args:
+            query: Search keyword (default "*" for all)
+            display: Number of results per page (max 100, default 20)
+            page: Page number (1-based, default 1)
+            oc: Optional OC override (defaults to session config or env)
+            type: Response format - "HTML" or "XML" (default "XML")
+            search: Search type (1=case name, 2=full text, default 1)
+            sort: Sort order - "lasc"|"ldes"|"dasc"|"ddes"|"nasc"|"ndes"
+            org: Court type code (400201=Supreme Court, 400202=lower courts)
+            curt: Court name (대법원, 서울고등법원, etc.)
+            jo: Referenced law name (형법, 민법, etc.)
+            gana: Dictionary search (ga, na, da, ...)
+            date: Decision date (YYYYMMDD)
+            prnc_yd: Decision date range (YYYYMMDD~YYYYMMDD)
+            nb: Case number (comma-separated for multiple)
+            dat_src_nm: Data source name (국세법령정보시스템, 근로복지공단산재판례, 대법원)
+            pop_yn: Popup flag ("Y" or "N")
+
+        Returns:
+            Search results with precedent list or error
+
+        Examples:
+            Search for precedents mentioning "담보권":
+            >>> prec_search(query="담보권", display=10)
+
+            Search Supreme Court precedents:
+            >>> prec_search(query="담보권", curt="대법원")
+        """
+        try:
+            # Access session config from Context
+            config = ctx.session_config if ctx else None
+            session_oc = config.oc if config else None
+
+            # Resolve OC with 3-tier priority
+            resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
+
+            # Build parameter dict
+            snake_params = {
+                "oc": resolved_oc,
+                "target": "prec",
+                "type": type,
+                "query": query,
+                "display": display,
+                "page": page,
+            }
+
+            # Add optional params
+            if search:
+                snake_params["search"] = search
+            if sort:
+                snake_params["sort"] = sort
+            if org:
+                snake_params["org"] = org
+            if curt:
+                snake_params["curt"] = curt
+            if jo:
+                snake_params["jo"] = jo
+            if gana:
+                snake_params["gana"] = gana
+            if date:
+                snake_params["date"] = date
+            if prnc_yd:
+                validate_date_range(prnc_yd, "prnc_yd")
+                snake_params["prnc_yd"] = prnc_yd
+            if nb:
+                snake_params["nb"] = nb
+            if dat_src_nm:
+                snake_params["dat_src_nm"] = dat_src_nm
+            if pop_yn:
+                snake_params["pop_yn"] = pop_yn
+
+            # Map to upstream format
+            upstream_params = map_params_to_upstream(snake_params)
+
+            # Determine if we need to fetch more results for ranking
+            original_display = display
+            ranking_enabled = (type == "XML" and should_apply_ranking(query))
+
+            if ranking_enabled and original_display < 100:
+                upstream_params["display"] = "100"
+                logger.debug(f"Ranking enabled: fetching 100 results instead of {original_display}")
+
+            # Execute request
+            client = _get_client()
+            response = client.get("/DRF/lawSearch.do", upstream_params, type)
+
+            # Apply relevance ranking if XML response
+            if response.get("status") == "ok" and ranking_enabled:
+                raw_content = response.get("raw_content", "")
+                if raw_content:
+                    parsed_data = parse_xml_response(raw_content)
+                    if parsed_data:
+                        items = extract_items_list(parsed_data, 'Prec')
+                        if items:
+                            ranked_items = rank_search_results(items, query, "판례명")
+                            if len(ranked_items) > original_display:
+                                ranked_items = ranked_items[:original_display]
+                            parsed_data = update_items_list(parsed_data, ranked_items, 'Prec')
+                            parsed_data["display"] = str(original_display)
+                            response["ranked_data"] = parsed_data
+
+            return response
+
+        except ValueError as e:
+            logger.error(f"Validation error in prec_search: {e}")
+            return create_error_response(
+                error_code=ErrorCode.VALIDATION_ERROR,
+                message=str(e)
+            )
+        except Exception as e:
+            logger.exception(f"Unexpected error in prec_search: {e}")
+            return create_error_response(
+                error_code=ErrorCode.INTERNAL_ERROR,
+                message=f"Unexpected error: {str(e)}"
+            )
+
+    # ==================== TOOL 17: prec_service ====================
+    @server.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True
+        )
+    )
+    def prec_service(
+        id: Union[str, int],
+        lm: Optional[str] = None,
+        oc: Optional[str] = None,
+        type: str = "XML",
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Retrieve court precedent full text (판례 본문 조회).
+
+        Args:
+            id: Precedent sequence number (판례일련번호)
+            lm: Precedent name (optional)
+            oc: Optional OC override
+            type: Response format - "HTML" or "XML" (default "XML")
+
+        Returns:
+            Full precedent text with details or error
+
+        Examples:
+            >>> prec_service(id="228541")
+        """
+        try:
+            # Access session config from Context
+            config = ctx.session_config if ctx else None
+            session_oc = config.oc if config else None
+
+            # Resolve OC with 3-tier priority
+            resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
+
+            # Build parameters
+            params = {
+                "oc": resolved_oc,
+                "target": "prec",
+                "id": str(id),
+                "type": type,
+            }
+
+            if lm:
+                params["lm"] = lm
+
+            # Map to upstream format
+            upstream_params = map_params_to_upstream(params)
+
+            # Call API
+            client = _get_client()
+            return client.get("/DRF/lawService.do", upstream_params, response_type=type)
+
+        except ValueError as e:
+            logger.error(f"Validation error in prec_service: {e}")
+            return create_error_response(
+                error_code=ErrorCode.VALIDATION_ERROR,
+                message=str(e)
+            )
+        except Exception as e:
+            logger.exception(f"Unexpected error in prec_service: {e}")
+            return create_error_response(
+                error_code=ErrorCode.INTERNAL_ERROR,
+                message=f"Unexpected error: {str(e)}"
+            )
+
+    # ==================== TOOL 18: detc_search ====================
+    @server.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True
+        )
+    )
+    def detc_search(
+        query: str = "*",
+        display: int = 20,
+        page: int = 1,
+        oc: Optional[str] = None,
+        type: str = "XML",
+        search: Optional[int] = None,
+        gana: Optional[str] = None,
+        sort: Optional[str] = None,
+        date: Optional[int] = None,
+        ed_yd: Optional[str] = None,
+        nb: Optional[int] = None,
+        pop_yn: Optional[str] = None,
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Search Constitutional Court decisions (헌재결정례 목록 조회).
+
+        Search Korean Constitutional Court decisions.
+
+        Args:
+            query: Search keyword (default "*" for all)
+            display: Number of results per page (max 100, default 20)
+            page: Page number (1-based, default 1)
+            oc: Optional OC override (defaults to session config or env)
+            type: Response format - "HTML" or "XML" (default "XML")
+            search: Search type (1=decision name, 2=full text, default 1)
+            gana: Dictionary search (ga, na, da, ...)
+            sort: Sort order - "lasc"|"ldes"|"dasc"|"ddes"|"nasc"|"ndes"|"efasc"|"efdes"
+            date: Final date (YYYYMMDD)
+            ed_yd: Final date range (YYYYMMDD~YYYYMMDD)
+            nb: Case number
+            pop_yn: Popup flag ("Y" or "N")
+
+        Returns:
+            Search results with Constitutional Court decision list or error
+
+        Examples:
+            Search for decisions mentioning "벌금":
+            >>> detc_search(query="벌금", display=10)
+
+            Search by date:
+            >>> detc_search(date=20150210)
+        """
+        try:
+            # Access session config from Context
+            config = ctx.session_config if ctx else None
+            session_oc = config.oc if config else None
+
+            # Resolve OC with 3-tier priority
+            resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
+
+            # Build parameter dict
+            snake_params = {
+                "oc": resolved_oc,
+                "target": "detc",
+                "type": type,
+                "query": query,
+                "display": display,
+                "page": page,
+            }
+
+            # Add optional params
+            if search:
+                snake_params["search"] = search
+            if gana:
+                snake_params["gana"] = gana
+            if sort:
+                snake_params["sort"] = sort
+            if date:
+                snake_params["date"] = date
+            if ed_yd:
+                validate_date_range(ed_yd, "ed_yd")
+                snake_params["ed_yd"] = ed_yd
+            if nb:
+                snake_params["nb"] = nb
+            if pop_yn:
+                snake_params["pop_yn"] = pop_yn
+
+            # Map to upstream format
+            upstream_params = map_params_to_upstream(snake_params)
+
+            # Determine if we need to fetch more results for ranking
+            original_display = display
+            ranking_enabled = (type == "XML" and should_apply_ranking(query))
+
+            if ranking_enabled and original_display < 100:
+                upstream_params["display"] = "100"
+                logger.debug(f"Ranking enabled: fetching 100 results instead of {original_display}")
+
+            # Execute request
+            client = _get_client()
+            response = client.get("/DRF/lawSearch.do", upstream_params, type)
+
+            # Apply relevance ranking if XML response
+            if response.get("status") == "ok" and ranking_enabled:
+                raw_content = response.get("raw_content", "")
+                if raw_content:
+                    parsed_data = parse_xml_response(raw_content)
+                    if parsed_data:
+                        items = extract_items_list(parsed_data, 'Detc')
+                        if items:
+                            ranked_items = rank_search_results(items, query, "사건명")
+                            if len(ranked_items) > original_display:
+                                ranked_items = ranked_items[:original_display]
+                            parsed_data = update_items_list(parsed_data, ranked_items, 'Detc')
+                            parsed_data["display"] = str(original_display)
+                            response["ranked_data"] = parsed_data
+
+            return response
+
+        except ValueError as e:
+            logger.error(f"Validation error in detc_search: {e}")
+            return create_error_response(
+                error_code=ErrorCode.VALIDATION_ERROR,
+                message=str(e)
+            )
+        except Exception as e:
+            logger.exception(f"Unexpected error in detc_search: {e}")
+            return create_error_response(
+                error_code=ErrorCode.INTERNAL_ERROR,
+                message=f"Unexpected error: {str(e)}"
+            )
+
+    # ==================== TOOL 19: detc_service ====================
+    @server.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True
+        )
+    )
+    def detc_service(
+        id: Union[str, int],
+        lm: Optional[str] = None,
+        oc: Optional[str] = None,
+        type: str = "XML",
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Retrieve Constitutional Court decision full text (헌재결정례 본문 조회).
+
+        Args:
+            id: Constitutional Court decision sequence number (헌재결정례일련번호)
+            lm: Decision name (optional)
+            oc: Optional OC override
+            type: Response format - "HTML" or "XML" (default "XML")
+
+        Returns:
+            Full Constitutional Court decision text or error
+
+        Examples:
+            >>> detc_service(id="58386")
+        """
+        try:
+            # Access session config from Context
+            config = ctx.session_config if ctx else None
+            session_oc = config.oc if config else None
+
+            # Resolve OC with 3-tier priority
+            resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
+
+            # Build parameters
+            params = {
+                "oc": resolved_oc,
+                "target": "detc",
+                "id": str(id),
+                "type": type,
+            }
+
+            if lm:
+                params["lm"] = lm
+
+            # Map to upstream format
+            upstream_params = map_params_to_upstream(params)
+
+            # Call API
+            client = _get_client()
+            return client.get("/DRF/lawService.do", upstream_params, response_type=type)
+
+        except ValueError as e:
+            logger.error(f"Validation error in detc_service: {e}")
+            return create_error_response(
+                error_code=ErrorCode.VALIDATION_ERROR,
+                message=str(e)
+            )
+        except Exception as e:
+            logger.exception(f"Unexpected error in detc_service: {e}")
+            return create_error_response(
+                error_code=ErrorCode.INTERNAL_ERROR,
+                message=f"Unexpected error: {str(e)}"
+            )
+
+    # ==================== TOOL 20: expc_search ====================
+    @server.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True
+        )
+    )
+    def expc_search(
+        query: str = "*",
+        display: int = 20,
+        page: int = 1,
+        oc: Optional[str] = None,
+        type: str = "XML",
+        search: int = 1,
+        inq: Optional[str] = None,
+        rpl: Optional[int] = None,
+        gana: Optional[str] = None,
+        itmno: Optional[int] = None,
+        reg_yd: Optional[str] = None,
+        expl_yd: Optional[str] = None,
+        sort: Optional[str] = None,
+        pop_yn: Optional[str] = None,
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Search legal interpretations (법령해석례 목록 조회).
+
+        This tool searches Korean legal interpretation precedents issued by government
+        agencies in response to inquiries about how to interpret specific laws.
+
+        Args:
+            query: Search keyword (default "*")
+            display: Number of results per page (max 100, default 20). **Recommend 50-100 for searches to ensure exact matches are found.**
+            page: Page number (1-based, default 1)
+            oc: Optional OC override (defaults to session config or env)
+            type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
+            search: 1=법령해석례명 (interpretation name, default), 2=본문검색 (full text)
+            inq: Inquiry organization name
+            rpl: Reply organization code
+            gana: Dictionary-style search (ga, na, da, ...)
+            itmno: Item number (e.g., 13-0217 → 130217)
+            reg_yd: Registration date range (YYYYMMDD~YYYYMMDD)
+            expl_yd: Interpretation date range (YYYYMMDD~YYYYMMDD)
+            sort: Sort order - "lasc"|"ldes"|"dasc"|"ddes"|"nasc"|"ndes"
+            pop_yn: Popup mode - "Y" or "N"
+            ctx: MCP context (injected automatically)
+
+        Returns:
+            Search results with legal interpretations list or error
+
+        Examples:
+            Search for "임차":
+            >>> expc_search(query="임차", display=10, type="XML")
+
+            Search by date range:
+            >>> expc_search(query="자동차", expl_yd="20240101~20241231", type="XML")
+        """
+        try:
+            # Access session config from Context
+            config = ctx.session_config if ctx else None
+            session_oc = config.oc if config else None
+
+            # Resolve OC with 3-tier priority
+            resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
+
+            # Validate date ranges if provided
+            if reg_yd:
+                validate_date_range(reg_yd, "reg_yd")
+            if expl_yd:
+                validate_date_range(expl_yd, "expl_yd")
+
+            # Build parameters
+            params = {
+                "oc": resolved_oc,
+                "target": "expc",
+                "query": query,
+                "display": display,
+                "page": page,
+                "search": search,
+            }
+
+            # Add optional parameters
+            if inq:
+                params["inq"] = inq
+            if rpl is not None:
+                params["rpl"] = rpl
+            if gana:
+                params["gana"] = gana
+            if itmno is not None:
+                params["itmno"] = itmno
+            if reg_yd:
+                params["reg_yd"] = reg_yd
+            if expl_yd:
+                params["expl_yd"] = expl_yd
+            if sort:
+                params["sort"] = sort
+            if pop_yn:
+                params["pop_yn"] = pop_yn
+
+            # Map to upstream format
+            upstream_params = map_params_to_upstream(params)
+
+            # Determine if we need to fetch more results for ranking
+            original_display = display
+            ranking_enabled = (type == "XML" and should_apply_ranking(query))
+
+            if ranking_enabled and original_display < 100:
+                # Fetch more results to rank (up to 100, API max) for better relevance
+                upstream_params["numOfRows"] = "100"
+                logger.debug(f"Ranking enabled: fetching 100 results instead of {original_display}")
+
+            # Call API
+            client = _get_client()
+            response = client.get("/DRF/lawSearch.do", upstream_params, response_type=type)
+
+            # Apply relevance ranking for legal interpretations
+            if response.get("status") == "ok" and ranking_enabled:
+                raw_content = response.get("raw_content", "")
+                if raw_content:
+                    parsed_data = parse_xml_response(raw_content)
+                    if parsed_data:
+                        # Extract interpretations list using 'Expc' tag
+                        from .parser import extract_items_list, update_items_list
+                        interpretations = extract_items_list(parsed_data, 'Expc')
+                        if interpretations:
+                            # Rank by relevance using '안건명' field
+                            ranked_interpretations = rank_search_results(interpretations, query, "안건명")
+
+                            # Trim to original requested display amount
+                            if len(ranked_interpretations) > original_display:
+                                ranked_interpretations = ranked_interpretations[:original_display]
+                                logger.debug(f"Trimmed results from {len(interpretations)} to {original_display}")
+
+                            # Update parsed data with ranked results
+                            parsed_data = update_items_list(parsed_data, ranked_interpretations, 'Expc')
+                            # Update numOfRows to reflect trimmed results
+                            parsed_data["numOfRows"] = str(original_display)
+                            response["ranked_data"] = parsed_data
+
+            return response
+
+        except ValueError as e:
+            logger.error(f"Validation error in expc_search: {e}")
+            return create_error_response(
+                error_code=ErrorCode.VALIDATION_ERROR,
+                message=str(e)
+            )
+        except Exception as e:
+            logger.exception(f"Unexpected error in expc_search: {e}")
+            return create_error_response(
+                error_code=ErrorCode.INTERNAL_ERROR,
+                message=f"Unexpected error: {str(e)}"
+            )
+
+    # ==================== TOOL 17: expc_service ====================
+    @server.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True
+        )
+    )
+    def expc_service(
+        id: Union[str, int],
+        lm: Optional[str] = None,
+        oc: Optional[str] = None,
+        type: str = "XML",
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Retrieve legal interpretation full text (법령해석례 본문 조회).
+
+        This tool retrieves the complete text of a legal interpretation precedent,
+        including the question summary, answer, and reasoning.
+
+        Args:
+            id: Legal interpretation sequence number (required)
+            lm: Legal interpretation name (optional)
+            oc: Optional OC override (defaults to session config or env)
+            type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
+            ctx: MCP context (injected automatically)
+
+        Returns:
+            Full legal interpretation text with question, answer, and reasoning or error
+
+        Examples:
+            Retrieve by ID:
+            >>> expc_service(id="334617", type="XML")
+
+            Retrieve with name:
+            >>> expc_service(id="315191", lm="여성가족부 - 건강가정기본법 제35조 제2항 관련", type="XML")
+        """
+        try:
+            # Convert id to string if it's an integer (LLMs may extract numbers as ints)
+            if id is not None:
+                id = str(id)
+
+            # Access session config from Context
+            config = ctx.session_config if ctx else None
+            session_oc = config.oc if config else None
+
+            # Resolve OC with 3-tier priority
+            resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
+
+            # Build parameters
+            params = {
+                "oc": resolved_oc,
+                "target": "expc",
+                "id": id,
+            }
+
+            # Add optional parameter
+            if lm:
+                params["lm"] = lm
+
+            # Map to upstream format
+            upstream_params = map_params_to_upstream(params)
+
+            # Call API
+            client = _get_client()
+            return client.get("/DRF/lawService.do", upstream_params, response_type=type)
+
+        except ValueError as e:
+            logger.error(f"Validation error in expc_service: {e}")
+            return create_error_response(
+                error_code=ErrorCode.VALIDATION_ERROR,
+                message=str(e)
+            )
+        except Exception as e:
+            logger.exception(f"Unexpected error in expc_service: {e}")
+            return create_error_response(
+                error_code=ErrorCode.INTERNAL_ERROR,
+                message=f"Unexpected error: {str(e)}"
+            )
+
+    # ==================== TOOL 18: decc_search ====================
+    @server.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True
+        )
+    )
+    def decc_search(
+        query: str = "*",
+        display: int = 20,
+        page: int = 1,
+        oc: Optional[str] = None,
+        type: str = "XML",
+        search: int = 1,
+        cls: Optional[str] = None,
+        gana: Optional[str] = None,
+        date: Optional[int] = None,
+        dpa_yd: Optional[str] = None,
+        rsl_yd: Optional[str] = None,
+        sort: Optional[str] = None,
+        pop_yn: Optional[str] = None,
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Search administrative appeal decisions (행정심판례 목록 조회).
+
+        This tool searches Korean administrative appeal decisions.
+        Administrative appeals are decisions made by administrative tribunals
+        on appeals against government agency dispositions.
+
+        Args:
+            query: Search keyword (default "*")
+            display: Number of results per page (max 100, default 20)
+            page: Page number (1-based, default 1)
+            oc: Optional OC override (defaults to session config or env)
+            type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
+            search: 1=사건명 (case name, default), 2=본문검색 (full text)
+            cls: Decision type filter (재결구분코드)
+            gana: Dictionary search (ga, na, da, ...)
+            date: Decision date (YYYYMMDD)
+            dpa_yd: Disposition date range (YYYYMMDD~YYYYMMDD)
+            rsl_yd: Decision date range (YYYYMMDD~YYYYMMDD)
+            sort: Sort order - "lasc"|"ldes"|"dasc"|"ddes"|"nasc"|"ndes"
+            pop_yn: Popup flag - "Y" or "N"
+            ctx: MCP context (injected automatically)
+
+        Returns:
+            Search results with administrative appeal decisions list or error
+
+        Examples:
+            Search for all decisions:
+            >>> decc_search(type="XML")
+
+            Search by keyword:
+            >>> decc_search(query="과징금", display=10, type="XML")
+
+            Search by date range:
+            >>> decc_search(rsl_yd="20200101~20201231", type="XML")
+        """
+        try:
+            # Access session config from Context
+            config = ctx.session_config if ctx else None
+            session_oc = config.oc if config else None
+
+            # Resolve OC with 3-tier priority
+            resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
+
+            # Validate date ranges if provided
+            if dpa_yd:
+                validate_date_range(dpa_yd, "dpa_yd")
+            if rsl_yd:
+                validate_date_range(rsl_yd, "rsl_yd")
+
+            # Build parameters
+            params = {
+                "oc": resolved_oc,
+                "target": "decc",
+                "query": query,
+                "display": display,
+                "page": page,
+                "search": search,
+            }
+
+            # Add optional parameters
+            if cls:
+                params["cls"] = cls
+            if gana:
+                params["gana"] = gana
+            if date:
+                params["date"] = date
+            if dpa_yd:
+                params["dpa_yd"] = dpa_yd
+            if rsl_yd:
+                params["rsl_yd"] = rsl_yd
+            if sort:
+                params["sort"] = sort
+            if pop_yn:
+                params["pop_yn"] = pop_yn
+
+            # Map to upstream format
+            upstream_params = map_params_to_upstream(params)
+
+            # Determine if we need to fetch more results for ranking
+            original_display = display
+            ranking_enabled = (type == "XML" and should_apply_ranking(query))
+
+            if ranking_enabled and original_display < 100:
+                # Fetch more results to rank (up to 100, API max) for better relevance
+                upstream_params["numOfRows"] = "100"
+                logger.debug(f"Ranking enabled: fetching 100 results instead of {original_display}")
+
+            # Call API
+            client = _get_client()
+            response = client.get("/DRF/lawSearch.do", upstream_params, response_type=type)
+
+            # Apply relevance ranking for administrative appeal decisions
+            if response.get("status") == "ok" and ranking_enabled:
+                raw_content = response.get("raw_content", "")
+                if raw_content:
+                    parsed_data = parse_xml_response(raw_content)
+                    if parsed_data:
+                        # Extract administrative appeal decisions list using 'Decc' tag
+                        decisions = extract_items_list(parsed_data, 'Decc')
+                        if decisions:
+                            # Administrative appeal decisions use "사건명" (case_name) field
+                            ranked_decisions = rank_search_results(decisions, query, "사건명")
+
+                            # Trim to original requested display amount
+                            if len(ranked_decisions) > original_display:
+                                ranked_decisions = ranked_decisions[:original_display]
+                                logger.debug(f"Trimmed results from {len(decisions)} to {original_display}")
+
+                            # Update parsed data with ranked results
+                            parsed_data = update_items_list(parsed_data, ranked_decisions, 'Decc')
+                            # Update numOfRows to reflect trimmed results
+                            parsed_data["numOfRows"] = str(original_display)
+                            response["ranked_data"] = parsed_data
+
+            return response
+
+        except ValueError as e:
+            logger.error(f"Validation error in decc_search: {e}")
+            return create_error_response(
+                error_code=ErrorCode.VALIDATION_ERROR,
+                message=str(e)
+            )
+        except Exception as e:
+            logger.exception(f"Unexpected error in decc_search: {e}")
+            return create_error_response(
+                error_code=ErrorCode.INTERNAL_ERROR,
+                message=f"Unexpected error: {str(e)}"
+            )
+
+    # ==================== TOOL 19: decc_service ====================
+    @server.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True
+        )
+    )
+    def decc_service(
+        id: Union[str, int],
+        lm: Optional[str] = None,
+        oc: Optional[str] = None,
+        type: str = "XML",
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Retrieve administrative appeal decision full text (행정심판례 본문 조회).
+
+        This tool retrieves the complete text of Korean administrative appeal decisions.
+        Includes case details, disposition information, decision summary, and reasoning.
+
+        Args:
+            id: Decision sequence number (required)
+            lm: Decision name (optional)
+            oc: Optional OC override (defaults to session config or env)
+            type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
+            ctx: MCP context (injected automatically)
+
+        Returns:
+            Full administrative appeal decision text with details or error
+
+        Examples:
+            Retrieve by ID:
+            >>> decc_service(id="243263", type="XML")
+
+            Retrieve with case name:
+            >>> decc_service(id="245011", lm="과징금 부과처분 취소청구", type="XML")
+        """
+        try:
+            # Convert id to string if it's an integer (LLMs may extract numbers as ints)
+            if id is not None:
+                id = str(id)
+
+            # Access session config from Context
+            config = ctx.session_config if ctx else None
+            session_oc = config.oc if config else None
+
+            # Resolve OC with 3-tier priority
+            resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
+
+            # Build parameters
+            params = {
+                "oc": resolved_oc,
+                "target": "decc",
+                "id": id,
+            }
+
+            # Add optional parameters
+            if lm:
+                params["lm"] = lm
+
+            # Map to upstream format
+            upstream_params = map_params_to_upstream(params)
+
+            # Call API
+            client = _get_client()
+            return client.get("/DRF/lawService.do", upstream_params, response_type=type)
+
+        except ValueError as e:
+            logger.error(f"Validation error in decc_service: {e}")
+            return create_error_response(
+                error_code=ErrorCode.VALIDATION_ERROR,
+                message=str(e)
+            )
+        except Exception as e:
+            logger.exception(f"Unexpected error in decc_service: {e}")
+            return create_error_response(
+                error_code=ErrorCode.INTERNAL_ERROR,
+                message=f"Unexpected error: {str(e)}"
+            )
+
     # ==================== PROMPTS ====================
 
     @server.prompt(
@@ -1841,10 +2732,14 @@ Use display=10 to get a good sample of results."""
             }
         ]
 
-    logger.info("LexLink server initialized with 15 tools and 3 prompts")
-    logger.info("Tools: eflaw_search, law_search, eflaw_service, law_service, eflaw_josub, law_josub")
-    logger.info("       elaw_search, elaw_service, admrul_search, admrul_service")
-    logger.info("       lnkLs_search, lnkLsOrdJo_search, lnkDep_search, drlaw_search, lsDelegated_service")
+    logger.info("LexLink server initialized with 23 tools and 3 prompts")
+    logger.info("Phase 1 & 2 Tools (15):")
+    logger.info("  - eflaw_search, law_search, eflaw_service, law_service, eflaw_josub, law_josub")
+    logger.info("  - elaw_search, elaw_service, admrul_search, admrul_service")
+    logger.info("  - lnkLs_search, lnkLsOrdJo_search, lnkDep_search, drlaw_search, lsDelegated_service")
+    logger.info("Phase 3 Tools (8):")
+    logger.info("  - prec_search, prec_service, detc_search, detc_service")
+    logger.info("  - expc_search, expc_service, decc_search, decc_service")
     logger.info("Prompts: search-korean-law, get-law-article, search-admin-rules")
     logger.info(f"Session config: {session_config is not None}")
 

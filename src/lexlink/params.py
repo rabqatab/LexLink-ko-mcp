@@ -119,6 +119,15 @@ def map_params_to_upstream(snake_params: dict) -> dict:
         "ls_chap_no": "lsChapNo",  # 법령체계 장번호
         "chr_cls_cd": "chrClsCd",  # 한글/원문 구분
 
+        # Phase 3: Case Law & Legal Research (camelCase)
+        "prnc_yd": "prncYd",  # 선고일자 기간 (precedent decision date range)
+        "dat_src_nm": "datSrcNm",  # 데이터출처명 (data source name)
+        "ed_yd": "edYd",      # 종국일자 기간 (constitutional final date range)
+        "reg_yd": "regYd",    # 등록일자 기간 (interpretation registration date range)
+        "expl_yd": "explYd",  # 해석일자 기간 (interpretation explanation date range)
+        "dpa_yd": "dpaYd",    # 처분일자 기간 (appeal disposition date range)
+        "rsl_yd": "rslYd",    # 의결일자 기간 (appeal resolution date range)
+
         # Service params (ID/MST uppercase per API convention)
         "id": "ID",
         "mst": "MST",
@@ -138,10 +147,10 @@ def map_params_to_upstream(snake_params: dict) -> dict:
         "page": "page",
         "sort": "sort",
         "date": "date",
-        "nb": "nb",
+        "nb": "nb",          # 사건번호 (case number, also used in precedents/constitutional)
         "org": "org",
         "knd": "knd",
-        "gana": "gana",
+        "gana": "gana",      # 사전식 검색 (dictionary search)
         "search": "search",
         "nw": "nw",
         "ld": "ld",
@@ -149,6 +158,11 @@ def map_params_to_upstream(snake_params: dict) -> dict:
         "lm": "lm",
         "lang": "lang",
         "lid": "LID",
+        "curt": "curt",      # 법원명 (court name, precedents)
+        "inq": "inq",        # 질의기관 (inquiry org, interpretations)
+        "rpl": "rpl",        # 회신기관 (reply org, interpretations)
+        "itmno": "itmno",    # 안건번호 (item number, interpretations)
+        "cls": "cls",        # 재결례유형 (decision type, admin appeals)
     }
 
     upstream_params = {}

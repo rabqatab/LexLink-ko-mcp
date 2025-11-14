@@ -1,0 +1,14 @@
+{
+  "test_name": "lexlink_all_tools_test",
+  "start_time": "2025-11-07T14:55:59.868895",
+  "test_config": {
+    "oc": "ddongle0205",
+    "server_url": "http://127.0.0.1:8081",
+    "test_type": "comprehensive_all_tools"
+  },
+  "mcp_calls": [],
+  "llm_interactions": [],
+  "results": {},
+  "end_time": "2025-11-07T14:56:05.026297",
+  "duration_seconds": 5.157402
+}
