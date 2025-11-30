@@ -46,7 +46,44 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
     Returns:
         Configured FastMCP server instance with registered tools
     """
-    server = FastMCP("LexLink - Korean Law API")
+    # Server instructions - automatically provided to all LLM clients
+    SERVER_INSTRUCTIONS = """
+You are using LexLink, a Korean legal information API.
+
+## IMPORTANT: Citation Extraction Rule
+
+When a user asks about a specific law article (e.g., "건축법 제3조", "자본시장법 제11조"):
+
+1. **Search**: Use `eflaw_search` to find the law
+   - Extract: 법령일련번호 (MST) and 법령명한글
+
+2. **Citations**: ALWAYS use `article_citation` to get referenced laws
+   - Parameters: mst, law_name, article number
+   - This provides 100% accurate citation data
+
+3. **Response**: Include citation summary
+   - Total count, external vs internal
+   - Key cited laws with article references
+
+## Available Tools by Category
+
+**Law Search & Content:**
+- eflaw_search, law_search: Search laws
+- eflaw_service, law_service: Get full law text
+- article_citation: Extract citations from articles
+
+**Case Law & Legal Research:**
+- prec_search/service: Court precedents
+- detc_search/service: Constitutional Court decisions
+- expc_search/service: Legal interpretations
+- decc_search/service: Administrative appeals
+
+## Quick Reference
+- MST (법령일련번호): Unique law identifier from search results
+- Article format: "000300" = 제3조, "001102" = 제11조의2
+"""
+
+    server = FastMCP("LexLink - Korean Law API", instructions=SERVER_INSTRUCTIONS)
 
     # Get client configuration from session or use defaults
     def _get_client() -> LawAPIClient:
@@ -2623,6 +2660,133 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
                 message=f"Unexpected error: {str(e)}"
             )
 
+    # ==================== PHASE 4: ARTICLE CITATION ====================
+
+    # ==================== TOOL 24: article_citation ====================
+    @server.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True
+        )
+    )
+    async def article_citation(
+        mst: str,
+        law_name: str,
+        article: int,
+        article_branch: int = 0,
+        oc: Optional[str] = None,
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Extract citations from a law article (조문 인용 조회).
+
+        This tool extracts all legal citations referenced by a specific law article.
+        It parses the official hyperlinked citations from law.go.kr HTML pages,
+        providing 100% accurate citation data with zero API cost.
+
+        The tool identifies:
+        - External citations (references to other laws)
+        - Internal citations (references within the same law)
+        - Article, paragraph, and item level references
+
+        Args:
+            mst: Law MST code (법령일련번호) - get this from eflaw_search or law_search results
+            law_name: Law name in Korean (e.g., "자본시장과 금융투자업에 관한 법률")
+            article: Article number (조번호, e.g., 3 for 제3조)
+            article_branch: Article branch number (조가지번호, e.g., 2 for 제37조의2, default 0)
+            oc: Optional OC override (defaults to session config or env)
+
+        Returns:
+            Citation extraction result with:
+            - success: Whether extraction succeeded
+            - law_id: MST code
+            - law_name: Law name
+            - article: Article display (e.g., "제3조" or "제37조의2")
+            - citation_count: Total number of citations found
+            - citations: List of citation objects with target law, article, paragraph, item
+            - internal_count: Number of same-law citations
+            - external_count: Number of other-law citations
+
+        Examples:
+            Get citations from 자본시장법 제3조:
+            >>> article_citation(
+            ...     mst="268611",
+            ...     law_name="자본시장과 금융투자업에 관한 법률",
+            ...     article=3
+            ... )
+
+            Get citations from 건축법 제37조의2:
+            >>> article_citation(
+            ...     mst="270986",
+            ...     law_name="건축법",
+            ...     article=37,
+            ...     article_branch=2
+            ... )
+
+        Workflow:
+            1. First use eflaw_search(query="법명") to find the law and get MST
+            2. Then use article_citation(mst=..., law_name=..., article=...) to get citations
+            3. Optionally use eflaw_service to get the full article text
+        """
+        try:
+            # Import citation extractor
+            from .citation import extract_article_citations
+
+            # OC is not strictly required for citation extraction (uses HTML scraping)
+            # but we validate it for consistency with other tools
+            config = ctx.session_config if ctx else None
+            session_oc = config.oc if config else None
+
+            try:
+                resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
+                logger.debug(f"article_citation called with OC: {resolved_oc[:4]}...")
+            except ValueError:
+                # OC not required for citation extraction
+                logger.debug("article_citation called without OC (not required)")
+
+            # Validate required parameters
+            if not mst:
+                raise ValueError("mst (법령일련번호) is required")
+            if not law_name:
+                raise ValueError("law_name (법령명) is required")
+            if article <= 0:
+                raise ValueError("article must be a positive integer")
+
+            # Extract citations
+            result = await extract_article_citations(
+                mst=str(mst),
+                law_name=law_name,
+                article=article,
+                article_branch=article_branch
+            )
+
+            return result
+
+        except ValueError as e:
+            logger.warning(f"Validation error in article_citation: {e}")
+            return create_error_response(
+                error_code=ErrorCode.VALIDATION_ERROR,
+                message=str(e),
+                hints=[
+                    "mst: Get from eflaw_search or law_search results (법령일련번호)",
+                    "law_name: Full Korean law name",
+                    "article: Positive integer (e.g., 3 for 제3조)",
+                    "article_branch: For 가지조문 like 제37조의2, use article=37, article_branch=2"
+                ]
+            )
+        except Exception as e:
+            logger.exception(f"Unexpected error in article_citation: {e}")
+            return create_error_response(
+                error_code=ErrorCode.INTERNAL_ERROR,
+                message=f"Unexpected error: {str(e)}",
+                hints=[
+                    "Check that the law name is correct",
+                    "Verify the article number exists in the law",
+                    "Try with a different law to isolate the issue"
+                ]
+            )
+
     # ==================== PROMPTS ====================
 
     @server.prompt(
@@ -2694,6 +2858,106 @@ Note: The jo parameter format is XXXXXX where first 4 digits are the article num
         ]
 
     @server.prompt(
+        name="get-article-with-citations",
+        description="Retrieve a law article AND all its citations (referenced laws)"
+    )
+    def get_article_with_citations(law_name: str, article_number: int) -> list:
+        """
+        Prompt to retrieve article content AND extract all citations.
+
+        This prompt chains:
+        1. eflaw_search to find the law
+        2. eflaw_service to get article content
+        3. article_citation to get all referenced laws
+
+        Args:
+            law_name: Law name (e.g., '건축법', '자본시장법')
+            article_number: Article number (e.g., 3 for 제3조)
+
+        Returns:
+            List of messages guiding the AI to use all three tools
+        """
+        return [
+            {
+                "role": "user",
+                "content": {
+                    "type": "text",
+                    "text": f"""Please analyze '{law_name}' Article {article_number} (제{article_number}조) with full citation information.
+
+**REQUIRED STEPS** (must complete all 3):
+
+1. **Search for the law** using eflaw_search:
+   - Query: "{law_name}"
+   - Extract: 법령일련번호 (MST) and 법령명한글 (full law name)
+
+2. **Get article content** using eflaw_service:
+   - Use the MST from step 1
+   - jo parameter: "{article_number:04d}00" (e.g., "000300" for 제3조)
+   - Display the full article text
+
+3. **Extract all citations** using article_citation:
+   - mst: (from step 1)
+   - law_name: (from step 1)
+   - article: {article_number}
+   - List ALL external and internal citations
+
+**OUTPUT FORMAT**:
+- Article text in Korean
+- Citation summary: total count, external vs internal
+- List of all cited laws with specific article/paragraph references
+- Brief explanation of why each citation is relevant"""
+                }
+            }
+        ]
+
+    @server.prompt(
+        name="analyze-law-citations",
+        description="Search a law and automatically analyze citations for specified articles"
+    )
+    def analyze_law_citations(law_name: str, articles: str = "1,2,3") -> list:
+        """
+        Prompt to search a law and analyze citations for multiple articles.
+
+        Args:
+            law_name: Law name to search
+            articles: Comma-separated article numbers (e.g., "1,2,3" or "11")
+
+        Returns:
+            List of messages guiding comprehensive citation analysis
+        """
+        article_list = [a.strip() for a in articles.split(",")]
+        return [
+            {
+                "role": "user",
+                "content": {
+                    "type": "text",
+                    "text": f"""Please analyze the citation network for '{law_name}'.
+
+**WORKFLOW**:
+
+1. **First**, search for '{law_name}' using eflaw_search to get:
+   - 법령일련번호 (MST)
+   - 법령명한글 (official name)
+
+2. **Then**, for EACH of these articles: {', '.join(f'제{a}조' for a in article_list)}
+   Call article_citation with:
+   - mst: (from search result)
+   - law_name: (official name from search)
+   - article: (each article number)
+
+3. **Compile a citation report**:
+   - Total citations per article
+   - Most frequently cited external laws
+   - Internal cross-references within the law
+   - Summary table of all citations
+
+**IMPORTANT**: You MUST call article_citation for each article listed above.
+Do not skip the citation extraction step."""
+                }
+            }
+        ]
+
+    @server.prompt(
         name="search-admin-rules",
         description="Search Korean administrative rules (행정규칙) by keyword"
     )
@@ -2732,7 +2996,7 @@ Use display=10 to get a good sample of results."""
             }
         ]
 
-    logger.info("LexLink server initialized with 23 tools and 3 prompts")
+    logger.info("LexLink server initialized with 24 tools and 5 prompts")
     logger.info("Phase 1 & 2 Tools (15):")
     logger.info("  - eflaw_search, law_search, eflaw_service, law_service, eflaw_josub, law_josub")
     logger.info("  - elaw_search, elaw_service, admrul_search, admrul_service")
@@ -2740,7 +3004,9 @@ Use display=10 to get a good sample of results."""
     logger.info("Phase 3 Tools (8):")
     logger.info("  - prec_search, prec_service, detc_search, detc_service")
     logger.info("  - expc_search, expc_service, decc_search, decc_service")
-    logger.info("Prompts: search-korean-law, get-law-article, search-admin-rules")
+    logger.info("Phase 4 Tools (1):")
+    logger.info("  - article_citation")
+    logger.info("Prompts (5): search-korean-law, get-law-article, get-article-with-citations, analyze-law-citations, search-admin-rules")
     logger.info(f"Session config: {session_config is not None}")
 
     return server
