@@ -385,31 +385,31 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
         Retrieve full law content by effective date (시행일 기준 법령 본문 조회).
 
         Retrieves the complete text of a law organized by effective date.
-        Use this to get the full content of a specific law.
+
+        **IMPORTANT: For specific article queries (e.g., "제174조"), ALWAYS use the `jo` parameter.
+        Some laws (e.g., 자본시장법) have 400+ articles and the full response can exceed 1MB.
+        Using `jo` returns only the requested article, which is much faster and cleaner.**
 
         Args:
             id: Law ID (either id or mst is required)
             mst: Law serial number (MST/lsi_seq)
             ef_yd: Effective date (YYYYMMDD) - required when using mst
-            jo: Article number in XXXXXX format (first 4 digits = article number zero-padded,
-                last 2 digits = branch article suffix where 00=main article).
-                Examples: "000200" (Article 2), "002000" (Article 20), "001502" (Article 15-2)
+            jo: **REQUIRED for specific articles.** Article number in XXXXXX format.
+                Format: first 4 digits = article number (zero-padded), last 2 digits = branch suffix (00=main).
+                Examples: "017400" (제174조), "017200" (제172조), "000300" (제3조), "001502" (제15조의2)
             chr_cls_cd: Language code - "010202" (Korean, default) or "010201" (Original)
             oc: Optional OC override (defaults to session config or env)
             type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
 
         Returns:
-            Full law content or error
+            Full law content or specific article content
 
         Examples:
-            Retrieve law by ID:
+            Retrieve specific article (RECOMMENDED):
+            >>> eflaw_service(mst="279823", jo="017400", type="XML")  # 자본시장법 제174조
+
+            Retrieve full law (WARNING: large response for some laws):
             >>> eflaw_service(id="1747", type="XML")
-
-            Retrieve law by MST with effective date:
-            >>> eflaw_service(mst="166520", ef_yd=20151007, type="XML")
-
-            Retrieve specific article:
-            >>> eflaw_service(mst="166520", ef_yd=20151007, jo="000300", type="XML")
         """
         try:
             # Convert id/mst/jo to strings if they're integers (LLMs may extract numbers as ints)
@@ -504,28 +504,32 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
 
         Retrieves the complete text of a law organized by announcement (publication) date.
 
+        **IMPORTANT: For specific article queries (e.g., "제174조"), ALWAYS use the `jo` parameter.
+        Some laws (e.g., 자본시장법) have 400+ articles and the full response can exceed 1MB.
+        Using `jo` returns only the requested article, which is much faster and cleaner.**
+
         Args:
             id: Law ID (either id or mst is required)
             mst: Law serial number (MST)
             lm: Law modification parameter
             ld: Law date parameter (YYYYMMDD)
             ln: Law number parameter
-            jo: Article number in XXXXXX format (first 4 digits = article number zero-padded,
-                last 2 digits = branch article suffix where 00=main article).
-                Examples: "000200" (Article 2), "002000" (Article 20), "001502" (Article 15-2)
+            jo: **REQUIRED for specific articles.** Article number in XXXXXX format.
+                Format: first 4 digits = article number (zero-padded), last 2 digits = branch suffix (00=main).
+                Examples: "017400" (제174조), "017200" (제172조), "000300" (제3조), "001502" (제15조의2)
             lang: Language - "KO" (Korean) or "ORI" (Original)
             oc: Optional OC override (defaults to session config or env)
             type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
 
         Returns:
-            Full law content or error
+            Full law content or specific article content
 
         Examples:
-            Retrieve law by ID:
-            >>> law_service(id="009682", type="XML")
+            Retrieve specific article (RECOMMENDED):
+            >>> law_service(mst="279823", jo="017400", type="XML")  # 자본시장법 제174조
 
-            Retrieve law by MST:
-            >>> law_service(mst="261457", type="XML")
+            Retrieve full law (WARNING: large response for some laws):
+            >>> law_service(id="009682", type="XML")
         """
         try:
             # Convert id/mst/jo to strings if they're integers (LLMs may extract numbers as ints)
@@ -621,36 +625,31 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
         """
         Query specific article/paragraph by effective date (시행일 기준 조·항·호·목 조회).
 
-        Retrieves specific sections (article, paragraph, item, subitem) of a law
-        organized by effective date.
+        **BEST TOOL for querying specific articles like "제174조", "제3조" etc.**
+        This returns only the requested article/paragraph, avoiding large full-law responses.
 
         Args:
             id: Law ID (either id or mst is required)
             mst: Law serial number (MST)
             ef_yd: Effective date (YYYYMMDD) - required when using mst
-            jo: Article number in XXXXXX format (first 4 digits = article number zero-padded,
-                last 2 digits = branch article suffix where 00=main article).
-                Examples: "000200" (Article 2), "002000" (Article 20), "001502" (Article 15-2)
-            hang: Paragraph number (6 digits, e.g., "000100")
-            ho: Item number (6 digits, e.g., "000200")
-            mok: Subitem (UTF-8 encoded, e.g., "다")
+            jo: Article number in XXXXXX format.
+                Format: first 4 digits = article number (zero-padded), last 2 digits = branch suffix (00=main).
+                Examples: "017400" (제174조), "017200" (제172조), "000300" (제3조), "001502" (제15조의2)
+            hang: Paragraph number (6 digits, e.g., "000100" for 제1항)
+            ho: Item number (6 digits, e.g., "000200" for 제2호)
+            mok: Subitem (UTF-8 encoded, e.g., "다" for 다목)
             oc: Optional OC override (defaults to session config or env)
             type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
 
         Returns:
-            Specific law section content or error
+            Specific law section content
 
         Examples:
-            Query article/paragraph/item/subitem:
-            >>> eflaw_josub(
-            ...     mst="193412",
-            ...     ef_yd=20171019,
-            ...     jo="000300",
-            ...     hang="000100",
-            ...     ho="000200",
-            ...     mok="다",
-            ...     type="XML"
-            ... )
+            Query 자본시장법 제174조:
+            >>> eflaw_josub(mst="279823", jo="017400", type="XML")
+
+            Query 건축법 제3조 제1항:
+            >>> eflaw_josub(mst="276925", jo="000300", hang="000100", type="XML")
         """
         try:
             # Convert id/mst/jo to strings if they're integers (LLMs may extract numbers as ints)
@@ -746,34 +745,30 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
         """
         Query specific article/paragraph by announcement date (공포일 기준 조·항·호·목 조회).
 
-        Retrieves specific sections (article, paragraph, item, subitem) of a law
-        organized by announcement (publication) date.
+        **BEST TOOL for querying specific articles like "제174조", "제3조" etc.**
+        This returns only the requested article/paragraph, avoiding large full-law responses.
 
         Args:
             id: Law ID (either id or mst is required)
             mst: Law serial number (MST)
-            jo: Article number in XXXXXX format (first 4 digits = article number zero-padded,
-                last 2 digits = branch article suffix where 00=main article).
-                Examples: "000200" (Article 2), "002000" (Article 20), "001502" (Article 15-2)
-            hang: Paragraph number (6 digits, e.g., "000100")
-            ho: Item number (6 digits, e.g., "000200")
-            mok: Subitem (UTF-8 encoded, e.g., "다")
+            jo: Article number in XXXXXX format.
+                Format: first 4 digits = article number (zero-padded), last 2 digits = branch suffix (00=main).
+                Examples: "017400" (제174조), "017200" (제172조), "000300" (제3조), "001502" (제15조의2)
+            hang: Paragraph number (6 digits, e.g., "000100" for 제1항)
+            ho: Item number (6 digits, e.g., "000200" for 제2호)
+            mok: Subitem (UTF-8 encoded, e.g., "다" for 다목)
             oc: Optional OC override (defaults to session config or env)
             type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
 
         Returns:
-            Specific law section content or error
+            Specific law section content
 
         Examples:
-            Query article/paragraph/item/subitem:
-            >>> law_josub(
-            ...     id="001823",
-            ...     jo="000300",
-            ...     hang="000100",
-            ...     ho="000200",
-            ...     mok="다",
-            ...     type="XML"
-            ... )
+            Query 자본시장법 제174조:
+            >>> law_josub(mst="279823", jo="017400", type="XML")
+
+            Query 건축법 제3조 제1항:
+            >>> law_josub(mst="276925", jo="000300", hang="000100", type="XML")
         """
         try:
             # Convert id/mst/jo to strings if they're integers (LLMs may extract numbers as ints)

@@ -45,7 +45,7 @@ LexLink is an MCP (Model Context Protocol) server that exposes the Korean Nation
 | **API Coverage** | ~16% of 150+ endpoints |
 | **LLM Integration** | ✅ Validated (Gemini) |
 | **Code Quality** | Clean, documented, tested |
-| **Version** | v1.2.0 |
+| **Version** | v1.2.1 |
 
 **Latest Achievement:** Phase 4 complete! Added article citation extraction with 100% accuracy via HTML parsing.
 
@@ -129,42 +129,57 @@ law_search(
 #### 3. `eflaw_service` - Retrieve Law Content (Effective Date)
 Get full law text and articles by effective date.
 
+> **IMPORTANT:** For specific article queries (e.g., "제174조"), use the `jo` parameter. Some laws have 400+ articles and responses can exceed 1MB without `jo`.
+
 ```python
+# Get specific article (RECOMMENDED)
 eflaw_service(
-    id="001823",               # Law ID
-    type="XML",
-    jo="0001"                  # Optional: specific article
+    mst="279823",              # Law MST
+    jo="017400",               # Article 174 (제174조)
+    type="XML"
+)
+
+# Get full law (WARNING: large response)
+eflaw_service(
+    id="001823",
+    type="XML"
 )
 ```
 
 #### 4. `law_service` - Retrieve Law Content (Announcement Date)
 Get full law text and articles by announcement date.
 
+> **IMPORTANT:** For specific article queries (e.g., "제174조"), use the `jo` parameter. Some laws have 400+ articles and responses can exceed 1MB without `jo`.
+
 ```python
+# Get specific article (RECOMMENDED)
 law_service(
-    id="001823",
+    mst="279823",              # Law MST
+    jo="017400",               # Article 174 (제174조)
     type="XML"
 )
 ```
 
 #### 5. `eflaw_josub` - Query Article/Paragraph (Effective Date)
-Query specific article, paragraph, or sub-item by effective date.
+**Best tool for querying specific articles.** Returns only the requested article/paragraph.
 
 ```python
 eflaw_josub(
-    id="001823",
-    jo="0001",                 # Article number
+    mst="279823",              # Law MST
+    jo="017400",               # Article 174 (제174조)
     type="XML"
 )
+# jo format: "XXXXXX" where first 4 digits = article (zero-padded), last 2 = branch (00=main)
+# Examples: "017400" (제174조), "000300" (제3조), "001502" (제15조의2)
 ```
 
 #### 6. `law_josub` - Query Article/Paragraph (Announcement Date)
-Query specific article, paragraph, or sub-item by announcement date.
+**Best tool for querying specific articles.** Returns only the requested article/paragraph.
 
 ```python
 law_josub(
-    id="001823",
-    jo="0001",
+    mst="279823",              # Law MST
+    jo="017200",               # Article 172 (제172조)
     type="XML"
 )
 ```
@@ -701,6 +716,20 @@ This project is open source. See LICENSE file for details.
 ---
 
 ## Changelog
+
+### v1.2.1 - 2025-11-30
+**Fix: Improve LLM guidance for specific article queries**
+
+- **Issue:** LLMs were fetching entire laws (1MB+ for 자본시장법) instead of using `jo` parameter for specific articles like "제174조"
+- **Solution:**
+  - Added **IMPORTANT** notices in `eflaw_service` and `law_service` docstrings about using `jo` parameter
+  - Added **BEST TOOL** guidance in `eflaw_josub` and `law_josub` docstrings
+  - Added practical examples: `jo="017400"` for 제174조, `jo="000300"` for 제3조
+  - Warned about large response sizes (400+ articles, 1MB+ responses)
+- **Impact:**
+  - LLMs now correctly use `jo` parameter for specific article queries
+  - LLMs prefer `law_josub`/`eflaw_josub` for article queries
+  - Faster responses and cleaner output for specific article requests
 
 ### v1.2.0 - 2025-11-30
 **Feature: Phase 4 - Article Citation Extraction**
