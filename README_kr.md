@@ -45,7 +45,7 @@ LexLink는 대한민국 국가법령정보 API ([open.law.go.kr](https://open.la
 | **API 커버리지** | 150개 이상 엔드포인트 중 ~16% 커버 |
 | **LLM 통합** | ✅ 검증 완료 (Gemini) |
 | **코드 품질** | 깔끔하고 문서화되고 테스트됨 |
-| **버전** | v1.2.1 |
+| **버전** | v1.2.2 |
 
 **최근 성과:** Phase 4 완성! HTML 파싱 기반 조문 인용 추출 도구 추가 (100% 정확도).
 
@@ -80,7 +80,7 @@ uv run dev
 cp .env.example .env
 
 # .env 파일을 편집하고 OC 설정
-LAW_OC=your_id_here
+OC=your_id_here
 ```
 
 **옵션 C: 도구 인자로 전달**
@@ -421,9 +421,7 @@ Smithery UI 또는 URL 파라미터에서 한 번 설정:
 ```python
 {
     "oc": "your_id",              # 필수: law.go.kr 사용자 ID
-    "debug": false,               # 선택사항: 상세 로깅 활성화
-    "base_url": "http://www.law.go.kr",  # 선택사항: API 기본 URL
-    "http_timeout_s": 15          # 선택사항: HTTP 타임아웃 (5-60초)
+    "http_timeout_s": 60          # 선택사항: HTTP 타임아웃 (5-120초, 기본값: 60)
 }
 ```
 
@@ -432,7 +430,7 @@ Smithery UI 또는 URL 파라미터에서 한 번 설정:
 OC 식별자를 확인할 때:
 1. **도구 인자** (최우선) - 도구 호출 시 `oc` 매개변수
 2. **세션 설정** - Smithery UI/URL에서 설정
-3. **환경 변수** - .env 파일의 `LAW_OC`
+3. **환경 변수** - .env 파일의 `OC`
 
 ## 사용 예시
 
@@ -482,7 +480,7 @@ result = eflaw_search(query="test")
     "hints": [
         "1. Tool argument: oc='your_value'",
         "2. Session config: Set 'oc' in Smithery settings",
-        "3. Environment variable: LAW_OC=your_value"
+        "3. Environment variable: OC=your_value"
     ]
 }
 ```
@@ -593,6 +591,7 @@ result = eflaw_search(query="test")
 lexlink-ko-mcp/
 ├── src/lexlink/
 │   ├── server.py       # 24개 도구가 포함된 메인 MCP 서버
+│   ├── http_server.py  # Kakao PlayMCP용 HTTP/SSE 서버
 │   ├── config.py       # 세션 설정 스키마
 │   ├── params.py       # 매개변수 확인 및 매핑
 │   ├── validation.py   # 입력 검증
@@ -657,6 +656,38 @@ uv run pytest tests/e2e/
 
 3. Smithery UI에서 세션 설정 구성
 
+### Kakao PlayMCP에 배포 (HTTP 서버)
+
+LexLink는 Kakao PlayMCP와 같은 플랫폼을 위해 HTTP 서버로도 배포할 수 있습니다.
+
+**빠른 시작 (로컬):**
+```bash
+# HTTP 서버 실행
+OC=your_oc uv run serve
+
+# 서버 시작 주소: http://localhost:8000/sse
+```
+
+**환경 변수:**
+
+| 변수 | 필수 | 기본값 | 설명 |
+|------|------|--------|------|
+| `OC` | 아니오* | - | 대체 OC (HTTP 헤더로 제공되지 않을 때 사용) |
+| `PORT` | 아니오 | 8000 | 서버 포트 |
+| `HOST` | 아니오 | 0.0.0.0 | 서버 호스트 |
+| `TRANSPORT` | 아니오 | sse | 전송 타입: `sse` 또는 `http` |
+
+*PlayMCP의 Key/Token 인증 사용 시, 사용자가 HTTP 헤더로 자신의 OC를 제공합니다.
+
+**PlayMCP 등록 정보:**
+
+| 필드 | 값 |
+|------|-----|
+| **MCP Endpoint** | `http://YOUR_SERVER_IP:8000/sse` |
+| **인증 방식** | Key/Token (헤더: `OC`) |
+
+자세한 배포 방법(AWS EC2, systemd, HTTPS)은 [assets/DEPLOYMENT_GUIDE.md](assets/DEPLOYMENT_GUIDE.md)를 참조하세요.
+
 ## 문제 해결
 
 ### "OC parameter is required" 오류
@@ -676,7 +707,7 @@ export PYTHONIOENCODING=utf-8
 ```python
 {
     "oc": "your_id",
-    "http_timeout_s": 30  # 기본값 15초에서 증가
+    "http_timeout_s": 90  # 기본값 60초에서 증가
 }
 ```
 
@@ -717,6 +748,28 @@ uv sync --reinstall
 ---
 
 ## 변경 로그
+
+### v1.2.2 - 2025-12-06
+**기능: Kakao PlayMCP용 HTTP/SSE 서버**
+
+- **신규 기능:**
+  - Kakao PlayMCP 배포를 위한 HTTP/SSE 서버 지원 추가
+  - HTTP 서버 시작을 위한 `uv run serve` 명령어 추가
+  - HTTP 헤더에서 OC를 추출하는 OCHeaderMiddleware (Key/Token 인증)
+  - SSE (`/sse`) 및 Streamable HTTP (`/mcp`) 전송 방식 지원
+- **주요 변경사항:**
+  - `LAW_OC` 환경 변수를 `OC`로 변경 (공식 law.go.kr API 명명과 일치)
+- **설정 변경:**
+  - Smithery UI 설정에서 `base_url` 제거 (내부 필드로만 유지)
+  - 기본 타임아웃을 15초에서 60초로 변경
+  - 타임아웃 범위를 5-120초로 확장
+- **문서:**
+  - Kakao PlayMCP 배포 가이드 추가 (`assets/DEPLOYMENT_GUIDE.md`)
+  - README에 PlayMCP 배포 섹션 추가
+  - 프로젝트 구조에 `http_server.py` 추가
+- **영향:**
+  - LexLink를 Kakao PlayMCP 및 유사한 HTTP 기반 플랫폼에 배포 가능
+  - 각 PlayMCP 사용자가 HTTP 헤더를 통해 자신의 OC를 제공 (자체 API 할당량 사용)
 
 ### v1.2.1 - 2025-11-30
 **수정: 특정 조문 조회를 위한 LLM 가이드 개선**

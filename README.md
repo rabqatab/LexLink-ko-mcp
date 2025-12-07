@@ -45,7 +45,7 @@ LexLink is an MCP (Model Context Protocol) server that exposes the Korean Nation
 | **API Coverage** | ~16% of 150+ endpoints |
 | **LLM Integration** | ✅ Validated (Gemini) |
 | **Code Quality** | Clean, documented, tested |
-| **Version** | v1.2.1 |
+| **Version** | v1.2.2 |
 
 **Latest Achievement:** Phase 4 complete! Added article citation extraction with 100% accuracy via HTML parsing.
 
@@ -80,7 +80,7 @@ uv run dev
 cp .env.example .env
 
 # Edit .env and set your OC
-LAW_OC=your_id_here
+OC=your_id_here
 ```
 
 **Option C: Pass in Tool Arguments**
@@ -420,9 +420,7 @@ Configure once in Smithery UI or URL parameters:
 ```python
 {
     "oc": "your_id",              # Required: law.go.kr user ID
-    "debug": false,               # Optional: Enable verbose logging
-    "base_url": "http://www.law.go.kr",  # Optional: API base URL
-    "http_timeout_s": 15          # Optional: HTTP timeout (5-60s)
+    "http_timeout_s": 60          # Optional: HTTP timeout (5-120s, default: 60)
 }
 ```
 
@@ -431,7 +429,7 @@ Configure once in Smithery UI or URL parameters:
 When resolving the OC identifier:
 1. **Tool argument** (highest priority) - `oc` parameter in tool call
 2. **Session config** - Set in Smithery UI/URL
-3. **Environment variable** - `LAW_OC` in .env file
+3. **Environment variable** - `OC` in .env file
 
 ## Usage Examples
 
@@ -481,7 +479,7 @@ result = eflaw_search(query="test")
     "hints": [
         "1. Tool argument: oc='your_value'",
         "2. Session config: Set 'oc' in Smithery settings",
-        "3. Environment variable: LAW_OC=your_value"
+        "3. Environment variable: OC=your_value"
     ]
 }
 ```
@@ -592,6 +590,7 @@ These examples demonstrate real-world conversation flows showing how LLMs intera
 lexlink-ko-mcp/
 ├── src/lexlink/
 │   ├── server.py       # Main MCP server with 24 tools
+│   ├── http_server.py  # HTTP/SSE server for Kakao PlayMCP
 │   ├── config.py       # Session configuration schema
 │   ├── params.py       # Parameter resolution & mapping
 │   ├── validation.py   # Input validation
@@ -656,6 +655,38 @@ For implementing additional tools from the 126+ remaining APIs:
 
 3. Configure session settings in Smithery UI
 
+### Deploy to Kakao PlayMCP (HTTP Server)
+
+LexLink can also be deployed as an HTTP server for platforms like Kakao PlayMCP.
+
+**Quick Start (Local):**
+```bash
+# Run the HTTP server
+OC=your_oc uv run serve
+
+# Server starts at: http://localhost:8000/sse
+```
+
+**Environment Variables:**
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `OC` | No* | - | Fallback OC (used if not provided via HTTP header) |
+| `PORT` | No | 8000 | Server port |
+| `HOST` | No | 0.0.0.0 | Server host |
+| `TRANSPORT` | No | sse | Transport type: `sse` or `http` |
+
+*When using PlayMCP with Key/Token auth, users provide their own OC via HTTP header.
+
+**PlayMCP Registration:**
+
+| Field | Value |
+|-------|-------|
+| **MCP Endpoint** | `http://YOUR_SERVER_IP:8000/sse` |
+| **Authentication** | Key/Token (Header: `OC`) |
+
+For detailed deployment instructions (AWS EC2, systemd, HTTPS), see [assets/DEPLOYMENT_GUIDE.md](assets/DEPLOYMENT_GUIDE.md).
+
 ## Troubleshooting
 
 ### "OC parameter is required" error
@@ -675,7 +706,7 @@ export PYTHONIOENCODING=utf-8
 ```python
 {
     "oc": "your_id",
-    "http_timeout_s": 30  # Increase from default 15s
+    "http_timeout_s": 90  # Increase from default 60s
 }
 ```
 
@@ -716,6 +747,28 @@ This project is open source. See LICENSE file for details.
 ---
 
 ## Changelog
+
+### v1.2.2 - 2025-12-06
+**Feature: HTTP/SSE Server for Kakao PlayMCP**
+
+- **New Feature:**
+  - Added HTTP/SSE server support for Kakao PlayMCP deployment
+  - New `uv run serve` command to start HTTP server
+  - OCHeaderMiddleware extracts OC from HTTP headers (Key/Token auth)
+  - Supports both SSE (`/sse`) and Streamable HTTP (`/mcp`) transports
+- **Breaking Changes:**
+  - Renamed `LAW_OC` environment variable to `OC` (matches official law.go.kr API naming)
+- **Configuration Changes:**
+  - Removed `base_url` from Smithery UI config (kept as internal field only)
+  - Updated default timeout from 15s to 60s
+  - Timeout range extended to 5-120s
+- **Documentation:**
+  - Added Kakao PlayMCP deployment guide (`assets/DEPLOYMENT_GUIDE.md`)
+  - Updated README with PlayMCP deployment section
+  - Added `http_server.py` to project structure
+- **Impact:**
+  - LexLink can now be deployed to Kakao PlayMCP and similar HTTP-based platforms
+  - Each PlayMCP user provides their own OC via HTTP header (uses their own API quota)
 
 ### v1.2.1 - 2025-11-30
 **Fix: Improve LLM guidance for specific article queries**
