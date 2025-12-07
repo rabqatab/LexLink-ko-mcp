@@ -659,7 +659,10 @@ For implementing additional tools from the 126+ remaining APIs:
 
 LexLink can also be deployed as an HTTP server for platforms like Kakao PlayMCP.
 
-**Quick Start (Local):**
+> **Important:** Kakao PlayMCP does not accept port numbers in URLs.
+> You must use Nginx as a reverse proxy to serve on port 80.
+
+**Quick Start (Local Testing):**
 ```bash
 # Run the HTTP server
 OC=your_oc uv run serve
@@ -667,25 +670,19 @@ OC=your_oc uv run serve
 # Server starts at: http://localhost:8000/sse
 ```
 
-**Environment Variables:**
-
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `OC` | No* | - | Fallback OC (used if not provided via HTTP header) |
-| `PORT` | No | 8000 | Server port |
-| `HOST` | No | 0.0.0.0 | Server host |
-| `TRANSPORT` | No | sse | Transport type: `sse` or `http` |
-
-*When using PlayMCP with Key/Token auth, users provide their own OC via HTTP header.
+**Production Setup:**
+```
+Internet → Nginx (port 80) → LexLink (port 8000)
+```
 
 **PlayMCP Registration:**
 
 | Field | Value |
 |-------|-------|
-| **MCP Endpoint** | `http://YOUR_SERVER_IP:8000/sse` |
+| **MCP Endpoint** | `http://YOUR_SERVER_IP/sse` (no port!) |
 | **Authentication** | Key/Token (Header: `OC`) |
 
-For detailed deployment instructions (AWS EC2, systemd, HTTPS), see [assets/DEPLOYMENT_GUIDE.md](assets/DEPLOYMENT_GUIDE.md).
+For detailed deployment instructions (AWS EC2, Nginx, systemd, HTTPS), see [assets/DEPLOYMENT_GUIDE.md](assets/DEPLOYMENT_GUIDE.md).
 
 ## Troubleshooting
 

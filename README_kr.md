@@ -660,7 +660,10 @@ uv run pytest tests/e2e/
 
 LexLink는 Kakao PlayMCP와 같은 플랫폼을 위해 HTTP 서버로도 배포할 수 있습니다.
 
-**빠른 시작 (로컬):**
+> **중요:** Kakao PlayMCP는 URL에 포트 번호를 허용하지 않습니다.
+> Nginx를 리버스 프록시로 사용하여 포트 80에서 서비스해야 합니다.
+
+**빠른 시작 (로컬 테스트):**
 ```bash
 # HTTP 서버 실행
 OC=your_oc uv run serve
@@ -668,25 +671,19 @@ OC=your_oc uv run serve
 # 서버 시작 주소: http://localhost:8000/sse
 ```
 
-**환경 변수:**
-
-| 변수 | 필수 | 기본값 | 설명 |
-|------|------|--------|------|
-| `OC` | 아니오* | - | 대체 OC (HTTP 헤더로 제공되지 않을 때 사용) |
-| `PORT` | 아니오 | 8000 | 서버 포트 |
-| `HOST` | 아니오 | 0.0.0.0 | 서버 호스트 |
-| `TRANSPORT` | 아니오 | sse | 전송 타입: `sse` 또는 `http` |
-
-*PlayMCP의 Key/Token 인증 사용 시, 사용자가 HTTP 헤더로 자신의 OC를 제공합니다.
+**프로덕션 설정:**
+```
+인터넷 → Nginx (포트 80) → LexLink (포트 8000)
+```
 
 **PlayMCP 등록 정보:**
 
 | 필드 | 값 |
 |------|-----|
-| **MCP Endpoint** | `http://YOUR_SERVER_IP:8000/sse` |
+| **MCP Endpoint** | `http://YOUR_SERVER_IP/sse` (포트 없음!) |
 | **인증 방식** | Key/Token (헤더: `OC`) |
 
-자세한 배포 방법(AWS EC2, systemd, HTTPS)은 [assets/DEPLOYMENT_GUIDE.md](assets/DEPLOYMENT_GUIDE.md)를 참조하세요.
+자세한 배포 방법(AWS EC2, Nginx, systemd, HTTPS)은 [assets/DEPLOYMENT_GUIDE.md](assets/DEPLOYMENT_GUIDE.md)를 참조하세요.
 
 ## 문제 해결
 

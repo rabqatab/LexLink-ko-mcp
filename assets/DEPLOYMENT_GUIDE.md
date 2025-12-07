@@ -2,6 +2,9 @@
 
 This guide explains how to deploy LexLink as an HTTP server for Kakao PlayMCP.
 
+> **Important:** Kakao PlayMCP does not accept port numbers in endpoint URLs.
+> You must use port 80 (HTTP) or 443 (HTTPS), which requires Nginx as a reverse proxy.
+
 ---
 
 ## Quick Start (Local Testing)
@@ -42,7 +45,8 @@ OC=your_oc uv run serve
 4. Create or select a key pair for SSH access
 5. Security Group settings:
    - Allow SSH (port 22) from your IP
-   - Allow Custom TCP (port 8000) from anywhere (0.0.0.0/0)
+   - Allow HTTP (port 80) from anywhere (0.0.0.0/0)
+   - Allow HTTPS (port 443) from anywhere (0.0.0.0/0) - optional
 
 ### Step 2: Allocate Elastic IP (Fixed IP)
 
@@ -62,8 +66,8 @@ ssh -i your-key.pem ubuntu@YOUR_ELASTIC_IP
 # Update system
 sudo apt update && sudo apt upgrade -y
 
-# Install Python 3.12
-sudo apt install -y python3.12 python3.12-venv git
+# Install Python 3.12, Nginx
+sudo apt install -y python3.12 python3.12-venv git nginx
 
 # Install uv (Python package manager)
 curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -85,14 +89,66 @@ uv sync
 
 ```bash
 # Test if server starts correctly
-OC=ddongle0205 uv run serve
+OC=your_oc uv run serve
 
 # You should see:
 # INFO: Uvicorn running on http://0.0.0.0:8000
 # Press Ctrl+C to stop
 ```
 
-### Step 7: Create Systemd Service (Auto-start)
+### Step 7: Configure Nginx (Required for PlayMCP)
+
+Kakao PlayMCP does not accept port numbers in URLs (`http://IP:8000/sse` is rejected).
+You must use Nginx to serve on port 80.
+
+```bash
+# Create nginx config
+sudo nano /etc/nginx/sites-available/lexlink
+```
+
+Paste this content:
+
+```nginx
+server {
+    listen 80;
+    server_name _;  # Accept any hostname/IP
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+
+        # Required for SSE (Server-Sent Events)
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 86400;  # 24 hours for long SSE connections
+
+        # Pass through headers
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+        # Pass OC header for authentication
+        proxy_set_header OC $http_oc;
+    }
+}
+```
+
+Save and exit (Ctrl+X, Y, Enter).
+
+```bash
+# Enable site and remove default
+sudo ln -s /etc/nginx/sites-available/lexlink /etc/nginx/sites-enabled/
+sudo rm -f /etc/nginx/sites-enabled/default
+
+# Test and restart nginx
+sudo nginx -t
+sudo systemctl restart nginx
+sudo systemctl enable nginx
+```
+
+### Step 8: Create Systemd Service (Auto-start)
 
 ```bash
 # Create service file
@@ -137,6 +193,16 @@ sudo systemctl status lexlink
 sudo journalctl -u lexlink -f
 ```
 
+### Step 9: Verify Setup
+
+```bash
+# Test locally
+curl http://localhost/sse
+
+# Test from outside (replace with your IP)
+curl http://YOUR_ELASTIC_IP/sse
+```
+
 ---
 
 ## Kakao PlayMCP Registration
@@ -153,7 +219,7 @@ Fill in the registration form:
 | **대화 예시 2** | 건축법과 관련된 대법원 판례 검색해줘 |
 | **대화 예시 3** | 자동차관리법 시행령 검색 |
 | **인증 방식** | Key/Token 인증 |
-| **MCP Endpoint** | `http://YOUR_ELASTIC_IP:8000/sse` |
+| **MCP Endpoint** | `http://YOUR_ELASTIC_IP/sse` (no port number!) |
 
 ### Key/Token Authentication Setup
 
@@ -175,23 +241,28 @@ When you select **Key/Token 인증**, configure:
 ## Useful Commands
 
 ```bash
-# Start server
+# Start/stop/restart LexLink
 sudo systemctl start lexlink
-
-# Stop server
 sudo systemctl stop lexlink
-
-# Restart server
 sudo systemctl restart lexlink
+
+# Start/stop/restart Nginx
+sudo systemctl start nginx
+sudo systemctl stop nginx
+sudo systemctl restart nginx
 
 # Check status
 sudo systemctl status lexlink
+sudo systemctl status nginx
 
-# View logs (live)
+# View LexLink logs (live)
 sudo journalctl -u lexlink -f
 
-# View recent logs
-sudo journalctl -u lexlink --since "1 hour ago"
+# View Nginx access logs
+sudo tail -f /var/log/nginx/access.log
+
+# View Nginx error logs
+sudo tail -f /var/log/nginx/error.log
 ```
 
 ---
@@ -203,16 +274,36 @@ sudo journalctl -u lexlink --since "1 hour ago"
 ```bash
 # Check if port is already in use
 sudo lsof -i :8000
+sudo lsof -i :80
 
 # Check service logs
 sudo journalctl -u lexlink -n 50
+sudo journalctl -u nginx -n 50
 ```
 
 ### Connection refused from outside
 
-1. Check AWS Security Group allows port 8000
-2. Check if server is running: `sudo systemctl status lexlink`
-3. Test locally first: `curl http://localhost:8000/sse`
+1. Check AWS Security Group allows port 80 (HTTP)
+2. Check if both services are running:
+   ```bash
+   sudo systemctl status lexlink
+   sudo systemctl status nginx
+   ```
+3. Test locally first: `curl http://localhost/sse`
+
+### Nginx returns 502 Bad Gateway
+
+The LexLink service is not running or not responding:
+```bash
+# Check if LexLink is running
+sudo systemctl status lexlink
+
+# Restart LexLink
+sudo systemctl restart lexlink
+
+# Check LexLink logs for errors
+sudo journalctl -u lexlink -n 50
+```
 
 ### OC error
 
@@ -224,44 +315,73 @@ sudo systemctl daemon-reload
 sudo systemctl restart lexlink
 ```
 
+### SSE connection drops after 60 seconds
+
+Nginx default timeout is 60s. Make sure your nginx config has:
+```nginx
+proxy_read_timeout 86400;  # 24 hours
+```
+
+Then restart nginx:
+```bash
+sudo nginx -t && sudo systemctl restart nginx
+```
+
 ---
 
-## Optional: HTTPS with Nginx
+## Optional: HTTPS with SSL Certificate
 
-For production, add HTTPS:
-
-```bash
-# Install nginx and certbot
-sudo apt install -y nginx certbot python3-certbot-nginx
-
-# Configure nginx
-sudo nano /etc/nginx/sites-available/lexlink
-```
-
-```nginx
-server {
-    listen 80;
-    server_name your-domain.com;
-
-    location / {
-        proxy_pass http://127.0.0.1:8000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-}
-```
+For production with a domain name, add HTTPS:
 
 ```bash
-# Enable site
-sudo ln -s /etc/nginx/sites-available/lexlink /etc/nginx/sites-enabled/
-sudo nginx -t
-sudo systemctl restart nginx
+# Install certbot
+sudo apt install -y certbot python3-certbot-nginx
 
-# Get SSL certificate
+# Get SSL certificate (replace with your domain)
 sudo certbot --nginx -d your-domain.com
+
+# Certbot will automatically update your nginx config
 ```
 
 Then use `https://your-domain.com/sse` for Kakao PlayMCP.
+
+---
+
+## Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      Internet                                │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                   AWS Security Group                         │
+│                   (Allow port 80/443)                        │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                      EC2 Instance                            │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │              Nginx (port 80)                         │    │
+│  │              - Reverse proxy                         │    │
+│  │              - Pass OC header                        │    │
+│  │              - SSE timeout handling                  │    │
+│  └─────────────────────────────────────────────────────┘    │
+│                          │                                   │
+│                          ▼                                   │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │         LexLink MCP Server (port 8000)               │    │
+│  │         - uvicorn + FastMCP                          │    │
+│  │         - OCHeaderMiddleware                         │    │
+│  │         - SSE transport                              │    │
+│  └─────────────────────────────────────────────────────┘    │
+│                          │                                   │
+│                          ▼                                   │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │              law.go.kr API                           │    │
+│  │              (using user's OC)                       │    │
+│  └─────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────┘
+```
