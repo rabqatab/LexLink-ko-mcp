@@ -658,6 +658,7 @@ dependencies = [
     { name = "mcp" },
     { name = "pydantic" },
     { name = "smithery" },
+    { name = "uvicorn" },
 ]
 
 [package.dev-dependencies]
@@ -671,6 +672,7 @@ requires-dist = [
     { name = "mcp", specifier = ">=1.15.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "smithery", specifier = ">=0.4.2" },
+    { name = "uvicorn", specifier = ">=0.30.0" },
 ]
 
 [package.metadata.requires-dev]

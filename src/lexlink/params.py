@@ -22,7 +22,7 @@ def resolve_oc(
     Priority (highest to lowest):
     1. Tool argument override (passed explicitly in tool call)
     2. Session configuration (set in Smithery UI/URL)
-    3. Environment variable LAW_OC
+    3. Environment variable OC
 
     Args:
         override_oc: Optional override from tool argument
@@ -41,7 +41,7 @@ def resolve_oc(
         >>> resolve_oc(session_oc="session_value")
         'session_value'
 
-        >>> os.environ["LAW_OC"] = "env_value"
+        >>> os.environ["OC"] = "env_value"
         >>> resolve_oc()
         'env_value'
 
@@ -57,7 +57,7 @@ def resolve_oc(
         return session_oc.strip()
 
     # Priority 3: Environment variable
-    env_oc = os.getenv("LAW_OC", "").strip()
+    env_oc = os.getenv("OC", "").strip()
     if env_oc:
         return env_oc
 
@@ -67,7 +67,7 @@ def resolve_oc(
         "Please provide it via:\n"
         "  1. Tool argument: oc='your_value' (highest priority)\n"
         "  2. Session config: Set 'oc' in Smithery settings\n"
-        "  3. Environment variable: LAW_OC=your_value (fallback)\n"
+        "  3. Environment variable: OC=your_value (fallback)\n"
         "\n"
         "OC should be your email local part (e.g., g4c@korea.kr → g4c)"
     )

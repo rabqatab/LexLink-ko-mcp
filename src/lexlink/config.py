@@ -26,24 +26,21 @@ class LexLinkConfig(BaseModel):
         )
     )
 
-    base_url: str = Field(
-        default="http://www.law.go.kr",
-        description="Base URL for law.go.kr API (override for testing)"
+    http_timeout_s: int = Field(
+        default=60,
+        ge=5,
+        le=120,
+        description="HTTP request timeout in seconds (5-120)"
     )
 
-    http_timeout_s: int = Field(
-        default=15,
-        ge=5,
-        le=60,
-        description="HTTP request timeout in seconds (5-60)"
-    )
+    # Internal field - not exposed in Smithery UI (no Field description)
+    base_url: str = "http://www.law.go.kr"
 
     class Config:
         """Pydantic configuration."""
         json_schema_extra = {
             "example": {
                 "oc": "g4c",
-                "base_url": "http://www.law.go.kr",
-                "http_timeout_s": 15
+                "http_timeout_s": 60
             }
         }
