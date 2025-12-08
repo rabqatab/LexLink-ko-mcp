@@ -159,16 +159,36 @@ def run_http_server(host: str = "0.0.0.0", port: int = 8000):
         port: Port to listen on (default: 8000)
     """
     import uvicorn
+    from contextlib import asynccontextmanager
 
     logger.info(f"Starting LexLink MCP server (HTTP) on {host}:{port}")
     logger.info(f"Endpoint: http://{host}:{port}/mcp")
     logger.info("PlayMCP Auth: Send OC via 'OC' HTTP header")
 
-    # For streamable HTTP, create a different wrapped app
-    _http_app = _server.streamable_http_app()
+    # Create a fresh server with stateless_http=True for proper HTTP transport
+    config = get_config_from_env()
+    from .server import create_server
+    http_server = create_server(config)
+
+    # Access the underlying FastMCP
+    if hasattr(http_server, '_fastmcp'):
+        fastmcp = http_server._fastmcp
+    else:
+        fastmcp = http_server
+
+    # Get the streamable HTTP app with proper configuration
+    _http_app = fastmcp.streamable_http_app()
+
+    # Create lifespan that properly initializes the session manager
+    @asynccontextmanager
+    async def lifespan(app):
+        async with fastmcp.session_manager.run():
+            yield
+
     http_app = Starlette(
         routes=[Mount("/", app=_http_app)],
-        middleware=[Middleware(OCHeaderMiddleware)]
+        middleware=[Middleware(OCHeaderMiddleware)],
+        lifespan=lifespan
     )
     uvicorn.run(http_app, host=host, port=port)
 
