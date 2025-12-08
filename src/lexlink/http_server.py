@@ -4,28 +4,39 @@ HTTP Server Entry Point for Kakao PlayMCP and similar platforms.
 This module provides HTTP/SSE transport for the LexLink MCP server,
 enabling deployment on platforms that require an HTTP endpoint.
 
+Transport Options:
+    - Streamable HTTP (/mcp): Recommended for PlayMCP and modern clients
+    - SSE (/sse): Legacy transport, may not work with some platforms
+
 Authentication:
     PlayMCP passes user's OC via HTTP header. This server extracts the
     "OC" header and uses it for law.go.kr API calls.
 
 Usage:
-    # Run with default settings (port 8000)
+    # Run with Streamable HTTP transport (recommended for PlayMCP)
+    TRANSPORT=http uv run serve
+
+    # Run with SSE transport (legacy)
     uv run serve
 
     # With fallback OC (used if no header provided)
-    OC=your_oc uv run serve
-
-    # Run with uvicorn directly
-    uvicorn lexlink.http_server:app --host 0.0.0.0 --port 8000
+    OC=your_oc TRANSPORT=http uv run serve
 
 Endpoints:
-    - SSE: http://your-host:8000/sse
-    - HTTP (Streamable): http://your-host:8000/mcp
+    - HTTP (Streamable): http://your-host:8000/mcp  <- Use this for PlayMCP
+    - SSE (Legacy): http://your-host:8000/sse
 
 PlayMCP Registration:
     - 인증 방식: Key/Token 인증
     - Header 이름: OC
-    - MCP Endpoint: http://your-aws-ip:8000/sse
+    - MCP Endpoint: http://your-domain/mcp (domain required, not raw IP)
+    - Use sslip.io for IP-to-domain: http://1-2-3-4.sslip.io/mcp
+
+Note:
+    Kakao PlayMCP requires:
+    1. Domain name (not raw IP address)
+    2. Streamable HTTP transport (TRANSPORT=http)
+    3. Port 80/443 (use Nginx as reverse proxy)
 """
 
 import os
