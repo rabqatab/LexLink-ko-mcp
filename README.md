@@ -45,7 +45,7 @@ LexLink is an MCP (Model Context Protocol) server that exposes the Korean Nation
 | **API Coverage** | ~16% of 150+ endpoints |
 | **LLM Integration** | ✅ Validated (Gemini) |
 | **Code Quality** | Clean, documented, tested |
-| **Version** | v1.2.2 |
+| **Version** | v1.2.3 |
 
 **Latest Achievement:** Phase 4 complete! Added article citation extraction with 100% accuracy via HTML parsing.
 
@@ -744,6 +744,21 @@ This project is open source. See LICENSE file for details.
 ---
 
 ## Changelog
+
+### v1.2.3 - 2025-12-08
+**Fix: Response truncation for PlayMCP size limits**
+
+- **Issue:** PlayMCP has response size limits (~50KB), causing "Tool call returned too large content part" errors
+- **Solution:**
+  - Added `truncate_response()` helper function for optional response size limiting
+  - Applied truncation to all 11 search tools (eflaw_search, law_search, elaw_search, admrul_search, lnkLs_search, lnkLsOrdJo_search, lnkDep_search, prec_search, detc_search, expc_search, decc_search)
+  - Added `MAX_RESPONSE_SIZE` environment variable (only truncates when set)
+- **Configuration:**
+  - Smithery: No change needed (no size limit)
+  - PlayMCP: Set `MAX_RESPONSE_SIZE=50000` in systemd service
+- **Impact:**
+  - Smithery keeps full functionality (unlimited responses)
+  - PlayMCP avoids size errors with truncated responses + Korean message
 
 ### v1.2.2 - 2025-12-06
 **Feature: HTTP/SSE Server for Kakao PlayMCP**

@@ -45,7 +45,7 @@ LexLink는 대한민국 국가법령정보 API ([open.law.go.kr](https://open.la
 | **API 커버리지** | 150개 이상 엔드포인트 중 ~16% 커버 |
 | **LLM 통합** | ✅ 검증 완료 (Gemini) |
 | **코드 품질** | 깔끔하고 문서화되고 테스트됨 |
-| **버전** | v1.2.2 |
+| **버전** | v1.2.3 |
 
 **최근 성과:** Phase 4 완성! HTML 파싱 기반 조문 인용 추출 도구 추가 (100% 정확도).
 
@@ -745,6 +745,21 @@ uv sync --reinstall
 ---
 
 ## 변경 로그
+
+### v1.2.3 - 2025-12-08
+**수정: PlayMCP 응답 크기 제한 대응**
+
+- **문제:** PlayMCP가 응답 크기 제한(~50KB)이 있어 "Tool call returned too large content part" 오류 발생
+- **해결책:**
+  - 선택적 응답 크기 제한을 위한 `truncate_response()` 헬퍼 함수 추가
+  - 11개 검색 도구 모두에 트렁케이션 적용 (eflaw_search, law_search, elaw_search, admrul_search, lnkLs_search, lnkLsOrdJo_search, lnkDep_search, prec_search, detc_search, expc_search, decc_search)
+  - `MAX_RESPONSE_SIZE` 환경 변수 추가 (설정 시에만 트렁케이션 적용)
+- **설정:**
+  - Smithery: 변경 불필요 (크기 제한 없음)
+  - PlayMCP: systemd 서비스에 `MAX_RESPONSE_SIZE=50000` 설정
+- **영향:**
+  - Smithery는 전체 기능 유지 (무제한 응답)
+  - PlayMCP는 한글 안내 메시지와 함께 트렁케이션된 응답으로 크기 오류 방지
 
 ### v1.2.2 - 2025-12-06
 **기능: Kakao PlayMCP용 HTTP/SSE 서버**
