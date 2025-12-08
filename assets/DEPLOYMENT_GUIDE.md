@@ -3,9 +3,12 @@
 This guide explains how to deploy LexLink as an HTTP server for Kakao PlayMCP.
 
 > **Critical Requirements for PlayMCP:**
-> 1. **Domain name required** - Raw IP addresses are rejected (use sslip.io as workaround)
-> 2. **Streamable HTTP transport** - Set `TRANSPORT=http` (not SSE)
-> 3. **Port 80/443 only** - Use Nginx as reverse proxy
+> 1. **HTTPS required** - If using Key/Token auth, PlayMCP requires HTTPS endpoint
+> 2. **Domain name required** - Raw IP addresses are rejected
+> 3. **Streamable HTTP transport** - Set `TRANSPORT=http` (not SSE)
+> 4. **Port 80/443 only** - Use Nginx as reverse proxy
+>
+> **Quick Solution:** Use ngrok for free HTTPS tunneling (see below)
 
 ---
 
@@ -263,11 +266,11 @@ Fill in the registration form:
 | **대화 예시 2** | 건축법과 관련된 대법원 판례 검색해줘 |
 | **대화 예시 3** | 자동차관리법 시행령 검색 |
 | **인증 방식** | Key/Token 인증 |
-| **MCP Endpoint** | `http://YOUR-IP-WITH-DASHES.sslip.io/mcp` |
+| **MCP Endpoint** | `https://YOUR-NGROK-SUBDOMAIN.ngrok-free.dev/mcp` |
 
-> **Endpoint Examples:**
-> - IP: `3.232.164.31`
-> - Endpoint: `http://3-232-164-31.sslip.io/mcp`
+> **Important:** Key/Token auth requires HTTPS!
+> - With ngrok: `https://abc123.ngrok-free.dev/mcp`
+> - With custom domain: `https://your-domain.com/mcp`
 
 ### Key/Token Authentication Setup
 
@@ -400,9 +403,42 @@ sudo nano /etc/nginx/nginx.conf
 
 ---
 
-## Optional: HTTPS with SSL Certificate
+## HTTPS Setup (Required for Key/Token Auth)
 
-For production with a custom domain:
+PlayMCP requires HTTPS for MCP servers using Key/Token authentication.
+
+### Option 1: ngrok (Free, Quickest)
+
+Best for testing and small-scale use.
+
+**Install ngrok:**
+```bash
+# Download and install
+curl -s https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz | sudo tar xzf - -C /usr/local/bin
+
+# Create free account at https://ngrok.com and get auth token
+ngrok config add-authtoken YOUR_AUTH_TOKEN
+```
+
+**Run ngrok:**
+```bash
+# Start ngrok (tunnels to port 8000)
+ngrok http 8000
+
+# Or run in background
+nohup ngrok http 8000 > /tmp/ngrok.log 2>&1 &
+
+# Get the HTTPS URL
+curl -s http://localhost:4040/api/tunnels | grep -o 'https://[^"]*'
+```
+
+**PlayMCP Endpoint:** `https://YOUR-RANDOM-SUBDOMAIN.ngrok-free.dev/mcp`
+
+> **Note:** Free ngrok URLs change each restart. For persistent URLs, upgrade to ngrok paid plan or use Let's Encrypt.
+
+### Option 2: Let's Encrypt (Free, Production)
+
+Best for production with a custom domain.
 
 ```bash
 # Install certbot
@@ -413,7 +449,7 @@ sudo yum install -y certbot python3-certbot-nginx  # Amazon Linux
 sudo certbot --nginx -d your-domain.com
 ```
 
-Then use `https://your-domain.com/mcp` for Kakao PlayMCP.
+**PlayMCP Endpoint:** `https://your-domain.com/mcp`
 
 ---
 
