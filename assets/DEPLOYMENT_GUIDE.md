@@ -289,6 +289,33 @@ When you select **Key/Token 인증**, configure:
 
 ---
 
+## Updating the Server
+
+When you update the LexLink project, re-deploy to EC2:
+
+```bash
+# SSH into EC2
+ssh -i your-key.pem ec2-user@YOUR_IP  # or ubuntu@ for Ubuntu
+
+# Pull latest code and restart
+cd ~/lexlink-ko-mcp
+git pull
+uv sync  # if dependencies changed
+sudo systemctl restart lexlink
+
+# Verify it's running
+sudo systemctl status lexlink
+```
+
+**One-liner from local machine:**
+```bash
+ssh AWS_lexlink "cd ~/lexlink-ko-mcp && git pull && uv sync && sudo systemctl restart lexlink"
+```
+
+**If ngrok is running**, it will automatically reconnect to the restarted service.
+
+---
+
 ## Useful Commands
 
 ```bash
