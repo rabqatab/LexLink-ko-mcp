@@ -34,7 +34,7 @@ OC=your_oc TRANSPORT=http uv run serve
 | `OC` | No | - | Fallback OC (used if not provided via HTTP header) |
 | `PORT` | No | 8000 | Server port |
 | `HOST` | No | 0.0.0.0 | Server host |
-| `MAX_RESPONSE_SIZE` | No | - | Truncate responses larger than this (bytes). Set for PlayMCP to avoid size errors. |
+| `SLIM_RESPONSE` | No | - | Set to `true` to slim down responses for PlayMCP (removes raw_content, keeps essential fields only) |
 
 *PlayMCP requires Streamable HTTP transport (`TRANSPORT=http`), not SSE.
 
@@ -195,7 +195,7 @@ WorkingDirectory=/home/ubuntu/lexlink-ko-mcp
 Environment="OC=fallback_oc"
 Environment="PORT=8000"
 Environment="TRANSPORT=http"
-Environment="MAX_RESPONSE_SIZE=50000"
+Environment="SLIM_RESPONSE=true"
 ExecStart=/home/ubuntu/.local/bin/uv run serve
 Restart=always
 RestartSec=5
@@ -217,7 +217,7 @@ WorkingDirectory=/home/ec2-user/lexlink-ko-mcp
 Environment="OC=fallback_oc"
 Environment="PORT=8000"
 Environment="TRANSPORT=http"
-Environment="MAX_RESPONSE_SIZE=50000"
+Environment="SLIM_RESPONSE=true"
 ExecStart=/home/ec2-user/.local/bin/uv run serve
 Restart=always
 RestartSec=5
@@ -226,7 +226,7 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 
-> **Note:** `MAX_RESPONSE_SIZE=50000` prevents "Tool call returned too large content part" errors on PlayMCP.
+> **Note:** `SLIM_RESPONSE=true` prevents "Tool call returned too large content part" errors on PlayMCP by removing raw XML and keeping only essential fields.
 
 > **Important:** Make sure paths match your actual directory name (case-sensitive!)
 > Check with: `ls ~/ | grep -i lexlink`

@@ -32,33 +32,55 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def truncate_response(response: dict) -> dict:
+def slim_response(response: dict) -> dict:
     """
-    Truncate response if MAX_RESPONSE_SIZE environment variable is set.
+    Slim down response for size-constrained platforms (e.g., Kakao PlayMCP).
 
-    This is used to handle platforms with response size limits (e.g., Kakao PlayMCP).
-    When MAX_RESPONSE_SIZE is not set, responses are returned unchanged.
+    When SLIM_RESPONSE=true:
+    - Removes 'raw_content' (XML) entirely
+    - Keeps only essential fields in 'ranked_data' items
+
+    When not set, returns response unchanged (for Smithery.ai compatibility).
 
     Args:
-        response: The response dictionary containing 'raw_content'
+        response: The response dictionary containing 'raw_content' and/or 'ranked_data'
 
     Returns:
-        Original response or response with truncated 'raw_content'
+        Original response or slimmed response with essential fields only
     """
-    max_size = os.getenv("MAX_RESPONSE_SIZE")
-    if not max_size:
+    if not os.getenv("SLIM_RESPONSE"):
         return response
 
-    max_size_int = int(max_size)
-    raw_content = response.get("raw_content", "")
+    result = response.copy()
 
-    if raw_content and len(raw_content) > max_size_int:
-        truncated = raw_content[:max_size_int]
-        response = response.copy()  # Don't mutate original
-        response["raw_content"] = truncated + "\n\n... (응답이 너무 길어 일부가 생략되었습니다. display 파라미터를 줄이거나 더 구체적인 검색어를 사용하세요.)"
-        response["truncated"] = True
+    # Remove raw_content entirely
+    result.pop("raw_content", None)
 
-    return response
+    # Slim down ranked_data to essential fields only
+    if "ranked_data" in result and isinstance(result["ranked_data"], dict):
+        ranked_data = result["ranked_data"].copy()
+
+        # Essential fields for law search results
+        essential_fields = {"법령명한글", "법령일련번호", "현행연혁코드", "시행일자"}
+
+        # Find and slim the law list (could be 'law', 'prec', 'detc', etc.)
+        list_keys = ["law", "prec", "detc", "expc", "decc", "admrul", "elaw"]
+        for key in list_keys:
+            if key in ranked_data:
+                items = ranked_data[key]
+                if isinstance(items, list):
+                    ranked_data[key] = [
+                        {k: v for k, v in item.items() if k in essential_fields}
+                        for item in items
+                    ]
+                elif isinstance(items, dict):
+                    ranked_data[key] = {k: v for k, v in items.items() if k in essential_fields}
+                break
+
+        result["ranked_data"] = ranked_data
+        result["slimmed"] = True
+
+    return result
 
 
 @smithery.server(config_schema=LexLinkConfig)
@@ -250,7 +272,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
                             # Add ranked data to response for LLM consumption
                             response["ranked_data"] = parsed_data
 
-            return truncate_response(response)
+            return slim_response(response)
 
         except ValueError as e:
             # Configuration or validation error
@@ -377,7 +399,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
                             parsed_data["numOfRows"] = str(original_display)
                             response["ranked_data"] = parsed_data
 
-            return truncate_response(response)
+            return slim_response(response)
 
         except ValueError as e:
             logger.warning(f"Validation error in law_search: {e}")
@@ -994,7 +1016,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
                             parsed_data["numOfRows"] = str(original_display)
                             response["ranked_data"] = parsed_data
 
-            return truncate_response(response)
+            return slim_response(response)
 
         except ValueError as e:
             logger.error(f"Validation error in elaw_search: {e}")
@@ -1254,7 +1276,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
                             parsed_data["numOfRows"] = str(original_display)
                             response["ranked_data"] = parsed_data
 
-            return truncate_response(response)
+            return slim_response(response)
 
         except ValueError as e:
             logger.error(f"Validation error in admrul_search: {e}")
@@ -1435,7 +1457,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             # Call API
             client = _get_client()
             response = client.get("/DRF/lawSearch.do", upstream_params, response_type=type)
-            return truncate_response(response)
+            return slim_response(response)
 
         except ValueError as e:
             logger.error(f"Validation error in lnkLs_search: {e}")
@@ -1533,7 +1555,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             # Call API
             client = _get_client()
             response = client.get("/DRF/lawSearch.do", upstream_params, response_type=type)
-            return truncate_response(response)
+            return slim_response(response)
 
         except ValueError as e:
             logger.error(f"Validation error in lnkLsOrdJo_search: {e}")
@@ -1614,7 +1636,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             # Call API
             client = _get_client()
             response = client.get("/DRF/lawSearch.do", upstream_params, response_type=type)
-            return truncate_response(response)
+            return slim_response(response)
 
         except ValueError as e:
             logger.error(f"Validation error in lnkDep_search: {e}")
@@ -1931,7 +1953,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
                             parsed_data["display"] = str(original_display)
                             response["ranked_data"] = parsed_data
 
-            return truncate_response(response)
+            return slim_response(response)
 
         except ValueError as e:
             logger.error(f"Validation error in prec_search: {e}")
@@ -2132,7 +2154,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
                             parsed_data["display"] = str(original_display)
                             response["ranked_data"] = parsed_data
 
-            return truncate_response(response)
+            return slim_response(response)
 
         except ValueError as e:
             logger.error(f"Validation error in detc_search: {e}")
@@ -2356,7 +2378,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
                             parsed_data["numOfRows"] = str(original_display)
                             response["ranked_data"] = parsed_data
 
-            return truncate_response(response)
+            return slim_response(response)
 
         except ValueError as e:
             logger.error(f"Validation error in expc_search: {e}")
@@ -2591,7 +2613,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
                             parsed_data["numOfRows"] = str(original_display)
                             response["ranked_data"] = parsed_data
 
-            return truncate_response(response)
+            return slim_response(response)
 
         except ValueError as e:
             logger.error(f"Validation error in decc_search: {e}")

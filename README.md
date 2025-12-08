@@ -45,7 +45,7 @@ LexLink is an MCP (Model Context Protocol) server that exposes the Korean Nation
 | **API Coverage** | ~16% of 150+ endpoints |
 | **LLM Integration** | ✅ Validated (Gemini) |
 | **Code Quality** | Clean, documented, tested |
-| **Version** | v1.2.3 |
+| **Version** | v1.2.4 |
 
 **Latest Achievement:** Phase 4 complete! Added article citation extraction with 100% accuracy via HTML parsing.
 
@@ -744,6 +744,22 @@ This project is open source. See LICENSE file for details.
 ---
 
 ## Changelog
+
+### v1.2.4 - 2025-12-09
+**Fix: Slim response mode for PlayMCP size limits**
+
+- **Issue:** v1.2.3's truncation approach was insufficient because `ranked_data` still contained full data (~25KB per 50 results)
+- **Solution:**
+  - Replaced `truncate_response()` with `slim_response()` function
+  - When `SLIM_RESPONSE=true`: removes `raw_content` entirely and keeps only essential fields in `ranked_data`
+  - Essential fields kept: 법령명한글, 법령일련번호, 현행연혁코드, 시행일자
+  - Fields removed: 법령약칭명, 법령ID, 공포일자, 공포번호, 제개정구분명, 소관부처코드, 소관부처명, 법령구분명, 공동부령정보, 자법타법여부, 법령상세링크
+- **Configuration:**
+  - Smithery: No change needed (full response)
+  - PlayMCP: Set `SLIM_RESPONSE=true` in systemd service
+- **Impact:**
+  - Response size reduced from ~50KB to ~3-5KB for 50 results
+  - PlayMCP works reliably without size errors
 
 ### v1.2.3 - 2025-12-08
 **Fix: Response truncation for PlayMCP size limits**
