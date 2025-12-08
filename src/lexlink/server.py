@@ -149,7 +149,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
         try:
             # 1. Access session config from Context at REQUEST time
             config = ctx.session_config if ctx else None
-            session_oc = config.oc if config else None
+            session_oc = getattr(config, 'oc', None) if config else None
 
             # 2. Resolve OC parameter with all 3 priority levels
             resolved_oc = resolve_oc(
@@ -288,7 +288,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
         try:
             # Access session config from Context at REQUEST time
             config = ctx.session_config if ctx else None
-            session_oc = config.oc if config else None
+            session_oc = getattr(config, 'oc', None) if config else None
 
             # Resolve OC with all 3 priority levels
             resolved_oc = resolve_oc(
@@ -422,7 +422,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
 
             # Access session config from Context at REQUEST time
             config = ctx.session_config if ctx else None
-            session_oc = config.oc if config else None
+            session_oc = getattr(config, 'oc', None) if config else None
 
             # Resolve OC with all 3 priority levels
             resolved_oc = resolve_oc(
@@ -542,7 +542,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
 
             # Access session config from Context at REQUEST time
             config = ctx.session_config if ctx else None
-            session_oc = config.oc if config else None
+            session_oc = getattr(config, 'oc', None) if config else None
 
             # Resolve OC with all 3 priority levels
             resolved_oc = resolve_oc(
@@ -662,7 +662,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
 
             # Access session config from Context at REQUEST time
             config = ctx.session_config if ctx else None
-            session_oc = config.oc if config else None
+            session_oc = getattr(config, 'oc', None) if config else None
 
             # Resolve OC with all 3 priority levels
             resolved_oc = resolve_oc(
@@ -781,7 +781,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
 
             # Access session config from Context at REQUEST time
             config = ctx.session_config if ctx else None
-            session_oc = config.oc if config else None
+            session_oc = getattr(config, 'oc', None) if config else None
 
             # Resolve OC with all 3 priority levels
             resolved_oc = resolve_oc(
@@ -890,7 +890,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
         try:
             # Access session config from Context
             config = ctx.session_config if ctx else None
-            session_oc = config.oc if config else None
+            session_oc = getattr(config, 'oc', None) if config else None
 
             # Resolve OC with 3-tier priority
             resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
@@ -1045,7 +1045,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
 
             # Access session config from Context
             config = ctx.session_config if ctx else None
-            session_oc = config.oc if config else None
+            session_oc = getattr(config, 'oc', None) if config else None
 
             # Resolve OC with 3-tier priority
             resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
@@ -1149,7 +1149,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
         try:
             # Access session config from Context
             config = ctx.session_config if ctx else None
-            session_oc = config.oc if config else None
+            session_oc = getattr(config, 'oc', None) if config else None
 
             # Resolve OC with 3-tier priority
             resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
@@ -1301,7 +1301,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
 
             # Access session config from Context
             config = ctx.session_config if ctx else None
-            session_oc = config.oc if config else None
+            session_oc = getattr(config, 'oc', None) if config else None
 
             # Resolve OC with 3-tier priority
             resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
@@ -1382,7 +1382,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
         try:
             # Access session config from Context
             config = ctx.session_config if ctx else None
-            session_oc = config.oc if config else None
+            session_oc = getattr(config, 'oc', None) if config else None
 
             # Resolve OC with 3-tier priority
             resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
@@ -1472,7 +1472,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
         try:
             # Access session config from Context
             config = ctx.session_config if ctx else None
-            session_oc = config.oc if config else None
+            session_oc = getattr(config, 'oc', None) if config else None
 
             # Resolve OC with 3-tier priority
             resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
@@ -1559,7 +1559,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
         try:
             # Access session config from Context
             config = ctx.session_config if ctx else None
-            session_oc = config.oc if config else None
+            session_oc = getattr(config, 'oc', None) if config else None
 
             # Resolve OC with 3-tier priority
             resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
@@ -1632,7 +1632,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
         try:
             # Access session config from Context
             config = ctx.session_config if ctx else None
-            session_oc = config.oc if config else None
+            session_oc = getattr(config, 'oc', None) if config else None
 
             # Resolve OC with 3-tier priority
             resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
@@ -1727,7 +1727,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
 
             # Access session config from Context
             config = ctx.session_config if ctx else None
-            session_oc = config.oc if config else None
+            session_oc = getattr(config, 'oc', None) if config else None
 
             # Resolve OC with 3-tier priority
             resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
@@ -1829,7 +1829,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
         try:
             # Access session config from Context
             config = ctx.session_config if ctx else None
-            session_oc = config.oc if config else None
+            session_oc = getattr(config, 'oc', None) if config else None
 
             # Resolve OC with 3-tier priority
             resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
@@ -1947,7 +1947,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
         try:
             # Access session config from Context
             config = ctx.session_config if ctx else None
-            session_oc = config.oc if config else None
+            session_oc = getattr(config, 'oc', None) if config else None
 
             # Resolve OC with 3-tier priority
             resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
@@ -2038,7 +2038,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
         try:
             # Access session config from Context
             config = ctx.session_config if ctx else None
-            session_oc = config.oc if config else None
+            session_oc = getattr(config, 'oc', None) if config else None
 
             # Resolve OC with 3-tier priority
             resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
@@ -2148,7 +2148,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
         try:
             # Access session config from Context
             config = ctx.session_config if ctx else None
-            session_oc = config.oc if config else None
+            session_oc = getattr(config, 'oc', None) if config else None
 
             # Resolve OC with 3-tier priority
             resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
@@ -2245,7 +2245,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
         try:
             # Access session config from Context
             config = ctx.session_config if ctx else None
-            session_oc = config.oc if config else None
+            session_oc = getattr(config, 'oc', None) if config else None
 
             # Resolve OC with 3-tier priority
             resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
@@ -2384,7 +2384,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
 
             # Access session config from Context
             config = ctx.session_config if ctx else None
-            session_oc = config.oc if config else None
+            session_oc = getattr(config, 'oc', None) if config else None
 
             # Resolve OC with 3-tier priority
             resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
@@ -2483,7 +2483,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
         try:
             # Access session config from Context
             config = ctx.session_config if ctx else None
-            session_oc = config.oc if config else None
+            session_oc = getattr(config, 'oc', None) if config else None
 
             # Resolve OC with 3-tier priority
             resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
@@ -2619,7 +2619,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
 
             # Access session config from Context
             config = ctx.session_config if ctx else None
-            session_oc = config.oc if config else None
+            session_oc = getattr(config, 'oc', None) if config else None
 
             # Resolve OC with 3-tier priority
             resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
@@ -2731,7 +2731,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             # OC is not strictly required for citation extraction (uses HTML scraping)
             # but we validate it for consistency with other tools
             config = ctx.session_config if ctx else None
-            session_oc = config.oc if config else None
+            session_oc = getattr(config, 'oc', None) if config else None
 
             try:
                 resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
