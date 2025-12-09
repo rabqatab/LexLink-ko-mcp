@@ -8,6 +8,60 @@
 
 ## 🐛 Active Issues
 
+### Issue #6: Non-Law Searches Return Empty Results ✅ RESOLVED
+**Discovered:** 2025-12-09
+**Status:** ✅ **FIXED** in v1.2.6
+**Severity:** CRITICAL - All non-law searches fail on PlayMCP
+**Platform:** Kakao PlayMCP (with SLIM_RESPONSE enabled)
+
+**Symptoms:**
+```json
+Request: prec_search(query="담보권", display=5, org="400201")
+Response: {
+  "status": "ok",
+  "request_id": "...",
+  "upstream_type": "XML"
+}
+// No ranked_data, no results!
+```
+All non-law search tools (`prec_search`, `detc_search`, `expc_search`, `decc_search`, `admrul_search`) return empty results.
+
+**Root Cause:**
+`slim_response()` used law-specific field names for ALL data types:
+```python
+# OLD - Only law fields
+essential_fields = {"법령명한글", "법령일련번호", "법령ID", "현행연혁코드", "시행일자"}
+```
+
+But precedent results have different fields:
+- `판례일련번호` (not 법령일련번호)
+- `사건명` (not 법령명한글)
+- `사건번호`, `선고일자`, `법원명`
+
+Result: When filtering precedent data, **ALL fields removed** → empty results!
+
+**Solution (Implemented in v1.2.6):**
+```python
+essential_fields_by_type = {
+    "law": {"법령명한글", "법령일련번호", "법령ID", "현행연혁코드", "시행일자"},
+    "elaw": {"법령명한글", "법령일련번호", "법령ID", "현행연혁코드", "시행일자"},
+    "prec": {"판례일련번호", "사건명", "사건번호", "선고일자", "법원명"},
+    "detc": {"헌재결정례일련번호", "사건명", "사건번호", "선고일자", "종국결과"},
+    "expc": {"법령해석례일련번호", "법령해석례명", "안건번호", "회신일자", "회신기관"},
+    "decc": {"행정심판재결례일련번호", "사건명", "사건번호", "재결일자", "재결결과"},
+    "admrul": {"행정규칙일련번호", "행정규칙명", "발령일자", "시행일자", "소관부처명"},
+}
+```
+
+**Files Changed:**
+- `src/lexlink/server.py` - Replaced single `essential_fields` with `essential_fields_by_type`
+
+**Impact:**
+- All 7 search tools now work correctly with SLIM_RESPONSE
+- Each data type preserves its essential fields for LLM navigation
+
+---
+
 ### Issue #5: LLM Parameter Confusion (id vs mst) ✅ RESOLVED
 **Discovered:** 2025-12-09
 **Status:** ✅ **FIXED** in v1.2.5
@@ -473,11 +527,11 @@ When encountering API errors, check:
 
 | Category | Total | Fixed | Open | Won't Fix |
 |----------|-------|-------|------|-----------|
-| **Critical Bugs** | 3 | 3 | 0 | 0 |
+| **Critical Bugs** | 4 | 4 | 0 | 0 |
 | **Medium Bugs** | 2 | 2 | 0 | 0 |
 | **API Limitations** | 1 | 0 | 0 | 1 |
 | **Documentation** | 0 | 0 | 0 | 0 |
-| **Total** | 6 | 5 | 0 | 1 |
+| **Total** | 7 | 6 | 0 | 1 |
 
 ---
 

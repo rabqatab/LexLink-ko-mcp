@@ -60,15 +60,33 @@ def slim_response(response: dict) -> dict:
     if "ranked_data" in result and isinstance(result["ranked_data"], dict):
         ranked_data = result["ranked_data"].copy()
 
-        # Essential fields for law search results
-        # Note: 법령ID is needed for eflaw_service(id=...) calls
-        #       법령일련번호 is MST for eflaw_service(mst=...) calls
-        essential_fields = {"법령명한글", "법령일련번호", "법령ID", "현행연혁코드", "시행일자"}
+        # Essential fields per data type
+        # Each type has different field names in the API response
+        essential_fields_by_type = {
+            # Law searches
+            "law": {"법령명한글", "법령일련번호", "법령ID", "현행연혁코드", "시행일자"},
+            "elaw": {"법령명한글", "법령일련번호", "법령ID", "현행연혁코드", "시행일자"},
+            # Court precedents
+            "prec": {"판례일련번호", "사건명", "사건번호", "선고일자", "법원명"},
+            # Constitutional Court decisions
+            "detc": {"헌재결정례일련번호", "사건명", "사건번호", "선고일자", "종국결과"},
+            # Legal interpretations
+            "expc": {"법령해석례일련번호", "법령해석례명", "안건번호", "회신일자", "회신기관"},
+            # Administrative appeal decisions
+            "decc": {"행정심판재결례일련번호", "사건명", "사건번호", "재결일자", "재결결과"},
+            # Administrative rules
+            "admrul": {"행정규칙일련번호", "행정규칙명", "발령일자", "시행일자", "소관부처명"},
+        }
 
-        # Find and slim the law list (could be 'law', 'prec', 'detc', etc.)
+        # Find and slim the data list
         list_keys = ["law", "prec", "detc", "expc", "decc", "admrul", "elaw"]
         for key in list_keys:
             if key in ranked_data:
+                essential_fields = essential_fields_by_type.get(key, set())
+                if not essential_fields:
+                    # Unknown type - don't filter, keep all fields
+                    break
+
                 items = ranked_data[key]
                 if isinstance(items, list):
                     ranked_data[key] = [
