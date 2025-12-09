@@ -85,18 +85,26 @@ def slim_response(response: dict) -> dict:
             """Check if field matches any essential pattern."""
             return any(re.match(pattern, field_name) for pattern in essential_patterns)
 
-        # Find and slim the data list
+        # Find and slim the data list (case-insensitive key matching)
+        # API uses inconsistent casing: 'prec' vs 'Detc' vs 'Expc' vs 'Decc'
         list_keys = ["law", "prec", "detc", "expc", "decc", "admrul", "elaw"]
-        for key in list_keys:
-            if key in ranked_data:
-                items = ranked_data[key]
+        for target_key in list_keys:
+            # Case-insensitive key lookup
+            actual_key = None
+            for key in ranked_data.keys():
+                if key.lower() == target_key.lower():
+                    actual_key = key
+                    break
+
+            if actual_key:
+                items = ranked_data[actual_key]
                 if isinstance(items, list):
-                    ranked_data[key] = [
+                    ranked_data[actual_key] = [
                         {k: v for k, v in item.items() if is_essential_field(k)}
                         for item in items
                     ]
                 elif isinstance(items, dict):
-                    ranked_data[key] = {k: v for k, v in items.items() if is_essential_field(k)}
+                    ranked_data[actual_key] = {k: v for k, v in items.items() if is_essential_field(k)}
                 break
 
         result["ranked_data"] = ranked_data

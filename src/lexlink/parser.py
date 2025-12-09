@@ -91,10 +91,11 @@ def extract_items_list(parsed_data: Dict[str, Any], item_key: str) -> List[Dict[
 
     Handles both single item and multiple items responses.
     Works with any XML tag name - preserves all data from _element_to_dict().
+    Case-insensitive: tries both provided key and capitalized/lowercase variants.
 
     Args:
         parsed_data: Parsed dictionary from parse_xml_response()
-        item_key: XML tag name to extract (e.g., 'law', 'Prec', 'Detc', 'Expc', 'Decc')
+        item_key: XML tag name to extract (e.g., 'law', 'prec', 'detc', 'expc', 'decc')
 
     Returns:
         List of item dictionaries (preserves all XML fields as-is)
@@ -104,14 +105,25 @@ def extract_items_list(parsed_data: Dict[str, Any], item_key: str) -> List[Dict[
         >>> extract_items_list(data, 'law')
         [{'법령명한글': '민법'}]
 
-        >>> data = {'Prec': [{'판례명': '대법원 2020다1234'}, {'판례명': '대법원 2021다5678'}]}
-        >>> len(extract_items_list(data, 'Prec'))
-        2
+        >>> data = {'Detc': [{'사건명': '헌재 2020헌마1234'}]}
+        >>> extract_items_list(data, 'detc')  # Works with lowercase too
+        [{'사건명': '헌재 2020헌마1234'}]
     """
-    if not parsed_data or item_key not in parsed_data:
+    if not parsed_data:
         return []
 
-    items = parsed_data[item_key]
+    # Try case-insensitive key matching (API uses inconsistent casing)
+    # e.g., 'prec' vs 'Detc' vs 'Expc' vs 'Decc'
+    actual_key = None
+    for key in parsed_data.keys():
+        if key.lower() == item_key.lower():
+            actual_key = key
+            break
+
+    if not actual_key:
+        return []
+
+    items = parsed_data[actual_key]
 
     # Ensure items is a list
     if not isinstance(items, list):
@@ -125,11 +137,12 @@ def update_items_list(parsed_data: Dict[str, Any], ranked_items: List[Dict[str, 
     Update parsed data with ranked items list.
 
     Preserves all other fields in parsed_data - only updates the specified item_key.
+    Case-insensitive: finds the actual key regardless of casing.
 
     Args:
         parsed_data: Original parsed dictionary
         ranked_items: Re-ranked list of items
-        item_key: XML tag name to update (e.g., 'law', 'Prec', 'Detc', 'Expc', 'Decc')
+        item_key: XML tag name to update (e.g., 'law', 'prec', 'detc', 'expc', 'decc')
 
     Returns:
         Updated dictionary with ranked items (all other fields preserved)
@@ -137,8 +150,15 @@ def update_items_list(parsed_data: Dict[str, Any], ranked_items: List[Dict[str, 
     if not parsed_data:
         return parsed_data
 
+    # Find the actual key (case-insensitive) to preserve original casing
+    actual_key = item_key
+    for key in parsed_data.keys():
+        if key.lower() == item_key.lower():
+            actual_key = key
+            break
+
     # Update the items list (preserves all other keys in parsed_data)
-    parsed_data[item_key] = ranked_items
+    parsed_data[actual_key] = ranked_items
 
     return parsed_data
 

@@ -45,7 +45,7 @@ LexLink is an MCP (Model Context Protocol) server that exposes the Korean Nation
 | **API Coverage** | ~16% of 150+ endpoints |
 | **LLM Integration** | ✅ Validated (Gemini) |
 | **Code Quality** | Clean, documented, tested |
-| **Version** | v1.2.8 |
+| **Version** | v1.2.9 |
 
 **Latest Achievement:** Phase 4 complete! Added article citation extraction with 100% accuracy via HTML parsing.
 
@@ -744,6 +744,15 @@ This project is open source. See LICENSE file for details.
 ---
 
 ## Changelog
+
+### v1.2.9 - 2025-12-09
+**Fix: Case-insensitive item key matching for API inconsistency**
+
+- **Issue:** law.go.kr API uses inconsistent XML tag casing
+  - `prec` search → `<prec>` (lowercase)
+  - `detc` search → `<Detc>` (capitalized)
+  - `expc` search → `<Expc>` (capitalized)
+- **Fix:** Made `extract_items_list`, `update_items_list`, and `slim_response` case-insensitive
 
 ### v1.2.8 - 2025-12-09
 **Fix: Case-sensitive item key extraction for non-law searches**
