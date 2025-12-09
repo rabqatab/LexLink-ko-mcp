@@ -1966,12 +1966,12 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
                 if raw_content:
                     parsed_data = parse_xml_response(raw_content)
                     if parsed_data:
-                        items = extract_items_list(parsed_data, 'Prec')
+                        items = extract_items_list(parsed_data, 'prec')
                         if items:
                             ranked_items = rank_search_results(items, query, "판례명")
                             if len(ranked_items) > original_display:
                                 ranked_items = ranked_items[:original_display]
-                            parsed_data = update_items_list(parsed_data, ranked_items, 'Prec')
+                            parsed_data = update_items_list(parsed_data, ranked_items, 'prec')
                             parsed_data["display"] = str(original_display)
                             response["ranked_data"] = parsed_data
 
@@ -2167,12 +2167,12 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
                 if raw_content:
                     parsed_data = parse_xml_response(raw_content)
                     if parsed_data:
-                        items = extract_items_list(parsed_data, 'Detc')
+                        items = extract_items_list(parsed_data, 'detc')
                         if items:
                             ranked_items = rank_search_results(items, query, "사건명")
                             if len(ranked_items) > original_display:
                                 ranked_items = ranked_items[:original_display]
-                            parsed_data = update_items_list(parsed_data, ranked_items, 'Detc')
+                            parsed_data = update_items_list(parsed_data, ranked_items, 'detc')
                             parsed_data["display"] = str(original_display)
                             response["ranked_data"] = parsed_data
 
@@ -2384,7 +2384,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
                     if parsed_data:
                         # Extract interpretations list using 'Expc' tag
                         from .parser import extract_items_list, update_items_list
-                        interpretations = extract_items_list(parsed_data, 'Expc')
+                        interpretations = extract_items_list(parsed_data, 'expc')
                         if interpretations:
                             # Rank by relevance using '안건명' field
                             ranked_interpretations = rank_search_results(interpretations, query, "안건명")
@@ -2395,7 +2395,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
                                 logger.debug(f"Trimmed results from {len(interpretations)} to {original_display}")
 
                             # Update parsed data with ranked results
-                            parsed_data = update_items_list(parsed_data, ranked_interpretations, 'Expc')
+                            parsed_data = update_items_list(parsed_data, ranked_interpretations, 'expc')
                             # Update numOfRows to reflect trimmed results
                             parsed_data["numOfRows"] = str(original_display)
                             response["ranked_data"] = parsed_data
@@ -2619,7 +2619,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
                     parsed_data = parse_xml_response(raw_content)
                     if parsed_data:
                         # Extract administrative appeal decisions list using 'Decc' tag
-                        decisions = extract_items_list(parsed_data, 'Decc')
+                        decisions = extract_items_list(parsed_data, 'decc')
                         if decisions:
                             # Administrative appeal decisions use "사건명" (case_name) field
                             ranked_decisions = rank_search_results(decisions, query, "사건명")
@@ -2630,7 +2630,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
                                 logger.debug(f"Trimmed results from {len(decisions)} to {original_display}")
 
                             # Update parsed data with ranked results
-                            parsed_data = update_items_list(parsed_data, ranked_decisions, 'Decc')
+                            parsed_data = update_items_list(parsed_data, ranked_decisions, 'decc')
                             # Update numOfRows to reflect trimmed results
                             parsed_data["numOfRows"] = str(original_display)
                             response["ranked_data"] = parsed_data
