@@ -61,7 +61,9 @@ def slim_response(response: dict) -> dict:
         ranked_data = result["ranked_data"].copy()
 
         # Essential fields for law search results
-        essential_fields = {"법령명한글", "법령일련번호", "현행연혁코드", "시행일자"}
+        # Note: 법령ID is needed for eflaw_service(id=...) calls
+        #       법령일련번호 is MST for eflaw_service(mst=...) calls
+        essential_fields = {"법령명한글", "법령일련번호", "법령ID", "현행연혁코드", "시행일자"}
 
         # Find and slim the law list (could be 'law', 'prec', 'detc', etc.)
         list_keys = ["law", "prec", "detc", "expc", "decc", "admrul", "elaw"]

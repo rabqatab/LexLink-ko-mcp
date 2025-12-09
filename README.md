@@ -45,7 +45,7 @@ LexLink is an MCP (Model Context Protocol) server that exposes the Korean Nation
 | **API Coverage** | ~16% of 150+ endpoints |
 | **LLM Integration** | ✅ Validated (Gemini) |
 | **Code Quality** | Clean, documented, tested |
-| **Version** | v1.2.4 |
+| **Version** | v1.2.5 |
 
 **Latest Achievement:** Phase 4 complete! Added article citation extraction with 100% accuracy via HTML parsing.
 
@@ -745,6 +745,18 @@ This project is open source. See LICENSE file for details.
 
 ## Changelog
 
+### v1.2.5 - 2025-12-09
+**Fix: Add 법령ID to essential fields for correct parameter usage**
+
+- **Issue:** LLM was confusing `법령일련번호` (MST) with `법령ID` in slimmed responses
+  - Example: Calling `eflaw_service(id="235555")` when 235555 is MST, not 법령ID
+  - Correct usage should be `eflaw_service(mst=235555)` or `eflaw_service(id="001624")`
+- **Solution:**
+  - Added `법령ID` back to `essential_fields` in `slim_response()`
+  - Now LLM can see both fields and use correct parameter
+- **Essential fields:** 법령명한글, 법령일련번호, **법령ID**, 현행연혁코드, 시행일자
+- **Note:** If ranking not working, ensure EC2 has latest code with relevance ranking
+
 ### v1.2.4 - 2025-12-09
 **Fix: Slim response mode for PlayMCP size limits**
 
@@ -753,7 +765,7 @@ This project is open source. See LICENSE file for details.
   - Replaced `truncate_response()` with `slim_response()` function
   - When `SLIM_RESPONSE=true`: removes `raw_content` entirely and keeps only essential fields in `ranked_data`
   - Essential fields kept: 법령명한글, 법령일련번호, 현행연혁코드, 시행일자
-  - Fields removed: 법령약칭명, 법령ID, 공포일자, 공포번호, 제개정구분명, 소관부처코드, 소관부처명, 법령구분명, 공동부령정보, 자법타법여부, 법령상세링크
+  - Fields removed: 법령약칭명, 공포일자, 공포번호, 제개정구분명, 소관부처코드, 소관부처명, 법령구분명, 공동부령정보, 자법타법여부, 법령상세링크
 - **Configuration:**
   - Smithery: No change needed (full response)
   - PlayMCP: Set `SLIM_RESPONSE=true` in systemd service

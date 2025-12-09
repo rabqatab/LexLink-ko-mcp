@@ -8,6 +8,70 @@
 
 ## 🐛 Active Issues
 
+### Issue #5: LLM Parameter Confusion (id vs mst) ✅ RESOLVED
+**Discovered:** 2025-12-09
+**Status:** ✅ **FIXED** in v1.2.5
+**Severity:** HIGH - Causes failed law retrievals
+**Platform:** Kakao PlayMCP (with SLIM_RESPONSE enabled)
+
+**Symptoms:**
+```
+User: "형법 제23조 뭐지?"
+LLM calls: eflaw_service(id="235555")  → Law not found
+           eflaw_service(id="213837")  → Wrong law
+```
+
+**Root Cause Analysis:**
+
+1. **API Ranking Issue:**
+   - Search for "형법" returns exact match at position 67 (not in first 50)
+   - API returns "군형법", "구형법" before actual "형법"
+   - With `display=50`, LLM never sees the actual "형법"
+
+2. **Parameter Confusion:**
+   - v1.2.4 removed `법령ID` from `essential_fields` for slimmed responses
+   - LLM only saw `법령일련번호` (MST) but used it with `id` parameter
+   - Example: `법령일련번호=235555` → LLM called `eflaw_service(id="235555")`
+   - Should have used: `eflaw_service(mst=235555)` or `eflaw_service(id="001624")`
+
+**Search Results Analysis:**
+| Position | Law Name | MST | 법령ID | Status |
+|----------|----------|-----|--------|--------|
+| 3 | 군에서의 형의 집행... | **213837** | 000912 | 현행 |
+| 23 | 군형법 | **235555** | 001624 | 현행 |
+| **67** | **형법** (target) | **270563** | 001692 | 현행 |
+
+**Solution (Implemented in v1.2.5):**
+
+1. **Added `법령ID` back to essential_fields:**
+   ```python
+   essential_fields = {"법령명한글", "법령일련번호", "법령ID", "현행연혁코드", "시행일자"}
+   ```
+   - LLM can now see both fields and use correct parameter
+
+2. **Relevance Ranking (already implemented):**
+   - LexLink fetches 100 results when `display < 100`
+   - Ranks by relevance: exact matches → starts with → contains
+   - Returns top N results after ranking
+   - **Note:** EC2 must have latest code for this to work
+
+**Files Changed:**
+- `src/lexlink/server.py` - Added 법령ID to essential_fields
+
+**Verification:**
+```python
+# Ranking test
+results = [군형법, 구형법, 형법]
+ranked = rank_search_results(results, "형법", "법령명한글")
+# Result: [형법, 구형법, 군형법] ✅
+```
+
+**Deployment Note:**
+If ranking still not working after update, ensure EC2 has the ranking module code.
+Run: `ssh EC2 "cd ~/lexlink-ko-mcp && git pull && sudo systemctl restart lexlink"`
+
+---
+
 ### Issue #4: PlayMCP Response Size Limit Error ✅ RESOLVED
 **Discovered:** 2025-12-09
 **Status:** ✅ **FIXED** in v1.2.4
@@ -409,11 +473,11 @@ When encountering API errors, check:
 
 | Category | Total | Fixed | Open | Won't Fix |
 |----------|-------|-------|------|-----------|
-| **Critical Bugs** | 2 | 2 | 0 | 0 |
+| **Critical Bugs** | 3 | 3 | 0 | 0 |
 | **Medium Bugs** | 2 | 2 | 0 | 0 |
 | **API Limitations** | 1 | 0 | 0 | 1 |
 | **Documentation** | 0 | 0 | 0 | 0 |
-| **Total** | 5 | 4 | 0 | 1 |
+| **Total** | 6 | 5 | 0 | 1 |
 
 ---
 
