@@ -1487,6 +1487,20 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             # Call API
             client = _get_client()
             response = client.get("/DRF/lawSearch.do", upstream_params, response_type=type)
+
+            # Parse XML and add ranked_data for LLM consumption
+            if response.get("status") == "ok" and type == "XML":
+                raw_content = response.get("raw_content", "")
+                if raw_content:
+                    parsed_data = parse_xml_response(raw_content)
+                    if parsed_data:
+                        # Extract and rank law list
+                        laws = extract_law_list(parsed_data)
+                        if laws:
+                            ranked_laws = rank_search_results(laws, query, "법령명한글")
+                            parsed_data = update_law_list(parsed_data, ranked_laws)
+                        response["ranked_data"] = parsed_data
+
             return slim_response(response)
 
         except ValueError as e:
@@ -1585,6 +1599,15 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             # Call API
             client = _get_client()
             response = client.get("/DRF/lawSearch.do", upstream_params, response_type=type)
+
+            # Parse XML and add ranked_data for LLM consumption
+            if response.get("status") == "ok" and type == "XML":
+                raw_content = response.get("raw_content", "")
+                if raw_content:
+                    parsed_data = parse_xml_response(raw_content)
+                    if parsed_data:
+                        response["ranked_data"] = parsed_data
+
             return slim_response(response)
 
         except ValueError as e:
@@ -1666,6 +1689,15 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             # Call API
             client = _get_client()
             response = client.get("/DRF/lawSearch.do", upstream_params, response_type=type)
+
+            # Parse XML and add ranked_data for LLM consumption
+            if response.get("status") == "ok" and type == "XML":
+                raw_content = response.get("raw_content", "")
+                if raw_content:
+                    parsed_data = parse_xml_response(raw_content)
+                    if parsed_data:
+                        response["ranked_data"] = parsed_data
+
             return slim_response(response)
 
         except ValueError as e:
