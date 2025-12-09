@@ -10,6 +10,7 @@ documentation. All tools default to XML format. Use XML or HTML only.
 
 import logging
 import os
+import re
 from typing import Optional, Union
 
 from mcp.server.fastmcp import FastMCP, Context
@@ -60,41 +61,42 @@ def slim_response(response: dict) -> dict:
     if "ranked_data" in result and isinstance(result["ranked_data"], dict):
         ranked_data = result["ranked_data"].copy()
 
-        # Essential fields per data type
-        # Each type has different field names in the API response
-        essential_fields_by_type = {
-            # Law searches
-            "law": {"법령명한글", "법령일련번호", "법령ID", "현행연혁코드", "시행일자"},
-            "elaw": {"법령명한글", "법령일련번호", "법령ID", "현행연혁코드", "시행일자"},
-            # Court precedents
-            "prec": {"판례일련번호", "사건명", "사건번호", "선고일자", "법원명"},
-            # Constitutional Court decisions
-            "detc": {"헌재결정례일련번호", "사건명", "사건번호", "선고일자", "종국결과"},
-            # Legal interpretations
-            "expc": {"법령해석례일련번호", "법령해석례명", "안건번호", "회신일자", "회신기관"},
-            # Administrative appeal decisions
-            "decc": {"행정심판재결례일련번호", "사건명", "사건번호", "재결일자", "재결결과"},
-            # Administrative rules
-            "admrul": {"행정규칙일련번호", "행정규칙명", "발령일자", "시행일자", "소관부처명"},
-        }
+        # Pattern-based essential field detection
+        # Works automatically for any data type without manual definitions
+        essential_patterns = [
+            r'.*일련번호$',      # IDs: 판례일련번호, 법령일련번호, 헌재결정례일련번호, etc.
+            r'.*명한글$',        # Korean names: 법령명한글
+            r'^사건명$',         # Case name
+            r'^사건번호$',       # Case number
+            r'^안건번호$',       # Agenda number
+            r'.*일자$',          # Dates: 선고일자, 시행일자, 재결일자, 회신일자, etc.
+            r'^법령ID$',         # Law ID (special case)
+            r'^현행연혁코드$',   # Law status code
+            r'^법원명$',         # Court name
+            r'^종국결과$',       # Constitutional court result
+            r'^재결결과$',       # Administrative appeal result
+            r'^회신기관$',       # Reply organization
+            r'^소관부처명$',     # Ministry name
+            r'.*규칙명$',        # Rule names: 행정규칙명
+            r'.*해석례명$',      # Interpretation names: 법령해석례명
+        ]
+
+        def is_essential_field(field_name: str) -> bool:
+            """Check if field matches any essential pattern."""
+            return any(re.match(pattern, field_name) for pattern in essential_patterns)
 
         # Find and slim the data list
         list_keys = ["law", "prec", "detc", "expc", "decc", "admrul", "elaw"]
         for key in list_keys:
             if key in ranked_data:
-                essential_fields = essential_fields_by_type.get(key, set())
-                if not essential_fields:
-                    # Unknown type - don't filter, keep all fields
-                    break
-
                 items = ranked_data[key]
                 if isinstance(items, list):
                     ranked_data[key] = [
-                        {k: v for k, v in item.items() if k in essential_fields}
+                        {k: v for k, v in item.items() if is_essential_field(k)}
                         for item in items
                     ]
                 elif isinstance(items, dict):
-                    ranked_data[key] = {k: v for k, v in items.items() if k in essential_fields}
+                    ranked_data[key] = {k: v for k, v in items.items() if is_essential_field(k)}
                 break
 
         result["ranked_data"] = ranked_data

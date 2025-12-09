@@ -45,7 +45,7 @@ LexLink is an MCP (Model Context Protocol) server that exposes the Korean Nation
 | **API Coverage** | ~16% of 150+ endpoints |
 | **LLM Integration** | ✅ Validated (Gemini) |
 | **Code Quality** | Clean, documented, tested |
-| **Version** | v1.2.6 |
+| **Version** | v1.2.7 |
 
 **Latest Achievement:** Phase 4 complete! Added article citation extraction with 100% accuracy via HTML parsing.
 
@@ -745,6 +745,14 @@ This project is open source. See LICENSE file for details.
 
 ## Changelog
 
+### v1.2.7 - 2025-12-09
+**Refactor: Pattern-based essential field detection**
+
+- **Issue:** Manual field definitions per data type required maintenance for each new API
+- **Solution:** Regex pattern matching for automatic field detection
+- **Patterns:** `*일련번호` (IDs), `*명한글/*명` (names), `*일자` (dates), etc.
+- **Benefit:** Works automatically for any data type without manual definitions
+
 ### v1.2.6 - 2025-12-09
 **Fix: Data-type-specific essential fields for slim response**
 
@@ -754,13 +762,6 @@ This project is open source. See LICENSE file for details.
 - **Solution:**
   - Implemented `essential_fields_by_type` dictionary with correct fields per data type
   - Each API type (law, prec, detc, expc, decc, admrul, elaw) now has its own essential fields
-- **Essential fields by type:**
-  - `law/elaw`: 법령명한글, 법령일련번호, 법령ID, 현행연혁코드, 시행일자
-  - `prec`: 판례일련번호, 사건명, 사건번호, 선고일자, 법원명
-  - `detc`: 헌재결정례일련번호, 사건명, 사건번호, 선고일자, 종국결과
-  - `expc`: 법령해석례일련번호, 법령해석례명, 안건번호, 회신일자, 회신기관
-  - `decc`: 행정심판재결례일련번호, 사건명, 사건번호, 재결일자, 재결결과
-  - `admrul`: 행정규칙일련번호, 행정규칙명, 발령일자, 시행일자, 소관부처명
 
 ### v1.2.5 - 2025-12-09
 **Fix: Add 법령ID to essential fields for correct parameter usage**
