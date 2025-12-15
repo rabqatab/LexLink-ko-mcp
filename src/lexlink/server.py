@@ -159,6 +159,10 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
 - expc_search/service: Legal interpretations
 - decc_search/service: Administrative appeals
 
+**Knowledge Base (AI-powered search):**
+- aiSearch: Semantic search for law articles - returns FULL article text
+- aiRltLs_search: Find semantically related laws
+
 ## Quick Reference
 - MST (법령일련번호): Unique law identifier from search results
 - Article format: "000300" = 제3조, "001102" = 제11조의2
@@ -2898,6 +2902,155 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
                 ]
             )
 
+    # ==================== TOOL 25: aiSearch ====================
+    @server.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True
+        )
+    )
+    def aiSearch(
+        query: str,
+        search: int = 0,
+        display: int = 20,
+        page: int = 1,
+        oc: Optional[str] = None,
+        type: str = "XML",
+        ctx: Context = None,
+    ) -> dict:
+        """
+        지능형 법령검색 시스템 검색 API (AI-powered semantic law search).
+
+        Uses intelligent/semantic search to find relevant law articles.
+        Returns FULL ARTICLE TEXT (조문내용) - more comprehensive than eflaw_search.
+
+        Best for: Natural language queries like "뺑소니 처벌", "음주운전 벌금"
+
+        Args:
+            query: Search query (natural language supported, e.g., "뺑소니 처벌")
+            search: Search scope:
+                - 0: 법령조문 (law articles, default)
+                - 1: 법령 별표·서식 (law appendix/forms)
+                - 2: 행정규칙 조문 (administrative rule articles)
+                - 3: 행정규칙 별표·서식 (administrative rule appendix/forms)
+            display: Results per page (default 20)
+            page: Page number (default 1)
+            oc: Optional OC override
+            type: Response format - XML only (JSON not supported)
+
+        Returns:
+            AI search results with full article text (법령조문 items with 조문내용)
+
+        Example:
+            >>> aiSearch(query="뺑소니 처벌", search=0)
+            # Returns: 특정범죄 가중처벌 등에 관한 법률 제5조의3 (도주차량 운전자의 가중처벌)
+        """
+        try:
+            config = ctx.session_config if ctx else None
+            session_oc = getattr(config, 'oc', None) if config else None
+            resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
+
+            snake_params = {
+                "oc": resolved_oc,
+                "target": "aiSearch",
+                "type": type,
+                "query": query,
+                "search": search,
+                "display": display,
+                "page": page,
+            }
+
+            upstream_params = map_params_to_upstream(snake_params)
+
+            client = _get_client()
+            response = client.get("/DRF/lawSearch.do", upstream_params, type)
+
+            # Parse XML response if successful
+            if response.get("status") == "ok" and type == "XML":
+                raw_content = response.get("raw_content", "")
+                if raw_content:
+                    parsed_data = parse_xml_response(raw_content)
+                    if parsed_data:
+                        response["ranked_data"] = parsed_data
+
+            return slim_response(response)
+
+        except ValueError as e:
+            return create_error_response(ErrorCode.VALIDATION_ERROR, str(e))
+        except Exception as e:
+            return create_error_response(ErrorCode.INTERNAL_ERROR, str(e))
+
+    # ==================== TOOL 26: aiRltLs_search ====================
+    @server.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True
+        )
+    )
+    def aiRltLs_search(
+        query: str,
+        search: int = 0,
+        oc: Optional[str] = None,
+        type: str = "XML",
+        ctx: Context = None,
+    ) -> dict:
+        """
+        지능형 법령검색 시스템 연관법령 API (AI-powered related laws search).
+
+        Finds laws semantically related to a given law name or keyword.
+
+        Best for: Finding related laws like "민법" → 상법, 의료법, 소송촉진법
+
+        Args:
+            query: Law name or keyword to find related laws (e.g., "민법", "형법")
+            search: Search scope:
+                - 0: 법령조문 (law articles, default)
+                - 1: 행정규칙조문 (administrative rule articles)
+            oc: Optional OC override
+            type: Response format - XML only (JSON not supported)
+
+        Returns:
+            List of semantically related law articles (법령조문 items)
+
+        Example:
+            >>> aiRltLs_search(query="민법")
+            # Returns: 상법 제54조 (상사법정이율), 의료법 제50조 (「민법」의 준용), etc.
+        """
+        try:
+            config = ctx.session_config if ctx else None
+            session_oc = getattr(config, 'oc', None) if config else None
+            resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
+
+            snake_params = {
+                "oc": resolved_oc,
+                "target": "aiRltLs",
+                "type": type,
+                "query": query,
+                "search": search,
+            }
+
+            upstream_params = map_params_to_upstream(snake_params)
+
+            client = _get_client()
+            response = client.get("/DRF/lawSearch.do", upstream_params, type)
+
+            # Parse XML response if successful
+            if response.get("status") == "ok" and type == "XML":
+                raw_content = response.get("raw_content", "")
+                if raw_content:
+                    parsed_data = parse_xml_response(raw_content)
+                    if parsed_data:
+                        response["ranked_data"] = parsed_data
+
+            return slim_response(response)
+
+        except ValueError as e:
+            return create_error_response(ErrorCode.VALIDATION_ERROR, str(e))
+        except Exception as e:
+            return create_error_response(ErrorCode.INTERNAL_ERROR, str(e))
+
     # ==================== PROMPTS ====================
 
     @server.prompt(
@@ -3107,7 +3260,7 @@ Use display=10 to get a good sample of results."""
             }
         ]
 
-    logger.info("LexLink server initialized with 24 tools and 5 prompts")
+    logger.info("LexLink server initialized with 26 tools and 5 prompts")
     logger.info("Phase 1 & 2 Tools (15):")
     logger.info("  - eflaw_search, law_search, eflaw_service, law_service, eflaw_josub, law_josub")
     logger.info("  - elaw_search, elaw_service, admrul_search, admrul_service")
@@ -3117,6 +3270,8 @@ Use display=10 to get a good sample of results."""
     logger.info("  - expc_search, expc_service, decc_search, decc_service")
     logger.info("Phase 4 Tools (1):")
     logger.info("  - article_citation")
+    logger.info("Phase 5 Tools (2):")
+    logger.info("  - aiSearch, aiRltLs_search (Knowledge Base AI-powered search)")
     logger.info("Prompts (5): search-korean-law, get-law-article, get-article-with-citations, analyze-law-citations, search-admin-rules")
     logger.info(f"Session config: {session_config is not None}")
 
