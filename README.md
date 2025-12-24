@@ -13,7 +13,7 @@ LexLink is an MCP (Model Context Protocol) server that exposes the Korean Nation
 
 ## Features
 
-- **24 MCP Tools** for comprehensive Korean law information access
+- **26 MCP Tools** for comprehensive Korean law information access
   - Search and retrieve Korean laws (effective date & announcement date)
   - Search and retrieve English-translated laws
   - Search and retrieve administrative rules (행정규칙)
@@ -25,9 +25,12 @@ LexLink is an MCP (Model Context Protocol) server that exposes the Korean Nation
     - Constitutional Court decisions (헌재결정례)
     - Legal interpretations (법령해석례)
     - Administrative appeal decisions (행정심판례)
-  - **NEW: Phase 4 - Article Citation Extraction**
+  - **Phase 4 - Article Citation Extraction**
     - Extract legal citations from any law article (100% accuracy)
-- **100% Semantic Validation** - All 24 tools confirmed returning real law data
+  - **NEW: Phase 5 - AI-Powered Search**
+    - Semantic search for natural language queries (aiSearch)
+    - Related laws discovery (aiRltLs_search)
+- **100% Semantic Validation** - All 26 tools confirmed returning real law data
 - **Session Configuration** - Configure once, use across all tool calls
 - **Error Handling** - Actionable error messages with resolution hints
 - **Korean Text Support** - Proper UTF-8 encoding for Korean characters
@@ -35,19 +38,19 @@ LexLink is an MCP (Model Context Protocol) server that exposes the Korean Nation
 
 ## Project Status
 
-🎉 **Production Ready - Phase 4 Complete!**
+🎉 **Production Ready - Phase 5 Complete!**
 
 | Metric | Status |
 |--------|--------|
-| **Tools Implemented** | 24/24 (100%) ✅ |
-| **Semantic Validation** | 24/24 (100%) ✅ |
-| **MCP Prompts** | 5/5 (100%) ✅ |
-| **API Coverage** | ~16% of 150+ endpoints |
+| **Tools Implemented** | 26/26 (100%) ✅ |
+| **Semantic Validation** | 26/26 (100%) ✅ |
+| **MCP Prompts** | 6/6 (100%) ✅ |
+| **API Coverage** | ~17% of 150+ endpoints |
 | **LLM Integration** | ✅ Validated (Gemini) |
 | **Code Quality** | Clean, documented, tested |
-| **Version** | v1.2.9 |
+| **Version** | v1.3.0 |
 
-**Latest Achievement:** Phase 4 complete! Added article citation extraction with 100% accuracy via HTML parsing.
+**Latest Achievement:** Phase 5 complete! Added AI-powered semantic search tools (aiSearch, aiRltLs_search) for natural language queries.
 
 ## Prerequisites
 
@@ -411,6 +414,51 @@ article_citation(
 - ~350ms average extraction time
 - Distinguishes internal vs external citations
 
+### Phase 5: AI-Powered Search (2 tools - NEW!)
+
+#### 25. `aiSearch` - AI-Powered Semantic Law Search
+⭐ **PREFERRED TOOL for vague or natural language queries.** Use this FIRST when user's intent is unclear or conversational.
+
+Uses intelligent/semantic search to find relevant law articles with full article text.
+
+```python
+aiSearch(
+    query="뺑소니 처벌",           # Natural language query
+    search=0,                      # 0: law articles, 1: appendix, 2: admin rules, 3: admin appendix
+    display=20,                    # Results per page
+    page=1,                        # Page number
+    type="XML"                     # Response format (XML only)
+)
+```
+
+**Best for:** Natural language queries like "음주운전 벌금", "이혼 재산분할", "상속 문제"
+
+#### 26. `aiRltLs_search` - AI-Powered Related Laws Search
+⭐ **PREFERRED TOOL for discovering related laws from vague topics.** Use this when user wants to explore laws around a general subject.
+
+Finds laws semantically related to a given law name or keyword.
+
+```python
+aiRltLs_search(
+    query="민법",                  # Law name or keyword
+    search=0,                      # 0: law articles, 1: admin rule articles
+    type="XML"                     # Response format (XML only)
+)
+```
+
+**Best for:** Finding related laws like "민법" → 상법, 의료법, 소송촉진법
+
+### Tool Selection Guide
+
+When searching Korean law, select tools based on query clarity:
+
+| Query Type | Recommended Tools | Examples |
+|------------|-------------------|----------|
+| 🔍 **Vague/Natural language** | `aiSearch`, `aiRltLs_search` | "음주운전 처벌", "이혼 재산분할" |
+| 📋 **Specific law/article** | `eflaw_search`, `law_search` | "형법 제148조의2", "민법 상속편" |
+| ⚖️ **Case law** | `prec_search`, `detc_search` | "대법원 2023다12345" |
+| 🔗 **Related laws** | `aiRltLs_search` | "민법과 관련된 법률" |
+
 ## Configuration
 
 ### Session Configuration Schema
@@ -574,13 +622,34 @@ These examples demonstrate real-world conversation flows showing how LLMs intera
 
 ---
 
+### Trajectory 8: AI-Powered Natural Language Search (Phase 5)
+**User Query:** "What's the penalty for hit-and-run accidents?"
+
+**Tool Calls:**
+1. `aiSearch(query="뺑소니 처벌", search=0, display=20, type="XML")` → Semantic search for hit-and-run penalties
+
+**Result:** LLM receives full article text from relevant laws (특정범죄 가중처벌 등에 관한 법률 제5조의3) with complete provisions about hit-and-run penalties, enabling comprehensive answer without needing to know specific law names.
+
+---
+
+### Trajectory 9: Discovering Related Laws (Phase 5)
+**User Query:** "What laws are related to the Civil Code?"
+
+**Tool Calls:**
+1. `aiRltLs_search(query="민법", search=0, type="XML")` → Find semantically related laws
+
+**Result:** LLM discovers related laws like 상법 (Commercial Act), 의료법 (Medical Service Act), 소송촉진법 (Act on Special Cases Concerning Expedition of Litigation), showing connections across legal domains.
+
+---
+
 ### Key Patterns
 
-1. **Search First, Then Retrieve**: Always search to find IDs before calling service tools
-2. **Use display=50-100 for Law Searches**: Ensures exact matches are found due to relevance ranking
-3. **Combine Phases**: Mix Phase 1 (laws), Phase 2 (administrative rules), and Phase 3 (precedents) for complete research
-4. **Type Parameter**: Always specify `type="XML"` for consistent, parseable results
-5. **Article Numbers**: Use 6-digit format (e.g., "002000" for Article 20) when querying specific articles
+1. **AI Tools for Vague Queries**: Use `aiSearch` or `aiRltLs_search` FIRST when user intent is unclear or conversational
+2. **Search First, Then Retrieve**: Always search to find IDs before calling service tools
+3. **Use display=50-100 for Law Searches**: Ensures exact matches are found due to relevance ranking
+4. **Combine Phases**: Mix Phase 1 (laws), Phase 2 (administrative rules), Phase 3 (precedents), and Phase 5 (AI search) for complete research
+5. **Type Parameter**: Always specify `type="XML"` for consistent, parseable results
+6. **Article Numbers**: Use 6-digit format (e.g., "002000" for Article 20) when querying specific articles
 
 ## Development
 
@@ -589,7 +658,7 @@ These examples demonstrate real-world conversation flows showing how LLMs intera
 ```
 lexlink-ko-mcp/
 ├── src/lexlink/
-│   ├── server.py       # Main MCP server with 24 tools
+│   ├── server.py       # Main MCP server with 26 tools
 │   ├── http_server.py  # HTTP/SSE server for Kakao PlayMCP
 │   ├── config.py       # Session configuration schema
 │   ├── params.py       # Parameter resolution & mapping
@@ -623,9 +692,9 @@ uv run pytest tests/e2e/
 
 ### Adding New Tools
 
-**Current Status:** 24/24 tools implemented and validated (Phase 1-4 complete)
+**Current Status:** 26/26 tools implemented and validated (Phase 1-5 complete)
 
-For implementing additional tools from the 126+ remaining APIs:
+For implementing additional tools from the 124+ remaining APIs:
 1. Follow the pattern established in `src/lexlink/server.py`
 2. Use Context injection for session configuration
 3. Use generic parser functions (`extract_items_list`, `update_items_list`)
@@ -744,6 +813,26 @@ This project is open source. See LICENSE file for details.
 ---
 
 ## Changelog
+
+### v1.3.0 - 2025-12-24
+**Feature: Phase 5 - AI-Powered Search Tools**
+
+- **New Tools:**
+  - `aiSearch` - AI-powered semantic law search (Tool 25)
+  - `aiRltLs_search` - AI-powered related laws search (Tool 26)
+- **Implementation:**
+  - Uses law.go.kr's intelligent search system (지능형 법령검색)
+  - Semantic search for natural language queries
+  - Returns full article text (조문내용) for comprehensive results
+  - XML parsing with ranked_data for LLM consumption
+- **LLM Guidance:**
+  - Added ⭐ PREFERRED TOOL hints in tool descriptions
+  - Added `tool-selection-guide` MCP prompt for tool selection guidance
+  - Tools marked as preferred for vague/unclear queries
+- **Impact:**
+  - Tool count: 24 → 26 tools
+  - MCP prompts: 5 → 6 prompts
+  - Better handling of natural language legal queries
 
 ### v1.2.9 - 2025-12-09
 **Fix: Case-insensitive item key matching for API inconsistency**

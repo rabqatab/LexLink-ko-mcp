@@ -2920,6 +2920,9 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
         ctx: Context = None,
     ) -> dict:
         """
+        ⭐ PREFERRED TOOL for vague or natural language queries.
+        Use this FIRST when user's intent is unclear or conversational.
+
         지능형 법령검색 시스템 검색 API (AI-powered semantic law search).
 
         Uses intelligent/semantic search to find relevant law articles.
@@ -2997,6 +3000,9 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
         ctx: Context = None,
     ) -> dict:
         """
+        ⭐ PREFERRED TOOL for discovering related laws from vague topics.
+        Use this when user wants to explore laws around a general subject.
+
         지능형 법령검색 시스템 연관법령 API (AI-powered related laws search).
 
         Finds laws semantically related to a given law name or keyword.
@@ -3260,7 +3266,45 @@ Use display=10 to get a good sample of results."""
             }
         ]
 
-    logger.info("LexLink server initialized with 26 tools and 5 prompts")
+    @server.prompt(
+        name="tool-selection-guide",
+        description="Guidance on which search tool to use based on query clarity"
+    )
+    def tool_selection_guide() -> list:
+        """
+        Prompt to guide LLMs on tool selection strategy.
+
+        Returns:
+            List of messages explaining when to use which tools
+        """
+        return [
+            {
+                "role": "user",
+                "content": {
+                    "type": "text",
+                    "text": """When searching Korean law, select tools based on query clarity:
+
+🔍 VAGUE/UNCLEAR queries → Use aiSearch or aiRltLs_search FIRST
+   These AI-powered tools use semantic search for natural language understanding.
+   Examples: "음주운전 처벌", "이혼 재산분할", "뺑소니", "상속 문제"
+
+📋 SPECIFIC queries → Use eflaw_search, law_search, prec_search
+   Use these when the user mentions specific law names, article numbers, or case numbers.
+   Examples: "형법 제148조의2", "민법 상속편", "대법원 2023다12345"
+
+🔗 RELATED LAWS → Use aiRltLs_search
+   When user wants to discover laws related to a topic or another law.
+   Examples: "민법과 관련된 법률", "의료법 연관 법령"
+
+Tool selection priority for unclear queries:
+1. aiSearch (semantic article search) - for finding specific provisions
+2. aiRltLs_search (related laws) - for exploring law landscape
+3. eflaw_search/law_search (keyword) - fallback for precise matches"""
+                }
+            }
+        ]
+
+    logger.info("LexLink server initialized with 26 tools and 6 prompts")
     logger.info("Phase 1 & 2 Tools (15):")
     logger.info("  - eflaw_search, law_search, eflaw_service, law_service, eflaw_josub, law_josub")
     logger.info("  - elaw_search, elaw_service, admrul_search, admrul_service")
@@ -3272,7 +3316,7 @@ Use display=10 to get a good sample of results."""
     logger.info("  - article_citation")
     logger.info("Phase 5 Tools (2):")
     logger.info("  - aiSearch, aiRltLs_search (Knowledge Base AI-powered search)")
-    logger.info("Prompts (5): search-korean-law, get-law-article, get-article-with-citations, analyze-law-citations, search-admin-rules")
+    logger.info("Prompts (6): search-korean-law, get-law-article, get-article-with-citations, analyze-law-citations, search-admin-rules, tool-selection-guide")
     logger.info(f"Session config: {session_config is not None}")
 
     return server
