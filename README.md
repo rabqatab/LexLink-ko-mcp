@@ -658,18 +658,21 @@ These examples demonstrate real-world conversation flows showing how LLMs intera
 ```
 lexlink-ko-mcp/
 ├── src/lexlink/
-│   ├── server.py       # Main MCP server with 26 tools
-│   ├── http_server.py  # HTTP/SSE server for Kakao PlayMCP
-│   ├── config.py       # Session configuration schema
-│   ├── params.py       # Parameter resolution & mapping
-│   ├── validation.py   # Input validation
-│   ├── parser.py       # XML parsing utilities
-│   ├── ranking.py      # Relevance ranking
-│   ├── citation.py     # Article citation extraction (Phase 4)
-│   ├── client.py       # HTTP client for law.go.kr API
-│   └── errors.py       # Error codes & responses
-├── pyproject.toml       # Project configuration
-└── README.md            # This file
+│   ├── server.py        # Main MCP server with 26 tools
+│   ├── http_server.py   # HTTP/SSE server for Kakao PlayMCP
+│   ├── config.py        # Session configuration schema
+│   ├── params.py        # Parameter resolution & mapping
+│   ├── validation.py    # Input validation
+│   ├── parser.py        # XML parsing utilities
+│   ├── ranking.py       # Relevance ranking
+│   ├── citation.py      # Article citation extraction (Phase 4)
+│   ├── client.py        # HTTP client for law.go.kr API
+│   ├── errors.py        # Error codes & responses
+│   ├── raw_logger.py    # PlayMCP traffic logging
+│   └── log_processor.py # Log format converter
+├── logs/playmcp/         # PlayMCP traffic logs (daily JSONL)
+├── pyproject.toml        # Project configuration
+└── README.md             # This file
 ```
 
 ### Running Tests
@@ -752,6 +755,45 @@ Internet → Nginx (port 80) → LexLink (port 8000)
 | **Authentication** | Key/Token (Header: `OC`) |
 
 For detailed deployment instructions (AWS EC2, Nginx, systemd, HTTPS), see [assets/DEPLOYMENT_GUIDE.md](assets/DEPLOYMENT_GUIDE.md).
+
+### PlayMCP Traffic Logging
+
+LexLink includes built-in logging for PlayMCP traffic analysis. Logs are saved in dashboard-compatible JSONL format.
+
+**Log Location:** `logs/playmcp/YYYY-MM-DD.jsonl`
+
+**Log Schema:**
+```json
+{
+  "rpc_id": "3",
+  "request_id": "d8ee45eb",
+  "session_id": "9ff9dc23431848a4901b4cb6326ba5bd",
+  "timestamp": "2025-12-25T05:40:23.957987",
+  "duration_ms": 1.52,
+  "method": "tools/call",
+  "tool_name": "aiSearch",
+  "params": { "arguments": {"query": "뺑소니 처벌"} },
+  "client": "PlayMCP",
+  "client_version": "2025.0.0",
+  "protocol_version": "2025-06-18",
+  "client_ip": "220.64.111.219",
+  "oc": "user_id",
+  "status": "success",
+  "status_code": 200,
+  "result": { ... }
+}
+```
+
+**Features:**
+- Daily log rotation (one file per day)
+- Dashboard-compatible format for filtering and analysis
+- Captures request/response pairs with timing
+- SSE streaming response parsing
+
+**Converting Old Raw Logs:**
+```bash
+uv run python -m lexlink.log_processor input.jsonl output.jsonl
+```
 
 ## Troubleshooting
 

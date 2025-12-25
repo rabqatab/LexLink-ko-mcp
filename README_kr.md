@@ -659,18 +659,21 @@ result = eflaw_search(query="test")
 ```
 lexlink-ko-mcp/
 ├── src/lexlink/
-│   ├── server.py       # 26개 도구가 포함된 메인 MCP 서버
-│   ├── http_server.py  # Kakao PlayMCP용 HTTP/SSE 서버
-│   ├── config.py       # 세션 설정 스키마
-│   ├── params.py       # 매개변수 확인 및 매핑
-│   ├── validation.py   # 입력 검증
-│   ├── parser.py       # XML 파싱 유틸리티
-│   ├── ranking.py      # 관련성 순위 지정
-│   ├── citation.py     # 조문 인용 추출 (Phase 4)
-│   ├── client.py       # law.go.kr API용 HTTP 클라이언트
-│   └── errors.py       # 오류 코드 및 응답
-├── pyproject.toml       # 프로젝트 설정
-└── README.md            # 영문 문서
+│   ├── server.py        # 26개 도구가 포함된 메인 MCP 서버
+│   ├── http_server.py   # Kakao PlayMCP용 HTTP/SSE 서버
+│   ├── config.py        # 세션 설정 스키마
+│   ├── params.py        # 매개변수 확인 및 매핑
+│   ├── validation.py    # 입력 검증
+│   ├── parser.py        # XML 파싱 유틸리티
+│   ├── ranking.py       # 관련성 순위 지정
+│   ├── citation.py      # 조문 인용 추출 (Phase 4)
+│   ├── client.py        # law.go.kr API용 HTTP 클라이언트
+│   ├── errors.py        # 오류 코드 및 응답
+│   ├── raw_logger.py    # PlayMCP 트래픽 로깅
+│   └── log_processor.py # 로그 형식 변환기
+├── logs/playmcp/         # PlayMCP 트래픽 로그 (일별 JSONL)
+├── pyproject.toml        # 프로젝트 설정
+└── README.md             # 영문 문서
 ```
 
 ### 테스트 실행
@@ -753,6 +756,45 @@ OC=your_oc uv run serve
 | **인증 방식** | Key/Token (헤더: `OC`) |
 
 자세한 배포 방법(AWS EC2, Nginx, systemd, HTTPS)은 [assets/DEPLOYMENT_GUIDE.md](assets/DEPLOYMENT_GUIDE.md)를 참조하세요.
+
+### PlayMCP 트래픽 로깅
+
+LexLink는 PlayMCP 트래픽 분석을 위한 내장 로깅 기능을 제공합니다. 로그는 대시보드 호환 JSONL 형식으로 저장됩니다.
+
+**로그 위치:** `logs/playmcp/YYYY-MM-DD.jsonl`
+
+**로그 스키마:**
+```json
+{
+  "rpc_id": "3",
+  "request_id": "d8ee45eb",
+  "session_id": "9ff9dc23431848a4901b4cb6326ba5bd",
+  "timestamp": "2025-12-25T05:40:23.957987",
+  "duration_ms": 1.52,
+  "method": "tools/call",
+  "tool_name": "aiSearch",
+  "params": { "arguments": {"query": "뺑소니 처벌"} },
+  "client": "PlayMCP",
+  "client_version": "2025.0.0",
+  "protocol_version": "2025-06-18",
+  "client_ip": "220.64.111.219",
+  "oc": "user_id",
+  "status": "success",
+  "status_code": 200,
+  "result": { ... }
+}
+```
+
+**기능:**
+- 일별 로그 로테이션 (하루에 파일 하나)
+- 필터링 및 분석을 위한 대시보드 호환 형식
+- 타이밍 정보가 포함된 요청/응답 쌍 캡처
+- SSE 스트리밍 응답 파싱
+
+**기존 원시 로그 변환:**
+```bash
+uv run python -m lexlink.log_processor input.jsonl output.jsonl
+```
 
 ## 문제 해결
 
