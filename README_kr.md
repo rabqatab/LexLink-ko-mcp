@@ -857,6 +857,25 @@ uv sync --reinstall
 
 ## 변경 로그
 
+### v1.3.1 - 2025-12-25
+**기능: PlayMCP 트래픽 로깅**
+
+- **신규 모듈:**
+  - `raw_logger.py` - 대시보드 호환 MCP 트래픽 로거
+  - `log_processor.py` - 로그 형식 변환 유틸리티
+- **구현:**
+  - HTTP 서버에 `RawLoggingMiddleware` 추가로 요청/응답 캡처
+  - 요청/응답 쌍이 병합된 JSONL 형식
+  - `logs/playmcp/YYYY-MM-DD.jsonl` 일별 로그 로테이션
+  - SSE 스트리밍 응답 파싱
+- **로그 스키마:**
+  - `request_id`, `timestamp`, `duration_ms`
+  - `method`, `tool`, `arguments`, `result`
+  - `status_code`, `client_ip`, `headers`
+- **영향:**
+  - PlayMCP 배포 환경의 트래픽 분석 가능
+  - 모니터링을 위한 대시보드 호환 형식
+
 ### v1.3.0 - 2025-12-24
 **기능: Phase 5 - AI 기반 검색 도구**
 

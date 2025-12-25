@@ -856,6 +856,25 @@ This project is open source. See LICENSE file for details.
 
 ## Changelog
 
+### v1.3.1 - 2025-12-25
+**Feature: PlayMCP Traffic Logging**
+
+- **New Modules:**
+  - `raw_logger.py` - Dashboard-compatible MCP traffic logger
+  - `log_processor.py` - Log format converter utility
+- **Implementation:**
+  - `RawLoggingMiddleware` in HTTP server for request/response capture
+  - JSONL format with merged request/response pairs
+  - Daily log rotation at `logs/playmcp/YYYY-MM-DD.jsonl`
+  - SSE streaming response parsing
+- **Log Schema:**
+  - `request_id`, `timestamp`, `duration_ms`
+  - `method`, `tool`, `arguments`, `result`
+  - `status_code`, `client_ip`, `headers`
+- **Impact:**
+  - Enables traffic analysis for PlayMCP deployments
+  - Dashboard-compatible format for monitoring
+
 ### v1.3.0 - 2025-12-24
 **Feature: Phase 5 - AI-Powered Search Tools**
 
