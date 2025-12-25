@@ -140,50 +140,96 @@ class RawLoggingMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         elapsed_ms = (time.time() - start_time) * 1000
 
-        # Capture response body (tricky for streaming)
-        if isinstance(response, StreamingResponse):
-            # For streaming responses, collect all chunks
-            chunks = []
-            async for chunk in response.body_iterator:
-                chunks.append(chunk)
+        # Capture response body - try EVERYTHING
+        response_body = b""
+        response_json = None
 
-            response_body = b"".join(chunks)
+        try:
+            # Method 1: Check for body_iterator (streaming responses)
+            if hasattr(response, 'body_iterator'):
+                chunks = []
+                async for chunk in response.body_iterator:
+                    if isinstance(chunk, str):
+                        chunk = chunk.encode('utf-8')
+                    chunks.append(chunk)
+                response_body = b"".join(chunks)
+            # Method 2: Check for body attribute (regular responses)
+            elif hasattr(response, 'body'):
+                response_body = response.body
+            # Method 3: Try to read render
+            elif hasattr(response, 'render'):
+                await response.render()
+                if hasattr(response, 'body'):
+                    response_body = response.body
+        except Exception as e:
+            response_json = f"[ERROR reading response: {type(response).__name__} - {e}]"
+
+        # Parse response body
+        if response_body and response_json is None:
             try:
-                response_json = json.loads(response_body) if response_body else None
+                # Try to parse as JSON
+                response_json = json.loads(response_body)
             except json.JSONDecodeError:
-                response_json = response_body.decode("utf-8", errors="replace") if response_body else None
+                # If not JSON, decode as text
+                decoded = response_body.decode("utf-8", errors="replace")
+                # If it looks like SSE events, parse them
+                if decoded.startswith("event:") or "\nevent:" in decoded:
+                    response_json = {"_sse_raw": decoded, "_sse_events": self._parse_sse(decoded)}
+                else:
+                    response_json = decoded
 
-            # Log response
-            log_raw(
-                request_id=request_id,
-                phase="response",
-                data=response_json,
-                extra={
-                    "status_code": response.status_code,
-                    "elapsed_ms": round(elapsed_ms, 2),
-                    "headers": dict(response.headers),
-                }
-            )
+        # Log response
+        log_raw(
+            request_id=request_id,
+            phase="response",
+            data=response_json,
+            extra={
+                "status_code": response.status_code,
+                "elapsed_ms": round(elapsed_ms, 2),
+                "headers": dict(response.headers) if hasattr(response, 'headers') else {},
+                "response_type": type(response).__name__,
+            }
+        )
 
-            # Return new response with same body
+        # Return new response with same body
+        if response_body:
             return Response(
                 content=response_body,
                 status_code=response.status_code,
-                headers=dict(response.headers),
-                media_type=response.media_type,
+                headers=dict(response.headers) if hasattr(response, 'headers') else {},
+                media_type=getattr(response, 'media_type', None),
             )
         else:
-            # Non-streaming response
-            log_raw(
-                request_id=request_id,
-                phase="response",
-                data="[non-streaming response]",
-                extra={
-                    "status_code": response.status_code,
-                    "elapsed_ms": round(elapsed_ms, 2),
-                }
-            )
             return response
+
+    def _parse_sse(self, sse_text: str) -> list:
+        """Parse SSE events from text."""
+        events = []
+        current_event = {}
+
+        for line in sse_text.split('\n'):
+            line = line.strip()
+            if not line:
+                if current_event:
+                    events.append(current_event)
+                    current_event = {}
+                continue
+
+            if line.startswith('event:'):
+                current_event['event'] = line[6:].strip()
+            elif line.startswith('data:'):
+                data_str = line[5:].strip()
+                try:
+                    current_event['data'] = json.loads(data_str)
+                except json.JSONDecodeError:
+                    current_event['data'] = data_str
+            elif line.startswith('id:'):
+                current_event['id'] = line[3:].strip()
+
+        if current_event:
+            events.append(current_event)
+
+        return events
 
 
 def get_config_from_env() -> Optional[LexLinkConfig]:
