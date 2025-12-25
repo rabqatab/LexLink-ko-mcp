@@ -57,7 +57,7 @@ from mcp.server.fastmcp import FastMCP
 
 from .config import LexLinkConfig
 from .server import create_server
-from .raw_logger import log_raw, generate_request_id
+from .raw_logger import log_mcp_call, generate_request_id
 
 # Set up logging
 logging.basicConfig(
@@ -102,50 +102,37 @@ class OCHeaderMiddleware(BaseHTTPMiddleware):
 
 class RawLoggingMiddleware(BaseHTTPMiddleware):
     """
-    Crude raw logger for capturing all MCP traffic.
+    MCP traffic logger for PlayMCP.
 
-    Logs request body, response body, headers, timing - everything.
-    For analysis to determine precise log schema later.
+    Captures request/response pairs and logs in dashboard-compatible format.
     """
 
     async def dispatch(self, request: Request, call_next):
         request_id = generate_request_id()
         start_time = time.time()
+        timestamp = time.strftime("%Y-%m-%dT%H:%M:%S.") + f"{int((time.time() % 1) * 1000000):06d}"
 
-        # Capture request
+        # Capture request body
+        req_data = None
         try:
             body_bytes = await request.body()
-            try:
-                body_json = json.loads(body_bytes) if body_bytes else None
-            except json.JSONDecodeError:
-                body_json = body_bytes.decode("utf-8", errors="replace") if body_bytes else None
-        except Exception as e:
-            body_json = f"[ERROR reading body: {e}]"
-
-        # Log request
-        log_raw(
-            request_id=request_id,
-            phase="request",
-            data=body_json,
-            extra={
-                "method": request.method,
-                "path": str(request.url.path),
-                "query": str(request.url.query),
-                "headers": dict(request.headers),
-                "client": request.client.host if request.client else None,
-            }
-        )
+            if body_bytes:
+                try:
+                    req_data = json.loads(body_bytes)
+                except json.JSONDecodeError:
+                    pass
+        except Exception:
+            pass
 
         # Get response
         response = await call_next(request)
         elapsed_ms = (time.time() - start_time) * 1000
 
-        # Capture response body - try EVERYTHING
+        # Capture response body
         response_body = b""
-        response_json = None
+        resp_data = None
 
         try:
-            # Method 1: Check for body_iterator (streaming responses)
             if hasattr(response, 'body_iterator'):
                 chunks = []
                 async for chunk in response.body_iterator:
@@ -153,42 +140,31 @@ class RawLoggingMiddleware(BaseHTTPMiddleware):
                         chunk = chunk.encode('utf-8')
                     chunks.append(chunk)
                 response_body = b"".join(chunks)
-            # Method 2: Check for body attribute (regular responses)
             elif hasattr(response, 'body'):
                 response_body = response.body
-            # Method 3: Try to read render
-            elif hasattr(response, 'render'):
-                await response.render()
-                if hasattr(response, 'body'):
-                    response_body = response.body
-        except Exception as e:
-            response_json = f"[ERROR reading response: {type(response).__name__} - {e}]"
+        except Exception:
+            pass
 
         # Parse response body
-        if response_body and response_json is None:
+        if response_body:
             try:
-                # Try to parse as JSON
-                response_json = json.loads(response_body)
+                resp_data = json.loads(response_body)
             except json.JSONDecodeError:
-                # If not JSON, decode as text
                 decoded = response_body.decode("utf-8", errors="replace")
-                # If it looks like SSE events, parse them
                 if decoded.startswith("event:") or "\nevent:" in decoded:
-                    response_json = {"_sse_raw": decoded, "_sse_events": self._parse_sse(decoded)}
-                else:
-                    response_json = decoded
+                    resp_data = {"_sse_events": self._parse_sse(decoded)}
 
-        # Log response
-        log_raw(
+        # Log in dashboard format
+        log_mcp_call(
             request_id=request_id,
-            phase="response",
-            data=response_json,
-            extra={
-                "status_code": response.status_code,
-                "elapsed_ms": round(elapsed_ms, 2),
-                "headers": dict(response.headers) if hasattr(response, 'headers') else {},
-                "response_type": type(response).__name__,
-            }
+            timestamp=timestamp,
+            duration_ms=elapsed_ms,
+            req_data=req_data,
+            resp_data=resp_data,
+            headers=dict(request.headers),
+            status_code=response.status_code,
+            client_ip=request.client.host if request.client else None,
+            response_type=type(response).__name__,
         )
 
         # Return new response with same body
