@@ -35,3 +35,6 @@ test/
 
 # tmp
 references/
+
+# PlayMCP logs
+logs/

@@ -40,20 +40,24 @@ Note:
 """
 
 import os
+import json
 import logging
 import contextvars
+import time
 from typing import Optional
 
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
+from starlette.responses import Response, StreamingResponse
 from starlette.routing import Mount
 
 from mcp.server.fastmcp import FastMCP
 
 from .config import LexLinkConfig
 from .server import create_server
+from .raw_logger import log_raw, generate_request_id
 
 # Set up logging
 logging.basicConfig(
@@ -96,6 +100,92 @@ class OCHeaderMiddleware(BaseHTTPMiddleware):
         return response
 
 
+class RawLoggingMiddleware(BaseHTTPMiddleware):
+    """
+    Crude raw logger for capturing all MCP traffic.
+
+    Logs request body, response body, headers, timing - everything.
+    For analysis to determine precise log schema later.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        request_id = generate_request_id()
+        start_time = time.time()
+
+        # Capture request
+        try:
+            body_bytes = await request.body()
+            try:
+                body_json = json.loads(body_bytes) if body_bytes else None
+            except json.JSONDecodeError:
+                body_json = body_bytes.decode("utf-8", errors="replace") if body_bytes else None
+        except Exception as e:
+            body_json = f"[ERROR reading body: {e}]"
+
+        # Log request
+        log_raw(
+            request_id=request_id,
+            phase="request",
+            data=body_json,
+            extra={
+                "method": request.method,
+                "path": str(request.url.path),
+                "query": str(request.url.query),
+                "headers": dict(request.headers),
+                "client": request.client.host if request.client else None,
+            }
+        )
+
+        # Get response
+        response = await call_next(request)
+        elapsed_ms = (time.time() - start_time) * 1000
+
+        # Capture response body (tricky for streaming)
+        if isinstance(response, StreamingResponse):
+            # For streaming responses, collect all chunks
+            chunks = []
+            async for chunk in response.body_iterator:
+                chunks.append(chunk)
+
+            response_body = b"".join(chunks)
+            try:
+                response_json = json.loads(response_body) if response_body else None
+            except json.JSONDecodeError:
+                response_json = response_body.decode("utf-8", errors="replace") if response_body else None
+
+            # Log response
+            log_raw(
+                request_id=request_id,
+                phase="response",
+                data=response_json,
+                extra={
+                    "status_code": response.status_code,
+                    "elapsed_ms": round(elapsed_ms, 2),
+                    "headers": dict(response.headers),
+                }
+            )
+
+            # Return new response with same body
+            return Response(
+                content=response_body,
+                status_code=response.status_code,
+                headers=dict(response.headers),
+                media_type=response.media_type,
+            )
+        else:
+            # Non-streaming response
+            log_raw(
+                request_id=request_id,
+                phase="response",
+                data="[non-streaming response]",
+                extra={
+                    "status_code": response.status_code,
+                    "elapsed_ms": round(elapsed_ms, 2),
+                }
+            )
+            return response
+
+
 def get_config_from_env() -> Optional[LexLinkConfig]:
     """Create config from environment variables."""
     oc = os.getenv("OC")
@@ -131,10 +221,13 @@ _server: FastMCP = get_fastmcp_server()
 # Get the raw SSE app from FastMCP
 _sse_app = _server.sse_app()
 
-# Wrap with our middleware for OC header extraction
+# Wrap with our middleware for OC header extraction and raw logging
 app = Starlette(
     routes=[Mount("/", app=_sse_app)],
-    middleware=[Middleware(OCHeaderMiddleware)]
+    middleware=[
+        Middleware(OCHeaderMiddleware),
+        Middleware(RawLoggingMiddleware),
+    ]
 )
 
 
@@ -198,7 +291,10 @@ def run_http_server(host: str = "0.0.0.0", port: int = 8000):
 
     http_app = Starlette(
         routes=[Mount("/", app=_http_app)],
-        middleware=[Middleware(OCHeaderMiddleware)],
+        middleware=[
+            Middleware(OCHeaderMiddleware),
+            Middleware(RawLoggingMiddleware),
+        ],
         lifespan=lifespan
     )
     uvicorn.run(http_app, host=host, port=port)
