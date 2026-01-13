@@ -1,1 +1,0 @@
-web: python -m lexlink.http_server
