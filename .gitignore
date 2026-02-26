@@ -27,7 +27,7 @@ venv/
 .ruff_cache/
 
 # AI tools & docs
-docs/
+# docs/
 .claude/
 
 # tests
@@ -38,3 +38,6 @@ references/
 
 # PlayMCP logs
 logs/
+
+# Private docs (raw logs, analysis reports with sensitive data)
+docs/private/

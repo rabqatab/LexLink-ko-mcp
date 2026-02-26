@@ -66,10 +66,10 @@ Your code is likely **CORRECT**. We need to diagnose **WHY** the session config 
 ```
 
 **Expected Behavior:**
-- Session config `{"oc": "ddongle0205"}` passed via URL query param
-- URL built as: `http://127.0.0.1:8081/mcp?oc=ddongle0205` ✅ CORRECT
+- Session config `{"oc": "your_oc"}` passed via URL query param
+- URL built as: `http://127.0.0.1:8081/mcp?oc=your_oc` ✅ CORRECT
 - Smithery decorator should parse query param into `LexLinkConfig`
-- `create_server(session_config=LexLinkConfig(oc="ddongle0205"))` should be called
+- `create_server(session_config=LexLinkConfig(oc="your_oc"))` should be called
 
 **Actual Behavior:**
 - `resolve_oc()` fails to find OC in all 3 sources:
@@ -90,7 +90,7 @@ test_suite = LexLinkE2ETest(oc=oc)
 ```
 
 **Evidence:**
-- Test runs: `export LAW_OC=ddongle0205 && uv run python test/test_e2e_with_gemini.py`
+- Test runs: `export LAW_OC=your_oc && uv run python test/test_e2e_with_gemini.py`
 - Server runs separately: `uv run dev` (in different terminal, different environment)
 - Environment variables don't cross process boundaries
 
@@ -555,7 +555,7 @@ if query_params:
 **Fix Option 3: Use Environment Variable Fallback for Local Dev**
 ```bash
 # Simplest solution: Session config works in production, env var for local dev
-export LAW_OC=ddongle0205
+export LAW_OC=your_oc
 uv run dev
 ```
 
@@ -798,7 +798,7 @@ def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
 ### Step 1: Verify Session Config is Working
 ```bash
 # Terminal 1: Start server with logging
-export LAW_OC=ddongle0205
+export LAW_OC=your_oc
 uv run dev
 
 # Terminal 2: Test with curl
@@ -821,7 +821,7 @@ curl -X POST "http://127.0.0.1:8081/mcp?oc=test_value" \
 
 ### Step 2: Test Tool Call
 ```bash
-curl -X POST "http://127.0.0.1:8081/mcp?oc=ddongle0205" \
+curl -X POST "http://127.0.0.1:8081/mcp?oc=your_oc" \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0",
@@ -843,11 +843,11 @@ curl -X POST "http://127.0.0.1:8081/mcp?oc=ddongle0205" \
 ### Step 3: Run E2E Tests
 ```bash
 # Terminal 1: Server with env var
-export LAW_OC=ddongle0205
+export LAW_OC=your_oc
 uv run dev
 
 # Terminal 2: Tests with same env var
-export LAW_OC=ddongle0205
+export LAW_OC=your_oc
 export GOOGLE_API_KEYS="your_key_here"
 uv run python test/test_e2e_with_gemini.py
 ```
@@ -1003,11 +1003,11 @@ Verify that Priority 3 (environment variable fallback) works correctly for actua
 ### **Test Setup:**
 ```bash
 # Terminal 1: Start server with LAW_OC environment variable
-export LAW_OC=ddongle0205
+export LAW_OC=your_oc
 uv run dev
 
 # Terminal 2: Run E2E tests
-export LAW_OC=ddongle0205
+export LAW_OC=your_oc
 export GOOGLE_API_KEYS="..."
 uv run python test/test_e2e_with_gemini.py
 ```
@@ -1034,20 +1034,20 @@ uv run python test/test_e2e_with_gemini.py
 ```
 Server Logs (11:09:11):
   - API Request: /DRF/lawSearch.do
-  - HTTP Request: GET http://www.law.go.kr/DRF/lawSearch.do?OC=ddongle0205&target=eflaw&type=JSON&query=자동차관리법&display=5&page=1
+  - HTTP Request: GET http://www.law.go.kr/DRF/lawSearch.do?OC=your_oc&target=eflaw&type=JSON&query=자동차관리법&display=5&page=1
   - API Response: 200 OK ✅
   - ERROR: Failed to parse JSON response: Expecting value: line 1 column 1 (char 0)
 
 Direct curl test:
-$ curl "http://www.law.go.kr/DRF/lawSearch.do?OC=ddongle0205&target=eflaw&type=JSON&query=..."
+$ curl "http://www.law.go.kr/DRF/lawSearch.do?OC=your_oc&target=eflaw&type=JSON&query=..."
 <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"...
 ```
 
 **Root Cause:**
-1. ✅ **Environment variable fallback WORKS** - `OC=ddongle0205` correctly passed to API
+1. ✅ **Environment variable fallback WORKS** - `OC=your_oc` correctly passed to API
 2. ✅ **OC resolution WORKS** - All 3 priority levels functioning correctly
 3. ✅ **HTTP request WORKS** - law.go.kr API returns 200 OK
-4. ✅ **OC identifier is VALID** - "ddongle0205" works with XML format
+4. ✅ **OC identifier is VALID** - "your_oc" works with XML format
 5. ❌ **law.go.kr API doesn't support JSON format** - API returns HTML when requesting `type=JSON`
 6. ✅ **XML format works perfectly** - Verified with direct curl test
 
@@ -1065,18 +1065,18 @@ $ curl "http://www.law.go.kr/DRF/lawSearch.do?OC=ddongle0205&target=eflaw&type=J
 **Corrected API Test Results (2025-11-07 11:15):**
 ```bash
 # Test 1: JSON format (FAILS)
-$ curl "http://www.law.go.kr/DRF/lawSearch.do?OC=ddongle0205&target=eflaw&type=JSON"
+$ curl "http://www.law.go.kr/DRF/lawSearch.do?OC=your_oc&target=eflaw&type=JSON"
 <!DOCTYPE html...  # ❌ Returns HTML instead of JSON
 
 # Test 2: XML format (WORKS!)
-$ curl "http://www.law.go.kr/DRF/lawSearch.do?OC=ddongle0205&target=eflaw&type=XML"
+$ curl "http://www.law.go.kr/DRF/lawSearch.do?OC=your_oc&target=eflaw&type=XML"
 <?xml version="1.0" encoding="UTF-8"?><LawSearch><target>eflaw</target>
 <키워드>*</키워드><section>lawNm</section><totalCnt>163532</totalCnt>
 <page>1</page><numOfRows>20</numOfRows><resultCode>00</resultCode>
 <resultMsg>success</resultMsg>...  # ✅ Returns valid XML with Korean data!
 
 # Test 3: Default format (WORKS - defaults to XML)
-$ curl "http://www.law.go.kr/DRF/lawSearch.do?OC=ddongle0205&target=eflaw"
+$ curl "http://www.law.go.kr/DRF/lawSearch.do?OC=your_oc&target=eflaw"
 <?xml version="1.0" encoding="UTF-8"?><LawSearch>...  # ✅ XML works
 ```
 
@@ -1092,7 +1092,7 @@ $ curl "http://www.law.go.kr/DRF/lawSearch.do?OC=ddongle0205&target=eflaw"
 2. ✅ Environment variable fallback **WORKS AS DESIGNED**
 3. ✅ OC resolution (Priority 1→2→3) **WORKS AS DESIGNED**
 4. ✅ HTTP client and error handling **WORK AS DESIGNED**
-5. ✅ OC identifier "ddongle0205" is **VALID**
+5. ✅ OC identifier "your_oc" is **VALID**
 6. ❌ **law.go.kr API doesn't support JSON format** (API limitation, not our bug)
 7. ✅ **XML format works perfectly** with the same OC
 8. ℹ️ Session config (Priority 2) still broken, but Priority 3 compensates
@@ -1148,7 +1148,7 @@ Proceed with **Option 1: Accept environment variable for local dev**, document t
   - [ ] Change from missing OC to empty OC: `session_config={"oc": ""}`
   - [ ] Update test expectations
 - [ ] Run E2E tests with env var fallback
-  - [ ] `export LAW_OC=ddongle0205`
+  - [ ] `export LAW_OC=your_oc`
   - [ ] `uv run dev` (Terminal 1)
   - [ ] `uv run python test/test_e2e_with_gemini.py` (Terminal 2)
 - [ ] Expected: All 5 tests pass!
@@ -1231,7 +1231,7 @@ Proceed with **Option 1: Accept environment variable for local dev**, document t
 - ✅ OC resolution (Priority 1→2→3) **WORKS AS DESIGNED**
 - ✅ HTTP client **WORKS AS DESIGNED**
 - ✅ Error handling **WORKS AS DESIGNED**
-- ✅ OC identifier "ddongle0205" is **VALID** (confirmed with XML test)
+- ✅ OC identifier "your_oc" is **VALID** (confirmed with XML test)
 - ❌ **law.go.kr API doesn't support JSON format** (returns HTML error page)
 - ✅ **XML format works perfectly** with same OC and parameters
 
@@ -1259,7 +1259,7 @@ Proceed with **Option 1: Accept environment variable for local dev**, document t
 3. ❌ **API Limitation Discovered**
    - law.go.kr API doesn't actually support JSON format
    - API returns HTML error page when requesting `type=JSON`
-   - XML format works perfectly with same OC ("ddongle0205" is VALID)
+   - XML format works perfectly with same OC ("your_oc" is VALID)
    - This is an upstream API limitation, not our code issue
 
 ### **Architecture Assessment:**
@@ -1290,7 +1290,7 @@ The current implementation is **CORRECT for local development**:
 
 **What to do:**
 1. ✅ **Update documentation** (this diagnostic already documents it)
-2. ✅ **OC identifier is valid** (confirmed: "ddongle0205" works)
+2. ✅ **OC identifier is valid** (confirmed: "your_oc" works)
 3. ⚠️ **Change test to use XML format** (API doesn't support JSON)
 4. 📝 **Update README.md** with correct local dev pattern
 5. 🚀 **Deploy to Smithery** to verify production behavior
@@ -1339,7 +1339,7 @@ eflaw_search(query="법령", oc="custom_oc")
 **Next Steps:**
 1. ✅ Complete diagnostic document update (done)
 2. ✅ Verify environment variable fallback works (done - works perfectly!)
-3. ✅ Verify OC identifier is valid (done - "ddongle0205" works with XML)
+3. ✅ Verify OC identifier is valid (done - "your_oc" works with XML)
 4. ⚠️ **ACTION REQUIRED:** Change E2E test to use XML format instead of JSON
 5. 📝 Update README.md to document API format support (XML works, JSON doesn't)
 6. 📝 Update API spec docs to note JSON format is not actually supported

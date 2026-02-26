@@ -82,7 +82,7 @@ try:
 
 ```python
 # Load configuration from environment (with fallback for session config testing)
-oc = os.getenv("LAW_OC", "ddongle0205")  # ← Use default OC for testing session config
+oc = os.getenv("LAW_OC", "your_oc")  # ← Use default OC for testing session config
 if not os.getenv("LAW_OC"):
     print("⚠️ LAW_OC environment variable not set - using default for session config testing")
     print(f"   Using OC: {oc}")
@@ -102,7 +102,7 @@ INFO: Uvicorn running on http://127.0.0.1:8081
 # Tests run WITHOUT LAW_OC environment variable
 $ export GOOGLE_API_KEYS="..." && uv run python test/test_e2e_with_gemini.py
 ⚠️ LAW_OC environment variable not set - using default for session config testing
-   Using OC: ddongle0205
+   Using OC: your_oc
 ```
 
 ### Results: 4/5 PASSING (80%)
@@ -118,7 +118,7 @@ $ export GOOGLE_API_KEYS="..." && uv run python test/test_e2e_with_gemini.py
 ✅ **Test 3: Direct Tool Call (eflaw_search)** - PASS ⭐ **KEY TEST**
 - **Tool called WITHOUT environment variable**
 - **Session config passed via Context**
-- **API received OC=ddongle0205 from Context**
+- **API received OC=your_oc from Context**
 - Status: ok, 413 results found
 - Returned 5 laws related to "자동차관리법"
 
@@ -139,11 +139,11 @@ $ export GOOGLE_API_KEYS="..." && uv run python test/test_e2e_with_gemini.py
 From `test/logs/lexlink_e2e_gemini_20251107_115925.json:265`:
 
 ```xml
-<법령상세링크>/DRF/lawService.do?OC=ddongle0205&amp;target=eflaw...</법령상세링크>
+<법령상세링크>/DRF/lawService.do?OC=your_oc&amp;target=eflaw...</법령상세링크>
 ```
 
-The API response contains `OC=ddongle0205`, proving:
-1. ✅ Session config with `oc=ddongle0205` passed to server via MCP client
+The API response contains `OC=your_oc`, proving:
+1. ✅ Session config with `oc=your_oc` passed to server via MCP client
 2. ✅ Context injection worked - `ctx.session_config` contained correct value
 3. ✅ Tool extracted OC from Context successfully
 4. ✅ API received correct OC parameter
@@ -171,12 +171,12 @@ From server logs:
 1. **User enters OC in Smithery UI:**
    ```
    Field: oc
-   Value: ddongle0205
+   Value: your_oc
    ```
 
 2. **Smithery CLI passes config to MCP client:**
    ```python
-   MCPClient(session_config={"oc": "ddongle0205"})
+   MCPClient(session_config={"oc": "your_oc"})
    ```
 
 3. **Factory called at startup (session_config is None):**
@@ -191,15 +191,15 @@ From server logs:
 
 5. **Tool accesses session config from Context:**
    ```python
-   config = ctx.session_config  # ← {"oc": "ddongle0205"}
-   session_oc = config.oc       # ← "ddongle0205"
+   config = ctx.session_config  # ← {"oc": "your_oc"}
+   session_oc = config.oc       # ← "your_oc"
    ```
 
 6. **3-tier priority resolution:**
    ```python
    resolved_oc = resolve_oc(
        override_oc=None,       # Priority 1: Not provided
-       session_oc="ddongle0205" # Priority 2: FROM CONTEXT! ✅
+       session_oc="your_oc" # Priority 2: FROM CONTEXT! ✅
    )
    # Priority 3: Environment variable (not needed)
    ```

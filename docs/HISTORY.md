@@ -750,13 +750,13 @@ law_xml_tags = [
 **Test Run:** `test/logs/lexlink_e2e_gemini_20251107_131009.json`
 - ✅ Test 1: Server initialization - 3ms
 - ✅ Test 2: List tools (2 found) - 1ms
-- ✅ Test 3: Tool call SUCCESS - 97ms, OC=ddongle0205 in response
+- ✅ Test 3: Tool call SUCCESS - 97ms, OC=your_oc in response
 - ✅ Test 4: Gemini integration (gemini-2.5-flash) - 1.4s
 - ✅ Test 5: Skipped by design
 
 **Server Logs:** Confirmed factory called with `session_config=None` (expected)
 
-**API Evidence:** Response contains `OC=ddongle0205` proving Context injection worked
+**API Evidence:** Response contains `OC=your_oc` proving Context injection worked
 
 ---
 

@@ -25,19 +25,19 @@ The law.go.kr Open API documentation claims to support `type=JSON`, but all 6 AP
 ### **Evidence:**
 ```bash
 # Test 1: lawSearch (eflaw) with JSON
-$ curl "http://www.law.go.kr/DRF/lawSearch.do?OC=ddongle0205&target=eflaw&type=JSON"
+$ curl "http://www.law.go.kr/DRF/lawSearch.do?OC=your_oc&target=eflaw&type=JSON"
 <!DOCTYPE html...  # ❌ Returns HTML error page
 
 # Test 2: lawService (eflaw) with JSON
-$ curl "http://www.law.go.kr/DRF/lawService.do?OC=ddongle0205&target=eflaw&ID=1747&type=JSON"
+$ curl "http://www.law.go.kr/DRF/lawService.do?OC=your_oc&target=eflaw&ID=1747&type=JSON"
 <!DOCTYPE html...  # ❌ Returns HTML error page
 
 # Test 3: lawSearch (law) with JSON
-$ curl "http://www.law.go.kr/DRF/lawSearch.do?OC=ddongle0205&target=law&type=JSON"
+$ curl "http://www.law.go.kr/DRF/lawSearch.do?OC=your_oc&target=law&type=JSON"
 <!DOCTYPE html...  # ❌ Returns HTML error page
 
 # Test 4: lawService (law) with JSON
-$ curl "http://www.law.go.kr/DRF/lawService.do?OC=ddongle0205&target=law&ID=009682&type=JSON"
+$ curl "http://www.law.go.kr/DRF/lawService.do?OC=your_oc&target=law&ID=009682&type=JSON"
 <!DOCTYPE html...  # ❌ Returns HTML error page
 ```
 
@@ -49,23 +49,23 @@ XML format works perfectly across all endpoints:
 
 ```bash
 # Test 1: lawSearch (eflaw) with XML - WORKS!
-$ curl "http://www.law.go.kr/DRF/lawSearch.do?OC=ddongle0205&target=eflaw&type=XML"
+$ curl "http://www.law.go.kr/DRF/lawSearch.do?OC=your_oc&target=eflaw&type=XML"
 <?xml version="1.0" encoding="UTF-8"?><LawSearch>
 <resultCode>00</resultCode><resultMsg>success</resultMsg>
 <totalCnt>163532</totalCnt>...  # ✅ Valid XML
 
 # Test 2: lawService (eflaw) with XML - WORKS!
-$ curl "http://www.law.go.kr/DRF/lawService.do?OC=ddongle0205&target=eflaw&ID=1747&type=XML"
+$ curl "http://www.law.go.kr/DRF/lawService.do?OC=your_oc&target=eflaw&ID=1747&type=XML"
 <?xml version="1.0" encoding="utf-8"?><법령 법령키="0017472025100121065">
 <기본정보><법령ID>001747</법령ID>...  # ✅ Valid XML
 
 # Test 3: lawSearch (law) with XML - WORKS!
-$ curl "http://www.law.go.kr/DRF/lawSearch.do?OC=ddongle0205&target=law&type=XML"
+$ curl "http://www.law.go.kr/DRF/lawSearch.do?OC=your_oc&target=law&type=XML"
 <?xml version="1.0" encoding="UTF-8"?><LawSearch>
 <resultCode>00</resultCode>...  # ✅ Valid XML
 
 # Test 4: lawService (law) with XML - WORKS!
-$ curl "http://www.law.go.kr/DRF/lawService.do?OC=ddongle0205&target=law&ID=009682&type=XML"
+$ curl "http://www.law.go.kr/DRF/lawService.do?OC=your_oc&target=law&ID=009682&type=XML"
 <?xml version="1.0" encoding="UTF-8"?><법령>...  # ✅ Valid XML
 ```
 
@@ -135,7 +135,7 @@ If this needs to be reported to law.go.kr:
 - **Website:** http://www.law.go.kr
 - **API Docs:** http://www.law.go.kr/DRF/lawApiGuide.do
 - **Issue:** JSON format returns HTML error pages instead of JSON data
-- **Tested:** 2025-11-07 with valid OC identifier "ddongle0205"
+- **Tested:** 2025-11-07 with valid OC identifier "your_oc"
 - **All endpoints affected:** lawSearch, lawService (both eflaw and law targets)
 
 ---

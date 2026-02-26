@@ -45,7 +45,7 @@
 ## 공통 규칙
 
 - 모든 엔드포인트는 **HTTP GET**
-- request parameters의 OC parameter는 test 시 **ddongle0205**로 사용할 것
+- request parameters의 OC parameter는 test 시 **your_oc**로 사용할 것
 - **Response format:** Use `type=XML` (default) - JSON is documented but not supported by API
 - **Base URL:** `http://www.law.go.kr/DRF/`
 - **List APIs:** `lawSearch.do?target=<target>`

@@ -817,7 +817,7 @@ OPEN API 로그인 후 [OPEN API] -> [OPEN API 신청] -> 등록된 API 선택 �
 ### Test Session #4: 2025-12-09 (PlayMCP Comprehensive Test v1.2.9)
 **Platform:** Kakao PlayMCP
 **Environment:** SLIM_RESPONSE=true
-**OC:** ddongle0205
+**OC:** your_oc
 **Status:** ⚠️ PARTIAL SUCCESS
 
 **Test Coverage:** All 24 MCP tools tested

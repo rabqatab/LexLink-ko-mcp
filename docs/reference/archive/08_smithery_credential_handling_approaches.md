@@ -36,7 +36,7 @@
 ### URL Parameter Format
 
 ```
-http://server.com/mcp?oc=ddongle0205&debug=true&timeout=30
+http://server.com/mcp?oc=your_oc&debug=true&timeout=30
 ```
 
 Supports dot notation for nested config:
@@ -352,7 +352,7 @@ uv run dev
 
 # Terminal 2: Test with session config in URL
 curl -H "Accept: application/json" \
-  "http://127.0.0.1:8081/mcp?oc=ddongle0205" \
+  "http://127.0.0.1:8081/mcp?oc=your_oc" \
   -d '{"method":"tools/call","params":{"name":"eflaw_search","arguments":{"query":"자동차관리법","type":"XML"}}}'
 ```
 
