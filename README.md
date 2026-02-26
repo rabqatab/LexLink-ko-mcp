@@ -856,6 +856,21 @@ This project is open source. See LICENSE file for details.
 
 ## Changelog
 
+### v1.3.2 - 2026-01-13
+**Fix: Smithery Build npm Detection Error**
+
+- **Issue:** Smithery build system incorrectly detected npm as package manager, failing with "npm error path /home/repo/package.json"
+- **Root Cause:** Previous `smithery.yaml` only had `runtime: python` which is insufficient for Smithery's current build system
+- **Solution:**
+  - Rewrote `smithery.yaml` with proper `startCommand` configuration
+  - Added `type: stdio` to declare stdio-based MCP server
+  - Added `configSchema` for optional `oc` parameter in Smithery UI
+  - Added `commandFunction` to run `uv run start` with `OC` env var
+- **Files Changed:**
+  - `smithery.yaml` - Complete rewrite with `startCommand` configuration
+- **Reference:**
+  - [perplexity-mcp smithery.yaml](https://github.com/jsonallen/perplexity-mcp/blob/main/smithery.yaml) - Working Python MCP example
+
 ### v1.3.1 - 2025-12-25
 **Feature: PlayMCP Traffic Logging**
 

@@ -1,0 +1,45 @@
+# LexLink MCP Server - Cloud Build CI/CD Pipeline
+#
+# Source-based deployment (recommended) - no Dockerfile needed
+# For Dockerfile-based, see cloudbuild-docker.yaml
+#
+# USAGE:
+#   gcloud builds submit --config=docs/GCP_deployment/cloudbuild.yaml .
+#
+# REQUIRED SUBSTITUTIONS:
+#   _REGION: GCP region (default: asia-northeast3)
+#   _SERVICE_NAME: Cloud Run service name (default: lexlink)
+
+substitutions:
+  _REGION: asia-northeast3
+  _SERVICE_NAME: lexlink
+
+steps:
+  # Deploy directly from source (uses buildpacks, no Dockerfile)
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
+    args:
+      - 'run'
+      - 'deploy'
+      - '${_SERVICE_NAME}'
+      - '--source=.'
+      - '--region=${_REGION}'
+      - '--platform=managed'
+      - '--memory=1Gi'
+      - '--cpu=1'
+      - '--timeout=300'
+      - '--concurrency=80'
+      - '--min-instances=0'
+      - '--max-instances=10'
+      # Non-streaming HTTP transport (unlike PlayMCP)
+      - '--set-env-vars=TRANSPORT=http,SLIM_RESPONSE=false,HTTP_TIMEOUT_S=60'
+      # OC from Secret Manager
+      - '--set-secrets=OC=lexlink-oc:latest'
+      # For internal-only: change to --no-allow-unauthenticated --ingress=internal
+      - '--allow-unauthenticated'
+    id: 'deploy'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: '600s'

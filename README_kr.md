@@ -857,6 +857,21 @@ uv sync --reinstall
 
 ## 변경 로그
 
+### v1.3.2 - 2026-01-13
+**수정: Smithery 빌드 npm 감지 오류**
+
+- **문제:** Smithery 빌드 시스템이 npm을 패키지 매니저로 잘못 감지하여 "npm error path /home/repo/package.json" 오류 발생
+- **원인:** 기존 `smithery.yaml`에 `runtime: python`만 있어 현재 Smithery 빌드 시스템에 부족함
+- **해결책:**
+  - `smithery.yaml`을 적절한 `startCommand` 설정으로 재작성
+  - stdio 기반 MCP 서버 선언을 위해 `type: stdio` 추가
+  - Smithery UI에서 선택적 `oc` 파라미터를 위한 `configSchema` 추가
+  - `OC` 환경변수와 함께 `uv run start`를 실행하는 `commandFunction` 추가
+- **변경된 파일:**
+  - `smithery.yaml` - `startCommand` 설정으로 전면 재작성
+- **참조:**
+  - [perplexity-mcp smithery.yaml](https://github.com/jsonallen/perplexity-mcp/blob/main/smithery.yaml) - 작동하는 Python MCP 예시
+
 ### v1.3.1 - 2025-12-25
 **기능: PlayMCP 트래픽 로깅**
 
