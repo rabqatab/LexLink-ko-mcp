@@ -328,7 +328,7 @@ See [`Dockerfile`](./Dockerfile) in this directory.
 
 ```bash
 # Build from project root
-docker build -f docs/GCP_deployment/Dockerfile -t lexlink .
+docker build -f docs/internal_GCP_deployment/Dockerfile -t lexlink .
 
 # Push to Artifact Registry
 gcloud artifacts repositories create lexlink-repo \
@@ -381,19 +381,19 @@ For automated deployments on git push. See [`cloudbuild.yaml`](./cloudbuild.yaml
 
 ```bash
 # Manual trigger
-gcloud builds submit --config=docs/GCP_deployment/cloudbuild.yaml .
+gcloud builds submit --config=docs/internal_GCP_deployment/cloudbuild.yaml .
 
 # Or set up trigger for automatic deployment on push
 gcloud builds triggers create github \
   --repo-name=lexlink-ko-mcp \
   --branch-pattern="^main$" \
-  --build-config=docs/GCP_deployment/cloudbuild.yaml
+  --build-config=docs/internal_GCP_deployment/cloudbuild.yaml
 ```
 
 ### Appendix D: Files in This Directory
 
 ```
-docs/GCP_deployment/
+docs/internal_GCP_deployment/
 ├── README.md                       # This guide
 ├── QUICKSTART.md                   # One-page quick reference
 ├── smoke_test.sh                   # Verification script (run after deploy)

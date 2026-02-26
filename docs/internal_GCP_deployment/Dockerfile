@@ -9,7 +9,7 @@
 # - Full control over the container environment
 #
 # USAGE: Run from project root with:
-#   docker build -f docs/GCP_deployment/Dockerfile -t lexlink .
+#   docker build -f docs/internal_GCP_deployment/Dockerfile -t lexlink .
 
 FROM python:3.12-slim AS builder
 

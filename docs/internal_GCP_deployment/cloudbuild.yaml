@@ -4,7 +4,7 @@
 # For Dockerfile-based, see cloudbuild-docker.yaml
 #
 # USAGE:
-#   gcloud builds submit --config=docs/GCP_deployment/cloudbuild.yaml .
+#   gcloud builds submit --config=docs/internal_GCP_deployment/cloudbuild.yaml .
 #
 # REQUIRED SUBSTITUTIONS:
 #   _REGION: GCP region (default: asia-northeast3)

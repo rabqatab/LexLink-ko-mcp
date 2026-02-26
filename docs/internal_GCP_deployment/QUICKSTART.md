@@ -63,7 +63,7 @@ SERVICE_URL=$(gcloud run services describe lexlink \
 echo "SERVICE_URL=$SERVICE_URL"
 
 # Run smoke test
-./docs/GCP_deployment/smoke_test.sh
+./docs/internal_GCP_deployment/smoke_test.sh
 ```
 
 Or manually:
@@ -118,7 +118,7 @@ gcloud run deploy lexlink \
 ## Files
 
 ```
-docs/GCP_deployment/
+docs/internal_GCP_deployment/
 ├── README.md                    # Full guide
 ├── QUICKSTART.md                # This file
 ├── smoke_test.sh                # Verification script
