@@ -8,7 +8,7 @@ LexLink is a Model Context Protocol (MCP) server providing structured access to 
 src/lexlink/
 ├── server.py        # MCP server: 26 tools + 6 prompts + 2 resources (~3,400 lines)
 ├── client.py        # HTTP client for law.go.kr API
-├── config.py        # Pydantic config schema (oc, timeout, base_url)
+├── stdio_server.py  # Stdio transport entry point
 ├── params.py        # Parameter mapping (snake_case → upstream camelCase)
 ├── parser.py        # XML response parsing
 ├── validation.py    # Input validation (dates, article codes)
@@ -46,17 +46,16 @@ src/lexlink/
 
 ## Key Patterns
 
-- **OC parameter resolution**: Tool arg > Session config > Environment variable
+- **OC parameter resolution**: Tool arg > Environment variable
 - **XML-only responses**: law.go.kr JSON format is broken; all tools default to XML
 - **SLIM_RESPONSE mode**: `SLIM_RESPONSE=true` env var strips raw XML for size-constrained platforms (PlayMCP 24KB limit)
 - **Auto-ranking**: Search tools auto-fetch 100 results and re-rank by relevance for keyword queries
-- **Context injection**: Smithery `ctx: Context` parameter on every tool for session-scoped config
+- **Context injection**: `ctx: Context` parameter on every tool for MCP logging/progress
 
 ## Deployment
 
-- **Smithery.ai**: Via `smithery.yaml` + `create_server` factory
 - **Kakao PlayMCP**: HTTP/SSE transport via `http_server.py`, `TRANSPORT=http`
-- **Development**: `uv run dev` (port 8081)
+- **Stdio**: `uv run stdio` for local MCP clients (Claude Code, Cursor, etc.)
 
 ## Testing
 

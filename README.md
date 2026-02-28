@@ -35,7 +35,6 @@ LexLink is an MCP (Model Context Protocol) server that exposes the Korean Nation
     - Template lookup by Korean name or abbreviation (`lexlink://law/{name}`)
     - Dynamic caching: search results automatically populate the cache
 - **100% Semantic Validation** - All 26 tools confirmed returning real law data
-- **Session Configuration** - Configure once, use across all tool calls
 - **Error Handling** - Actionable error messages with resolution hints
 - **Korean Text Support** - Proper UTF-8 encoding for Korean characters
 - **Response Formats** - HTML or XML (multiple formats supported)
@@ -53,15 +52,14 @@ LexLink is an MCP (Model Context Protocol) server that exposes the Korean Nation
 | **API Coverage** | ~17% of 150+ endpoints |
 | **LLM Integration** | ✅ Validated (Gemini) |
 | **Code Quality** | Clean, documented, tested |
-| **Version** | v1.4.0 |
+| **Version** | v1.5.0 |
 
-**Latest Achievement:** MCP Resources added! Law ID cache eliminates redundant search calls (100% LLM adoption in testing).
+**Latest:** Smithery dependency removed. Clean 2-tier OC resolution (tool arg > env var), 9 fewer dependencies.
 
 ## Prerequisites
 
 - **Python 3.10+**
-- **Smithery API key** (optional, for deployment): Get yours at [smithery.ai/account/api-keys](https://smithery.ai/account/api-keys)
-- **law.go.kr OC identifier**: Get key from [open.law.go.kr](https://open.law.go.kr)
+- **law.go.kr OC identifier**: Register at [open.law.go.kr](https://open.law.go.kr)
 
 ## Quick Start
 
@@ -73,25 +71,13 @@ uv sync
 
 ### 2. Configure Your OC Identifier
 
-Choose one of three methods:
-
-**Option A: Session Configuration (Recommended)**
+**Option A: Environment Variable (Recommended)**
 ```bash
-# Start dev server with OC in URL
-uv run dev
-# Then in Smithery UI, set oc field in session config
+# Set OC in your environment
+export OC=your_id_here
 ```
 
-**Option B: Environment Variable**
-```bash
-# Copy example file
-cp .env.example .env
-
-# Edit .env and set your OC
-OC=your_id_here
-```
-
-**Option C: Pass in Tool Arguments**
+**Option B: Pass in Tool Arguments**
 ```python
 # Override OC in each tool call
 eflaw_search(query="법령명", oc="your_id")
@@ -100,11 +86,11 @@ eflaw_search(query="법령명", oc="your_id")
 ### 3. Run the Server
 
 ```bash
-# Development mode (with hot reload)
-uv run dev
+# Stdio transport (for Claude Code, Cursor, etc.)
+OC=your_oc uv run stdio
 
-# Interactive testing with Smithery Playground
-uv run playground
+# HTTP transport (for Kakao PlayMCP)
+OC=your_oc TRANSPORT=http uv run serve
 ```
 
 ## Available Tools
@@ -466,23 +452,21 @@ When searching Korean law, select tools based on query clarity:
 
 ## Configuration
 
-### Session Configuration Schema
+### Environment Variables
 
-Configure once in Smithery UI or URL parameters:
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OC` | *(required)* | law.go.kr API identifier (email local part) |
+| `LEXLINK_BASE_URL` | `http://www.law.go.kr` | API base URL |
+| `LEXLINK_TIMEOUT` | `60` | HTTP request timeout in seconds |
+| `SLIM_RESPONSE` | *(unset)* | Set `true` to strip raw XML for size-constrained platforms |
+| `TRANSPORT` | `sse` | Transport type: `sse` or `http` |
 
-```python
-{
-    "oc": "your_id",              # Required: law.go.kr user ID
-    "http_timeout_s": 60          # Optional: HTTP timeout (5-120s, default: 60)
-}
-```
-
-### Parameter Priority
+### OC Priority
 
 When resolving the OC identifier:
 1. **Tool argument** (highest priority) - `oc` parameter in tool call
-2. **Session config** - Set in Smithery UI/URL
-3. **Environment variable** - `OC` in .env file
+2. **Environment variable** - `OC` env var (set via .env or HTTP header middleware)
 
 ## Usage Examples
 
@@ -531,8 +515,7 @@ result = eflaw_search(query="test")
     "message": "OC parameter is required but not provided.",
     "hints": [
         "1. Tool argument: oc='your_value'",
-        "2. Session config: Set 'oc' in Smithery settings",
-        "3. Environment variable: OC=your_value"
+        "2. Environment variable: OC=your_value"
     ]
 }
 ```
@@ -665,7 +648,7 @@ lexlink-ko-mcp/
 ├── src/lexlink/
 │   ├── server.py        # Main MCP server with 26 tools
 │   ├── http_server.py   # HTTP/SSE server for Kakao PlayMCP
-│   ├── config.py        # Session configuration schema
+│   ├── stdio_server.py  # Stdio transport entry point
 │   ├── params.py        # Parameter resolution & mapping
 │   ├── validation.py    # Input validation
 │   ├── parser.py        # XML parsing utilities
@@ -704,33 +687,18 @@ uv run pytest -m e2e
 
 For implementing additional tools from the 124+ remaining APIs:
 1. Follow the pattern established in `src/lexlink/server.py`
-2. Use Context injection for session configuration
+2. Use `ctx: Context = None` parameter for MCP logging/progress
 3. Use generic parser functions (`extract_items_list`, `update_items_list`)
 4. Add semantic validation tests
 
 **Tool Implementation Pattern:**
 - Each tool is a decorated function with MCP schema
-- Uses `ctx: Context = None` parameter for session config
-- 3-tier parameter resolution: tool arg > session > env
+- Uses `ctx: Context = None` parameter for MCP context
+- 2-tier OC resolution: tool arg > env var
 - Generic parser functions work with any XML tag
 - Comprehensive error handling with actionable hints
 
 ## Deployment
-
-### Deploy to Smithery
-
-1. Create a GitHub repository:
-   ```bash
-   git init
-   git add .
-   git commit -m "Initial commit"
-   git remote add origin https://github.com/YOUR_USERNAME/YOUR_REPO.git
-   git push -u origin main
-   ```
-
-2. Deploy at [smithery.ai/new](https://smithery.ai/new)
-
-3. Configure session settings in Smithery UI
 
 ### Deploy to Kakao PlayMCP (HTTP Server)
 
@@ -815,12 +783,9 @@ export PYTHONIOENCODING=utf-8
 
 ### "Timeout" errors
 
-**Solution:** Increase timeout in session config:
-```python
-{
-    "oc": "your_id",
-    "http_timeout_s": 90  # Increase from default 60s
-}
+**Solution:** Increase timeout via environment variable:
+```bash
+export LEXLINK_TIMEOUT=90  # Increase from default 60s
 ```
 
 ### Server won't start after updating dependencies
@@ -850,7 +815,6 @@ This project is open source. See LICENSE file for details.
 
 - **law.go.kr** - Korean National Law Information API
 - **MCP** - Model Context Protocol by Anthropic
-- **Smithery** - MCP server deployment platform
 
 ## Support
 
@@ -861,37 +825,16 @@ This project is open source. See LICENSE file for details.
 
 ## Changelog
 
-### v1.4.0 - 2026-02-28
-**Feature: MCP Resources - Law ID Cache**
+### v1.5.0 - 2026-02-28
+**Refactor: Remove Smithery Dependency**
 
-- **New:** 2 MCP resources for cached law name→법령ID lookups
-  - `lexlink://laws/frequently-used` (static list of ~20 laws)
-  - `lexlink://law/{name}` (template lookup by name/abbreviation)
-- **Dynamic caching** from `eflaw_search` and `law_search` results
-- **LLM test:** 100% resource adoption across 100 runs (Gemini 2.5/3 Flash)
-- Seed IDs verified against live law.go.kr API
+- Removed `smithery` package and 8 transitive dependencies
+- Simplified OC resolution to 2-tier (tool arg > env var)
+- Added `stdio_server.py` entry point for stdio transport
+- See [CHANGELOG.md](CHANGELOG.md) for full details
 
-### v1.3.2 - 2026-01-13
-**Feature: PlayMCP Traffic Logging**
-
-- **New Modules:**
-  - `raw_logger.py` - Dashboard-compatible MCP traffic logger
-  - `log_processor.py` - Log format converter utility
-- **Implementation:**
-  - `RawLoggingMiddleware` in HTTP server for request/response capture
-  - JSONL format with merged request/response pairs
-  - Daily log rotation at `logs/playmcp/YYYY-MM-DD.jsonl`
-  - SSE streaming response parsing
-- **Log Schema:**
-  - `request_id`, `timestamp`, `duration_ms`
-  - `method`, `tool`, `arguments`, `result`
-  - `status_code`, `client_ip`, `headers`
-- **Impact:**
-  - Enables traffic analysis for PlayMCP deployments
-  - Dashboard-compatible format for monitoring
-
-For the full changelog (v1.0.0 – v1.4.0), see [CHANGELOG.md](CHANGELOG.md).
+For the full changelog (v1.0.0 – v1.5.0), see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-**Built with [Smithery](https://smithery.ai) | Powered by [MCP](https://modelcontextprotocol.io)**
+**Powered by [MCP](https://modelcontextprotocol.io)**

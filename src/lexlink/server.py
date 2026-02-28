@@ -15,10 +15,8 @@ from typing import Optional, Union
 
 from mcp.server.fastmcp import FastMCP, Context
 from mcp.types import ToolAnnotations
-from smithery.decorators import smithery
 
 from .client import LawAPIClient
-from .config import LexLinkConfig
 from .errors import ErrorCode, create_error_response
 from .params import map_params_to_upstream, resolve_oc
 from .validation import validate_date_range
@@ -41,7 +39,7 @@ def slim_response(response: dict) -> dict:
     - Removes 'raw_content' (XML) entirely
     - Keeps only essential fields in 'ranked_data' items
 
-    When not set, returns response unchanged (for Smithery.ai compatibility).
+    When not set, returns response unchanged.
 
     Args:
         response: The response dictionary containing 'raw_content' and/or 'ranked_data'
@@ -113,16 +111,9 @@ def slim_response(response: dict) -> dict:
     return result
 
 
-@smithery.server(config_schema=LexLinkConfig)
-def create_server(session_config: Optional[LexLinkConfig] = None) -> FastMCP:
+def create_server() -> FastMCP:
     """
     Create and configure the LexLink MCP server.
-
-    This factory function is called by Smithery to create the server instance.
-    Tools access session configuration via Context parameter injection at request time.
-
-    Args:
-        session_config: User configuration from Smithery session (available at request time via Context)
 
     Returns:
         Configured FastMCP server instance with registered tools
@@ -176,15 +167,12 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
 
     server = FastMCP("LexLink - Korean Law API", instructions=SERVER_INSTRUCTIONS)
 
-    # Get client configuration from session or use defaults
     def _get_client() -> LawAPIClient:
-        """Create HTTP client with default or session configuration."""
-        if session_config:
-            return LawAPIClient(
-                base_url=session_config.base_url,
-                timeout=session_config.http_timeout_s
-            )
-        return LawAPIClient()
+        """Create HTTP client from environment variables or defaults."""
+        return LawAPIClient(
+            base_url=os.getenv("LEXLINK_BASE_URL", "http://www.law.go.kr"),
+            timeout=int(os.getenv("LEXLINK_TIMEOUT", "60")),
+        )
 
     # ==================== MCP Resources: Law ID Cache ====================
 
@@ -289,7 +277,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
         ef_yd: Optional[str] = None,
         org: Optional[str] = None,
         knd: Optional[str] = None,
-        ctx: Context = None,  # ← Context injection for session config
+        ctx: Context = None,
     ) -> dict:
         """
         Search current laws by effective date (시행일 기준 현행법령 검색).
@@ -301,7 +289,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             query: Search keyword (law name or content)
             display: Number of results per page (max 100, default 20). **Recommend 50-100 for law searches (법령 검색) to ensure exact matches are found.**
             page: Page number (1-based, default 1)
-            oc: Optional OC override (defaults to session config or env)
+            oc: Optional OC override (defaults to env var)
             type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
             sort: Sort order - "lasc"|"ldes"|"dasc"|"ddes"|"nasc"|"ndes"|"efasc"|"efdes"
             ef_yd: Effective date range (YYYYMMDD~YYYYMMDD, e.g., "20240101~20241231")
@@ -323,18 +311,9 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             ... )
         """
         try:
-            # 1. Access session config from Context at REQUEST time
-            config = ctx.session_config if ctx else None
-            session_oc = getattr(config, 'oc', None) if config else None
+            resolved_oc = resolve_oc(override_oc=oc)
 
-            # 2. Resolve OC parameter with all 3 priority levels
-            resolved_oc = resolve_oc(
-                override_oc=oc,        # Priority 1: Tool argument
-                session_oc=session_oc  # Priority 2: Session config (FROM CONTEXT!)
-            )
-            # Priority 3: Environment variable (handled in resolve_oc)
-
-            # 2. Build parameter dict (snake_case)
+            # Build parameter dict (snake_case)
             snake_params = {
                 "oc": resolved_oc,
                 "target": "eflaw",
@@ -449,7 +428,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
         date: Optional[int] = None,
         org: Optional[str] = None,
         knd: Optional[str] = None,
-        ctx: Context = None,  # ← Context injection for session config
+        ctx: Context = None,
     ) -> dict:
         """
         Search current laws by announcement date (공포일 기준 현행법령 검색).
@@ -460,7 +439,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             query: Search keyword (law name or content)
             display: Number of results per page (max 100, default 20). **Recommend 50-100 for law searches (법령 검색) to ensure exact matches are found.**
             page: Page number (1-based, default 1)
-            oc: Optional OC override (defaults to session config or env)
+            oc: Optional OC override (defaults to env var)
             type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
             sort: Sort order
             date: Announcement date (YYYYMMDD)
@@ -471,15 +450,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             Search results with law list or error
         """
         try:
-            # Access session config from Context at REQUEST time
-            config = ctx.session_config if ctx else None
-            session_oc = getattr(config, 'oc', None) if config else None
-
-            # Resolve OC with all 3 priority levels
-            resolved_oc = resolve_oc(
-                override_oc=oc,
-                session_oc=session_oc
-            )
+            resolved_oc = resolve_oc(override_oc=oc)
 
             snake_params = {
                 "oc": resolved_oc,
@@ -592,7 +563,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
                 Format: first 4 digits = article number (zero-padded), last 2 digits = branch suffix (00=main).
                 Examples: "017400" (제174조), "017200" (제172조), "000300" (제3조), "001502" (제15조의2)
             chr_cls_cd: Language code - "010202" (Korean, default) or "010201" (Original)
-            oc: Optional OC override (defaults to session config or env)
+            oc: Optional OC override (defaults to env var)
             type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
 
         Returns:
@@ -614,15 +585,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             if jo is not None:
                 jo = str(jo)
 
-            # Access session config from Context at REQUEST time
-            config = ctx.session_config if ctx else None
-            session_oc = getattr(config, 'oc', None) if config else None
-
-            # Resolve OC with all 3 priority levels
-            resolved_oc = resolve_oc(
-                override_oc=oc,
-                session_oc=session_oc
-            )
+            resolved_oc = resolve_oc(override_oc=oc)
 
             # Validate that either id or mst is provided
             if not id and not mst:
@@ -712,7 +675,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
                 Format: first 4 digits = article number (zero-padded), last 2 digits = branch suffix (00=main).
                 Examples: "017400" (제174조), "017200" (제172조), "000300" (제3조), "001502" (제15조의2)
             lang: Language - "KO" (Korean) or "ORI" (Original)
-            oc: Optional OC override (defaults to session config or env)
+            oc: Optional OC override (defaults to env var)
             type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
 
         Returns:
@@ -734,15 +697,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             if jo is not None:
                 jo = str(jo)
 
-            # Access session config from Context at REQUEST time
-            config = ctx.session_config if ctx else None
-            session_oc = getattr(config, 'oc', None) if config else None
-
-            # Resolve OC with all 3 priority levels
-            resolved_oc = resolve_oc(
-                override_oc=oc,
-                session_oc=session_oc
-            )
+            resolved_oc = resolve_oc(override_oc=oc)
 
             # Validate that either id or mst is provided
             if not id and not mst:
@@ -832,7 +787,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             hang: Paragraph number (6 digits, e.g., "000100" for 제1항)
             ho: Item number (6 digits, e.g., "000200" for 제2호)
             mok: Subitem (UTF-8 encoded, e.g., "다" for 다목)
-            oc: Optional OC override (defaults to session config or env)
+            oc: Optional OC override (defaults to env var)
             type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
 
         Returns:
@@ -854,15 +809,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             if jo is not None:
                 jo = str(jo)
 
-            # Access session config from Context at REQUEST time
-            config = ctx.session_config if ctx else None
-            session_oc = getattr(config, 'oc', None) if config else None
-
-            # Resolve OC with all 3 priority levels
-            resolved_oc = resolve_oc(
-                override_oc=oc,
-                session_oc=session_oc
-            )
+            resolved_oc = resolve_oc(override_oc=oc)
 
             # Validate that either id or mst is provided
             if not id and not mst:
@@ -951,7 +898,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             hang: Paragraph number (6 digits, e.g., "000100" for 제1항)
             ho: Item number (6 digits, e.g., "000200" for 제2호)
             mok: Subitem (UTF-8 encoded, e.g., "다" for 다목)
-            oc: Optional OC override (defaults to session config or env)
+            oc: Optional OC override (defaults to env var)
             type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
 
         Returns:
@@ -973,15 +920,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             if jo is not None:
                 jo = str(jo)
 
-            # Access session config from Context at REQUEST time
-            config = ctx.session_config if ctx else None
-            session_oc = getattr(config, 'oc', None) if config else None
-
-            # Resolve OC with all 3 priority levels
-            resolved_oc = resolve_oc(
-                override_oc=oc,
-                session_oc=session_oc
-            )
+            resolved_oc = resolve_oc(override_oc=oc)
 
             # Validate that either id or mst is provided
             if not id and not mst:
@@ -1063,7 +1002,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             query: Search keyword (Korean or English, default "*")
             display: Number of results per page (max 100, default 20). **Recommend 50-100 for law searches (법령 검색) to ensure exact matches are found.**
             page: Page number (1-based, default 1)
-            oc: Optional OC override (defaults to session config or env)
+            oc: Optional OC override (defaults to env var)
             type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
             sort: Sort order - "lasc"|"ldes"|"dasc"|"ddes"|"nasc"|"ndes"|"efasc"|"efdes"
             ef_yd: Effective date range (YYYYMMDD~YYYYMMDD)
@@ -1082,12 +1021,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             >>> elaw_search(query="가정폭력방지", type="XML")
         """
         try:
-            # Access session config from Context
-            config = ctx.session_config if ctx else None
-            session_oc = getattr(config, 'oc', None) if config else None
-
-            # Resolve OC with 3-tier priority
-            resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
+            resolved_oc = resolve_oc(override_oc=oc)
 
             # Validate date range if provided
             if ef_yd:
@@ -1204,7 +1138,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             lm: Law name (alternative search method)
             ld: Announcement date (YYYYMMDD)
             ln: Announcement number
-            oc: Optional OC override (defaults to session config or env)
+            oc: Optional OC override (defaults to env var)
             type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
             ctx: MCP context (injected automatically)
 
@@ -1237,12 +1171,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
                     ]
                 )
 
-            # Access session config from Context
-            config = ctx.session_config if ctx else None
-            session_oc = getattr(config, 'oc', None) if config else None
-
-            # Resolve OC with 3-tier priority
-            resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
+            resolved_oc = resolve_oc(override_oc=oc)
 
             # Build parameters
             params = {
@@ -1318,7 +1247,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             query: Search keyword (default "*")
             display: Number of results per page (max 100, default 20). **Recommend 50-100 for law searches (법령 검색) to ensure exact matches are found.**
             page: Page number (1-based, default 1)
-            oc: Optional OC override (defaults to session config or env)
+            oc: Optional OC override (defaults to env var)
             type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
             nw: 1=현행 (current), 2=연혁 (historical), default 1
             search: 1=규칙명 (rule name), 2=본문검색 (full text), default 1
@@ -1341,12 +1270,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             >>> admrul_search(date=20250501, type="XML")
         """
         try:
-            # Access session config from Context
-            config = ctx.session_config if ctx else None
-            session_oc = getattr(config, 'oc', None) if config else None
-
-            # Resolve OC with 3-tier priority
-            resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
+            resolved_oc = resolve_oc(override_oc=oc)
 
             # Validate date ranges if provided
             if prml_yd:
@@ -1460,7 +1384,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             id: Rule sequence number (required if lid/lm not provided)
             lid: Rule ID (alternative to id)
             lm: Rule name (exact match search)
-            oc: Optional OC override (defaults to session config or env)
+            oc: Optional OC override (defaults to env var)
             type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
             ctx: MCP context (injected automatically)
 
@@ -1493,12 +1417,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
                     ]
                 )
 
-            # Access session config from Context
-            config = ctx.session_config if ctx else None
-            session_oc = getattr(config, 'oc', None) if config else None
-
-            # Resolve OC with 3-tier priority
-            resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
+            resolved_oc = resolve_oc(override_oc=oc)
 
             # Build parameters
             params = {
@@ -1561,7 +1480,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             query: Search keyword (default "*")
             display: Number of results per page (max 100, default 20). **Recommend 50-100 for law searches (법령 검색) to ensure exact matches are found.**
             page: Page number (1-based, default 1)
-            oc: Optional OC override (defaults to session config or env)
+            oc: Optional OC override (defaults to env var)
             type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
             sort: Sort order - "lasc"|"ldes"|"dasc"|"ddes"|"nasc"|"ndes"
             ctx: MCP context (injected automatically)
@@ -1574,12 +1493,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             >>> lnkLs_search(query="자동차관리법", type="XML")
         """
         try:
-            # Access session config from Context
-            config = ctx.session_config if ctx else None
-            session_oc = getattr(config, 'oc', None) if config else None
-
-            # Resolve OC with 3-tier priority
-            resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
+            resolved_oc = resolve_oc(override_oc=oc)
 
             # Build parameters
             params = {
@@ -1660,7 +1574,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             query: Search keyword (default "*")
             display: Number of results per page (max 100, default 20). **Recommend 50-100 for law searches (법령 검색) to ensure exact matches are found.**
             page: Page number (1-based, default 1)
-            oc: Optional OC override (defaults to session config or env)
+            oc: Optional OC override (defaults to env var)
             type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
             knd: Law type code (to filter by specific law)
             jo: Article number (4 digits, zero-padded). Examples: "0002" (Article 2), "0020" (Article 20), "0100" (Article 100)
@@ -1679,12 +1593,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             >>> lnkLsOrdJo_search(knd="002118", jo=20, type="XML")
         """
         try:
-            # Access session config from Context
-            config = ctx.session_config if ctx else None
-            session_oc = getattr(config, 'oc', None) if config else None
-
-            # Resolve OC with 3-tier priority
-            resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
+            resolved_oc = resolve_oc(override_oc=oc)
 
             # Build parameters
             params = {
@@ -1763,7 +1672,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             org: Ministry/department code (required, e.g., "1400000")
             display: Number of results per page (max 100, default 20). **Recommend 50-100 for law searches (법령 검색) to ensure exact matches are found.**
             page: Page number (1-based, default 1)
-            oc: Optional OC override (defaults to session config or env)
+            oc: Optional OC override (defaults to env var)
             type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
             sort: Sort order
             ctx: MCP context (injected automatically)
@@ -1776,12 +1685,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             >>> lnkDep_search(org="1400000", type="XML")
         """
         try:
-            # Access session config from Context
-            config = ctx.session_config if ctx else None
-            session_oc = getattr(config, 'oc', None) if config else None
-
-            # Resolve OC with 3-tier priority
-            resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
+            resolved_oc = resolve_oc(override_oc=oc)
 
             # Build parameters
             params = {
@@ -1848,7 +1752,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
         Response schema is not documented by the API provider.
 
         Args:
-            oc: Optional OC override (defaults to session config or env)
+            oc: Optional OC override (defaults to env var)
             ctx: MCP context (injected automatically)
 
         Returns:
@@ -1859,12 +1763,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             >>> drlaw_search()
         """
         try:
-            # Access session config from Context
-            config = ctx.session_config if ctx else None
-            session_oc = getattr(config, 'oc', None) if config else None
-
-            # Resolve OC with 3-tier priority
-            resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
+            resolved_oc = resolve_oc(override_oc=oc)
 
             # Build parameters (HTML only)
             params = {
@@ -1919,7 +1818,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
         Args:
             id: Law ID (required if mst not provided)
             mst: Law master number (required if id not provided)
-            oc: Optional OC override (defaults to session config or env)
+            oc: Optional OC override (defaults to env var)
             type: Response format - "XML" only (JSON not supported by API, HTML not available)
             ctx: MCP context (injected automatically)
 
@@ -1954,12 +1853,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
                 logger.warning("lsDelegated_service does not support HTML format, using XML")
                 type = "XML"
 
-            # Access session config from Context
-            config = ctx.session_config if ctx else None
-            session_oc = getattr(config, 'oc', None) if config else None
-
-            # Resolve OC with 3-tier priority
-            resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
+            resolved_oc = resolve_oc(override_oc=oc)
 
             # Build parameters
             params = {
@@ -2031,7 +1925,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             query: Search keyword (default "*" for all)
             display: Number of results per page (max 100, default 20)
             page: Page number (1-based, default 1)
-            oc: Optional OC override (defaults to session config or env)
+            oc: Optional OC override (defaults to env var)
             type: Response format - "HTML" or "XML" (default "XML")
             search: Search type (1=case name, 2=full text, default 1)
             sort: Sort order - "lasc"|"ldes"|"dasc"|"ddes"|"nasc"|"ndes"
@@ -2056,12 +1950,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             >>> prec_search(query="담보권", curt="대법원")
         """
         try:
-            # Access session config from Context
-            config = ctx.session_config if ctx else None
-            session_oc = getattr(config, 'oc', None) if config else None
-
-            # Resolve OC with 3-tier priority
-            resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
+            resolved_oc = resolve_oc(override_oc=oc)
 
             # Build parameter dict
             snake_params = {
@@ -2174,12 +2063,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             >>> prec_service(id="228541")
         """
         try:
-            # Access session config from Context
-            config = ctx.session_config if ctx else None
-            session_oc = getattr(config, 'oc', None) if config else None
-
-            # Resolve OC with 3-tier priority
-            resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
+            resolved_oc = resolve_oc(override_oc=oc)
 
             # Build parameters
             params = {
@@ -2244,7 +2128,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             query: Search keyword (default "*" for all)
             display: Number of results per page (max 100, default 20)
             page: Page number (1-based, default 1)
-            oc: Optional OC override (defaults to session config or env)
+            oc: Optional OC override (defaults to env var)
             type: Response format - "HTML" or "XML" (default "XML")
             search: Search type (1=decision name, 2=full text, default 1)
             gana: Dictionary search (ga, na, da, ...)
@@ -2265,12 +2149,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             >>> detc_search(date=20150210)
         """
         try:
-            # Access session config from Context
-            config = ctx.session_config if ctx else None
-            session_oc = getattr(config, 'oc', None) if config else None
-
-            # Resolve OC with 3-tier priority
-            resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
+            resolved_oc = resolve_oc(override_oc=oc)
 
             # Build parameter dict
             snake_params = {
@@ -2375,12 +2254,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             >>> detc_service(id="58386")
         """
         try:
-            # Access session config from Context
-            config = ctx.session_config if ctx else None
-            session_oc = getattr(config, 'oc', None) if config else None
-
-            # Resolve OC with 3-tier priority
-            resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
+            resolved_oc = resolve_oc(override_oc=oc)
 
             # Build parameters
             params = {
@@ -2448,7 +2322,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             query: Search keyword (default "*")
             display: Number of results per page (max 100, default 20). **Recommend 50-100 for searches to ensure exact matches are found.**
             page: Page number (1-based, default 1)
-            oc: Optional OC override (defaults to session config or env)
+            oc: Optional OC override (defaults to env var)
             type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
             search: 1=법령해석례명 (interpretation name, default), 2=본문검색 (full text)
             inq: Inquiry organization name
@@ -2472,12 +2346,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             >>> expc_search(query="자동차", expl_yd="20240101~20241231", type="XML")
         """
         try:
-            # Access session config from Context
-            config = ctx.session_config if ctx else None
-            session_oc = getattr(config, 'oc', None) if config else None
-
-            # Resolve OC with 3-tier priority
-            resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
+            resolved_oc = resolve_oc(override_oc=oc)
 
             # Validate date ranges if provided
             if reg_yd:
@@ -2592,7 +2461,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
         Args:
             id: Legal interpretation sequence number (required)
             lm: Legal interpretation name (optional)
-            oc: Optional OC override (defaults to session config or env)
+            oc: Optional OC override (defaults to env var)
             type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
             ctx: MCP context (injected automatically)
 
@@ -2611,12 +2480,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             if id is not None:
                 id = str(id)
 
-            # Access session config from Context
-            config = ctx.session_config if ctx else None
-            session_oc = getattr(config, 'oc', None) if config else None
-
-            # Resolve OC with 3-tier priority
-            resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
+            resolved_oc = resolve_oc(override_oc=oc)
 
             # Build parameters
             params = {
@@ -2684,7 +2548,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             query: Search keyword (default "*")
             display: Number of results per page (max 100, default 20)
             page: Page number (1-based, default 1)
-            oc: Optional OC override (defaults to session config or env)
+            oc: Optional OC override (defaults to env var)
             type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
             search: 1=사건명 (case name, default), 2=본문검색 (full text)
             cls: Decision type filter (재결구분코드)
@@ -2710,12 +2574,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             >>> decc_search(rsl_yd="20200101~20201231", type="XML")
         """
         try:
-            # Access session config from Context
-            config = ctx.session_config if ctx else None
-            session_oc = getattr(config, 'oc', None) if config else None
-
-            # Resolve OC with 3-tier priority
-            resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
+            resolved_oc = resolve_oc(override_oc=oc)
 
             # Validate date ranges if provided
             if dpa_yd:
@@ -2827,7 +2686,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
         Args:
             id: Decision sequence number (required)
             lm: Decision name (optional)
-            oc: Optional OC override (defaults to session config or env)
+            oc: Optional OC override (defaults to env var)
             type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
             ctx: MCP context (injected automatically)
 
@@ -2846,12 +2705,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             if id is not None:
                 id = str(id)
 
-            # Access session config from Context
-            config = ctx.session_config if ctx else None
-            session_oc = getattr(config, 'oc', None) if config else None
-
-            # Resolve OC with 3-tier priority
-            resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
+            resolved_oc = resolve_oc(override_oc=oc)
 
             # Build parameters
             params = {
@@ -2919,7 +2773,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             law_name: Law name in Korean (e.g., "자본시장과 금융투자업에 관한 법률")
             article: Article number (조번호, e.g., 3 for 제3조)
             article_branch: Article branch number (조가지번호, e.g., 2 for 제37조의2, default 0)
-            oc: Optional OC override (defaults to session config or env)
+            oc: Optional OC override (defaults to env var)
 
         Returns:
             Citation extraction result with:
@@ -2959,11 +2813,8 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
 
             # OC is not strictly required for citation extraction (uses HTML scraping)
             # but we validate it for consistency with other tools
-            config = ctx.session_config if ctx else None
-            session_oc = getattr(config, 'oc', None) if config else None
-
             try:
-                resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
+                resolved_oc = resolve_oc(override_oc=oc)
                 logger.debug(f"article_citation called with OC: {resolved_oc[:4]}...")
             except ValueError:
                 # OC not required for citation extraction
@@ -3059,9 +2910,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             # Returns: 특정범죄 가중처벌 등에 관한 법률 제5조의3 (도주차량 운전자의 가중처벌)
         """
         try:
-            config = ctx.session_config if ctx else None
-            session_oc = getattr(config, 'oc', None) if config else None
-            resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
+            resolved_oc = resolve_oc(override_oc=oc)
 
             snake_params = {
                 "oc": resolved_oc,
@@ -3134,9 +2983,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
             # Returns: 상법 제54조 (상사법정이율), 의료법 제50조 (「민법」의 준용), etc.
         """
         try:
-            config = ctx.session_config if ctx else None
-            session_oc = getattr(config, 'oc', None) if config else None
-            resolved_oc = resolve_oc(override_oc=oc, session_oc=session_oc)
+            resolved_oc = resolve_oc(override_oc=oc)
 
             snake_params = {
                 "oc": resolved_oc,
@@ -3427,6 +3274,4 @@ Tool selection priority for unclear queries:
     logger.info("  - aiSearch, aiRltLs_search (Knowledge Base AI-powered search)")
     logger.info("Prompts (6): search-korean-law, get-law-article, get-article-with-citations, analyze-law-citations, search-admin-rules, tool-selection-guide")
     logger.info("Resources (2): frequently-used-laws (static), law-code-lookup (template)")
-    logger.info(f"Session config: {session_config is not None}")
-
     return server

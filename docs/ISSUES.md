@@ -10,11 +10,9 @@
 
 **Status:** KNOWN ISSUE | **Severity:** MEDIUM | **Discovered:** 2025-12-11
 
-Newer MCP clients send `protocolVersion: "2025-06-18"` which may cause intermittent "Unavailable" errors in Smithery logs. This is an ecosystem-wide transitional problem, not a LexLink bug.
+Newer MCP clients send `protocolVersion: "2025-06-18"` which may cause intermittent errors. This is an ecosystem-wide transitional problem, not a LexLink bug.
 
 **Workaround:** Downgraded to `mcp 1.20.0` (from 1.23.3 which caused 502 errors).
-
-**Affected clients:** Claude Code (`mcp 0.1.0`), Smithery-host. The `smithery-scanner` (protocol `2024-11-05`) works fine.
 
 **Fix:** Wait for `mcp` package to support protocol `2025-06-18` properly, then upgrade.
 
@@ -34,9 +32,9 @@ Other service tools (prec, detc, expc, decc) vary in size and usually fit under 
 
 ## Resolved Issues
 
-### Issue #11: Smithery Build Detects npm Instead of Python - FIXED v1.3.2
+### Issue #11: Smithery Build Detects npm Instead of Python - FIXED v1.3.2 (HISTORICAL)
 
-Smithery's build system incorrectly detected npm for this Python project. Fixed by adding explicit `startCommand` configuration to `smithery.yaml` with `uv run start`.
+Smithery's build system incorrectly detected npm for this Python project. Fixed by adding explicit `startCommand` configuration to `smithery.yaml` with `uv run start`. *Note: Smithery dependency removed in v1.5.0.*
 
 ### Issue #9: article_citation Missing Dependency - FIXED v1.2.10
 
@@ -127,4 +125,4 @@ Bug fixes applied to `src/lexlink/citation.py` (2025-11-30).
 ## Contacts
 
 **API Provider:** 법제처 공동활용 유지보수팀 (02-2109-6446) | [open.law.go.kr](https://open.law.go.kr)
-**MCP/Smithery:** [smithery.ai/docs](https://smithery.ai/docs) | [modelcontextprotocol.io](https://modelcontextprotocol.io)
+**MCP:** [modelcontextprotocol.io](https://modelcontextprotocol.io)

@@ -6,6 +6,19 @@ All notable changes to LexLink are documented here in both English and Korean.
 
 ## English
 
+### v1.5.0 - 2026-02-28
+**Refactor: Remove Smithery Dependency**
+
+- **Removed:** `smithery` package dependency and 8 transitive dependencies (art, rich, typer, etc.)
+- **Removed:** `config.py` (`LexLinkConfig` schema), `smithery.yaml`
+- **Simplified:** OC resolution from 3-tier (tool arg > session config > env) to 2-tier (tool arg > env var)
+- **Simplified:** `create_server()` no longer takes `session_config` parameter
+- **Simplified:** `http_server.py` no longer unwraps `SmitheryFastMCP` wrapper
+- **Added:** `stdio_server.py` entry point replacing `smithery.cli.start:main`
+- **Updated:** `_get_client()` reads from `LEXLINK_BASE_URL` and `LEXLINK_TIMEOUT` env vars
+- **Scripts:** Removed `dev`, `start`, `playground`; added `stdio` for stdio transport
+- **Impact:** Cleaner dependency tree, simpler codebase (~80 lines removed across 26 tools)
+
 ### v1.4.0 - 2026-02-28
 **Feature: MCP Resources - Law ID Cache**
 
@@ -397,6 +410,19 @@ All notable changes to LexLink are documented here in both English and Korean.
 ---
 
 ## 한국어 (Korean)
+
+### v1.5.0 - 2026-02-28
+**리팩토링: Smithery 의존성 제거**
+
+- **제거:** `smithery` 패키지 의존성 및 8개 전이 의존성 (art, rich, typer 등)
+- **제거:** `config.py` (`LexLinkConfig` 스키마), `smithery.yaml`
+- **단순화:** OC 해석 3단계 (도구 인자 > 세션 설정 > 환경변수) → 2단계 (도구 인자 > 환경변수)
+- **단순화:** `create_server()`에서 `session_config` 매개변수 제거
+- **단순화:** `http_server.py`에서 `SmitheryFastMCP` 래퍼 해제 불필요
+- **추가:** `stdio_server.py` 진입점 (`smithery.cli.start:main` 대체)
+- **업데이트:** `_get_client()`가 `LEXLINK_BASE_URL`, `LEXLINK_TIMEOUT` 환경변수 사용
+- **스크립트:** `dev`, `start`, `playground` 제거; stdio 전송용 `stdio` 추가
+- **영향:** 의존성 트리 정리, 코드베이스 단순화 (26개 도구에서 ~80줄 제거)
 
 ### v1.4.0 - 2026-02-28
 **기능: MCP 리소스 - 법령 ID 캐시**

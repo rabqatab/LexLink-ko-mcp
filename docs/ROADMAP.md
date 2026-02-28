@@ -1,7 +1,7 @@
 # LexLink API Implementation Roadmap
 
 **Last Updated:** 2026-02-28
-**Status:** All 26 tools + 2 resources implemented (v1.4.0)
+**Status:** All 26 tools + 2 resources implemented (v1.5.0)
 
 ---
 
@@ -102,7 +102,7 @@ For detailed parameter specs, see `API_REFERENCE.md`.
 - Common search logic (320 lines saved)
 - Common service logic (300 lines saved)
 
-Explicit `@server.tool()` decorators and `ctx: Context = None` signatures remain on each tool for MCP/Smithery/PlayMCP compatibility.
+Explicit `@server.tool()` decorators and `ctx: Context = None` signatures remain on each tool for MCP compatibility.
 
 ---
 

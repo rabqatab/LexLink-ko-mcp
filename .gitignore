@@ -20,9 +20,6 @@ venv/
 # OS
 .DS_Store
 
-# Smithery
-.smithery/
-
 # Ruff
 .ruff_cache/
 

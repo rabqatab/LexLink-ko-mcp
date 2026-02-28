@@ -1,7 +1,7 @@
 # LexLink Project Status
 
 **Last Updated:** 2026-02-28
-**Version:** v1.4.0
+**Version:** v1.5.0
 **Status:** Production-Ready (Phase 5 Complete)
 
 ---
@@ -17,14 +17,13 @@
 | **E2E Tests** | 5/5 (100%) |
 | **LLM Integration** | 26/26 (100%) |
 | **Citation Tests** | 25 unit + 15 integration (100%) |
-| **Deployed On** | Smithery.ai, Kakao PlayMCP |
+| **Deployed On** | Kakao PlayMCP (GCP + nginx) |
 
 ---
 
 ## Architecture
 
-- **Session config:** Smithery Context injection (`ctx: Context = None`)
-- **OC priority:** Tool arg > Session config > Env var
+- **OC priority:** Tool arg > Env var (set via HTTP header middleware or .env)
 - **Response format:** XML only (JSON not supported by law.go.kr)
 - **Citation extraction:** HTML parsing (100% accuracy, zero API cost)
 - **AI search:** law.go.kr knowledge base API for semantic queries
@@ -36,7 +35,7 @@
 | `src/lexlink/server.py` | Main server (~3,400 lines, 26 tools, 6 prompts, 2 resources) |
 | `src/lexlink/citation.py` | HTML citation extraction (~450 lines) |
 | `src/lexlink/client.py` | HTTP client for law.go.kr |
-| `src/lexlink/config.py` | Session configuration |
+| `src/lexlink/stdio_server.py` | Stdio transport entry point |
 | `src/lexlink/validation.py` | Input validation |
 | `src/lexlink/params.py` | Parameter mapping |
 | `src/lexlink/errors.py` | Error codes and responses |
@@ -49,7 +48,7 @@
 | `ROADMAP.md` | Phase-by-phase implementation history |
 | `ISSUES.md` | Bug tracker (9 fixed, 2 open) |
 | `DEPLOYMENT_GUIDE.md` | EC2/PlayMCP deployment instructions |
-| `../CHANGELOG.md` | Version history (v1.0.0 - v1.4.0) |
+| `../CHANGELOG.md` | Version history (v1.0.0 - v1.5.0) |
 
 ## Open Issues
 

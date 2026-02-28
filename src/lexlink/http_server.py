@@ -55,7 +55,6 @@ from starlette.routing import Mount
 
 from mcp.server.fastmcp import FastMCP
 
-from .config import LexLinkConfig
 from .server import create_server
 from .raw_logger import log_mcp_call, generate_request_id
 
@@ -208,33 +207,9 @@ class RawLoggingMiddleware(BaseHTTPMiddleware):
         return events
 
 
-def get_config_from_env() -> Optional[LexLinkConfig]:
-    """Create config from environment variables."""
-    oc = os.getenv("OC")
-    if oc:
-        return LexLinkConfig(
-            oc=oc,
-            http_timeout_s=int(os.getenv("LEXLINK_TIMEOUT", "60"))
-        )
-    return None
-
-
 def get_fastmcp_server() -> FastMCP:
-    """
-    Get the underlying FastMCP server instance.
-
-    The create_server() returns a SmitheryFastMCP wrapper, but we need
-    the underlying FastMCP for HTTP transport methods.
-    """
-    config = get_config_from_env()
-    smithery_server = create_server(config)
-
-    # Access the underlying FastMCP from SmitheryFastMCP wrapper
-    if hasattr(smithery_server, '_fastmcp'):
-        return smithery_server._fastmcp
-    else:
-        # Fallback: if it's already a FastMCP
-        return smithery_server
+    """Get the FastMCP server instance."""
+    return create_server()
 
 
 # Create server instance
@@ -291,16 +266,7 @@ def run_http_server(host: str = "0.0.0.0", port: int = 8000):
     logger.info(f"Endpoint: http://{host}:{port}/mcp")
     logger.info("PlayMCP Auth: Send OC via 'OC' HTTP header")
 
-    # Create a fresh server with stateless_http=True for proper HTTP transport
-    config = get_config_from_env()
-    from .server import create_server
-    http_server = create_server(config)
-
-    # Access the underlying FastMCP
-    if hasattr(http_server, '_fastmcp'):
-        fastmcp = http_server._fastmcp
-    else:
-        fastmcp = http_server
+    fastmcp = create_server()
 
     # Get the streamable HTTP app with proper configuration
     _http_app = fastmcp.streamable_http_app()

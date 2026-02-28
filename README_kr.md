@@ -35,7 +35,6 @@ LexLink는 대한민국 국가법령정보 API ([open.law.go.kr](https://open.la
     - 한글 법령명 또는 약칭으로 조회 (`lexlink://law/{name}`)
     - 동적 캐싱: 검색 결과가 자동으로 캐시에 추가
 - **100% 의미론적 검증** - 26개 도구 모두 실제 법령 데이터 반환 확인
-- **세션 설정** - 한 번 설정하면 모든 도구 호출에서 사용
 - **오류 처리** - 해결 방법이 포함된 실행 가능한 오류 메시지
 - **한글 텍스트 지원** - UTF-8 인코딩으로 한글 문자 정확히 처리
 - **응답 형식** - HTML, XML 지원 (다양한 형식 지원)
@@ -53,15 +52,14 @@ LexLink는 대한민국 국가법령정보 API ([open.law.go.kr](https://open.la
 | **API 커버리지** | 150개 이상 엔드포인트 중 ~17% 커버 |
 | **LLM 통합** | ✅ 검증 완료 (Gemini) |
 | **코드 품질** | 깔끔하고 문서화되고 테스트됨 |
-| **버전** | v1.4.0 |
+| **버전** | v1.5.0 |
 
-**최근 성과:** MCP 리소스 추가! 법령 ID 캐시로 불필요한 검색 호출 제거 (테스트에서 LLM 100% 채택).
+**최근:** Smithery 의존성 제거. 2단계 OC 해석 (도구 인자 > 환경변수), 의존성 9개 감소.
 
 ## 사전 요구사항
 
 - **Python 3.10+**
-- **Smithery API 키** (선택사항, 배포용): [smithery.ai/account/api-keys](https://smithery.ai/account/api-keys)에서 발급
-- **law.go.kr OC 식별자**:  대한민국 국가법령정보 API ([open.law.go.kr](https://open.law.go.kr/)) 에서 등록 가능, 이메일 로컬 부분 (예: `g4c@korea.kr` → `g4c`)
+- **law.go.kr OC 식별자**: [open.law.go.kr](https://open.law.go.kr/)에서 등록, 이메일 로컬 부분 (예: `g4c@korea.kr` → `g4c`)
 
 ## 빠른 시작
 
@@ -73,25 +71,13 @@ uv sync
 
 ### 2. OC 식별자 설정
 
-세 가지 방법 중 하나를 선택하세요:
-
-**옵션 A: 세션 설정 (권장)**
+**옵션 A: 환경 변수 (권장)**
 ```bash
-# OC를 포함한 개발 서버 시작
-uv run dev
-# Smithery UI에서 세션 설정의 oc 필드 설정
+# 환경 변수로 OC 설정
+export OC=your_id_here
 ```
 
-**옵션 B: 환경 변수**
-```bash
-# 예제 파일 복사
-cp .env.example .env
-
-# .env 파일을 편집하고 OC 설정
-OC=your_id_here
-```
-
-**옵션 C: 도구 인자로 전달**
+**옵션 B: 도구 인자로 전달**
 ```python
 # 각 도구 호출에서 OC 재정의
 eflaw_search(query="법령명", oc="your_id")
@@ -100,11 +86,11 @@ eflaw_search(query="법령명", oc="your_id")
 ### 3. 서버 실행
 
 ```bash
-# 개발 모드 (핫 리로드 포함)
-uv run dev
+# Stdio 전송 (Claude Code, Cursor 등)
+OC=your_oc uv run stdio
 
-# Smithery Playground를 이용한 대화형 테스트
-uv run playground
+# HTTP 전송 (Kakao PlayMCP용)
+OC=your_oc TRANSPORT=http uv run serve
 ```
 
 ## 사용 가능한 도구
@@ -467,23 +453,21 @@ aiRltLs_search(
 
 ## 설정
 
-### 세션 설정 스키마
+### 환경 변수
 
-Smithery UI 또는 URL 파라미터에서 한 번 설정:
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `OC` | *(필수)* | law.go.kr API 식별자 (이메일 로컬 부분) |
+| `LEXLINK_BASE_URL` | `http://www.law.go.kr` | API 기본 URL |
+| `LEXLINK_TIMEOUT` | `60` | HTTP 요청 타임아웃 (초) |
+| `SLIM_RESPONSE` | *(미설정)* | `true` 설정 시 크기 제한 플랫폼용 XML 제거 |
+| `TRANSPORT` | `sse` | 전송 유형: `sse` 또는 `http` |
 
-```python
-{
-    "oc": "your_id",              # 필수: law.go.kr 사용자 ID
-    "http_timeout_s": 60          # 선택사항: HTTP 타임아웃 (5-120초, 기본값: 60)
-}
-```
-
-### 매개변수 우선순위
+### OC 우선순위
 
 OC 식별자를 확인할 때:
 1. **도구 인자** (최우선) - 도구 호출 시 `oc` 매개변수
-2. **세션 설정** - Smithery UI/URL에서 설정
-3. **환경 변수** - .env 파일의 `OC`
+2. **환경 변수** - `OC` 환경변수 (.env 또는 HTTP 헤더 미들웨어로 설정)
 
 ## 사용 예시
 
@@ -532,8 +516,7 @@ result = eflaw_search(query="test")
     "message": "OC parameter is required but not provided.",
     "hints": [
         "1. Tool argument: oc='your_value'",
-        "2. Session config: Set 'oc' in Smithery settings",
-        "3. Environment variable: OC=your_value"
+        "2. Environment variable: OC=your_value"
     ]
 }
 ```
@@ -666,7 +649,7 @@ lexlink-ko-mcp/
 ├── src/lexlink/
 │   ├── server.py        # 26개 도구가 포함된 메인 MCP 서버
 │   ├── http_server.py   # Kakao PlayMCP용 HTTP/SSE 서버
-│   ├── config.py        # 세션 설정 스키마
+│   ├── stdio_server.py  # Stdio 전송 진입점
 │   ├── params.py        # 매개변수 확인 및 매핑
 │   ├── validation.py    # 입력 검증
 │   ├── parser.py        # XML 파싱 유틸리티
@@ -705,33 +688,18 @@ uv run pytest -m e2e
 
 124개 이상의 남은 API에서 추가 도구를 구현하려면:
 1. `src/lexlink/server.py`에 확립된 패턴 따르기
-2. 세션 설정에 Context 주입 사용
+2. MCP 로깅/진행 상태를 위해 `ctx: Context = None` 매개변수 사용
 3. 범용 파서 함수 사용 (`extract_items_list`, `update_items_list`)
 4. 의미론적 검증 테스트 추가
 
 **도구 구현 패턴:**
 - 각 도구는 MCP 스키마가 있는 데코레이터 함수
-- 세션 설정을 위해 `ctx: Context = None` 매개변수 사용
-- 3단계 매개변수 확인: 도구 인자 > 세션 > 환경변수
+- MCP 컨텍스트를 위해 `ctx: Context = None` 매개변수 사용
+- 2단계 OC 확인: 도구 인자 > 환경변수
 - 범용 파서 함수는 모든 XML 태그에서 작동
 - 실행 가능한 힌트가 포함된 포괄적인 오류 처리
 
 ## 배포
-
-### Smithery에 배포
-
-1. GitHub 리포지토리 생성:
-   ```bash
-   git init
-   git add .
-   git commit -m "Initial commit"
-   git remote add origin https://github.com/YOUR_USERNAME/YOUR_REPO.git
-   git push -u origin main
-   ```
-
-2. [smithery.ai/new](https://smithery.ai/new)에서 배포
-
-3. Smithery UI에서 세션 설정 구성
 
 ### Kakao PlayMCP에 배포 (HTTP 서버)
 
@@ -816,12 +784,9 @@ export PYTHONIOENCODING=utf-8
 
 ### "Timeout" 오류
 
-**해결책:** 세션 설정에서 타임아웃을 늘리세요:
-```python
-{
-    "oc": "your_id",
-    "http_timeout_s": 90  # 기본값 60초에서 증가
-}
+**해결책:** 환경 변수로 타임아웃을 늘리세요:
+```bash
+export LEXLINK_TIMEOUT=90  # 기본값 60초에서 증가
 ```
 
 ### 의존성 업데이트 후 서버가 시작되지 않음
@@ -851,7 +816,6 @@ uv sync --reinstall
 
 - **law.go.kr** - 대한민국 국가법령정보 API
 - **MCP** - Anthropic의 Model Context Protocol
-- **Smithery** - MCP 서버 배포 플랫폼
 
 ## 지원
 
@@ -862,37 +826,16 @@ uv sync --reinstall
 
 ## 변경 로그
 
-### v1.4.0 - 2026-02-28
-**기능: MCP 리소스 - 법령 ID 캐시**
+### v1.5.0 - 2026-02-28
+**리팩토링: Smithery 의존성 제거**
 
-- **신규:** 법령명→법령ID 캐시 조회를 위한 MCP 리소스 2개
-  - `lexlink://laws/frequently-used` (~20개 법령 정적 목록)
-  - `lexlink://law/{name}` (법령명/약칭으로 템플릿 조회)
-- `eflaw_search`와 `law_search` 결과로 **동적 캐싱**
-- **LLM 테스트:** 100회 실행에서 100% 리소스 채택 (Gemini 2.5/3 Flash)
-- 시드 ID를 실제 law.go.kr API로 검증
+- `smithery` 패키지 및 8개 전이 의존성 제거
+- OC 해석을 2단계로 단순화 (도구 인자 > 환경변수)
+- stdio 전송을 위한 `stdio_server.py` 진입점 추가
+- 자세한 내용은 [CHANGELOG.md](CHANGELOG.md) 참조
 
-### v1.3.2 - 2026-01-13
-**기능: PlayMCP 트래픽 로깅**
-
-- **신규 모듈:**
-  - `raw_logger.py` - 대시보드 호환 MCP 트래픽 로거
-  - `log_processor.py` - 로그 형식 변환 유틸리티
-- **구현:**
-  - HTTP 서버에 `RawLoggingMiddleware` 추가로 요청/응답 캡처
-  - 요청/응답 쌍이 병합된 JSONL 형식
-  - `logs/playmcp/YYYY-MM-DD.jsonl` 일별 로그 로테이션
-  - SSE 스트리밍 응답 파싱
-- **로그 스키마:**
-  - `request_id`, `timestamp`, `duration_ms`
-  - `method`, `tool`, `arguments`, `result`
-  - `status_code`, `client_ip`, `headers`
-- **영향:**
-  - PlayMCP 배포 환경의 트래픽 분석 가능
-  - 모니터링을 위한 대시보드 호환 형식
-
-전체 변경 로그(v1.0.0 – v1.4.0)는 [CHANGELOG.md](CHANGELOG.md)를 참조하세요.
+전체 변경 로그(v1.0.0 – v1.5.0)는 [CHANGELOG.md](CHANGELOG.md)를 참조하세요.
 
 ---
 
-**[Smithery](https://smithery.ai)로 구축 | [MCP](https://modelcontextprotocol.io) 기반**
+**[MCP](https://modelcontextprotocol.io) 기반**

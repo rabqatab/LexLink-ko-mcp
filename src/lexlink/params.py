@@ -2,7 +2,7 @@
 Parameter resolution and mapping for law.go.kr API.
 
 This module handles:
-1. OC parameter resolution from multiple sources (tool arg > session > env)
+1. OC parameter resolution (tool arg > env var)
 2. Parameter name mapping (snake_case → API format)
 3. UTF-8 encoding for Korean parameters (MOK)
 """
@@ -12,51 +12,36 @@ from typing import Optional
 from urllib.parse import quote
 
 
-def resolve_oc(
-    override_oc: Optional[str] = None,
-    session_oc: Optional[str] = None
-) -> str:
+def resolve_oc(override_oc: Optional[str] = None) -> str:
     """
-    Resolve OC parameter from multiple sources with priority order.
+    Resolve OC parameter with priority order.
 
     Priority (highest to lowest):
     1. Tool argument override (passed explicitly in tool call)
-    2. Session configuration (set in Smithery UI/URL)
-    3. Environment variable OC
+    2. Environment variable OC (set via .env or HTTP header middleware)
 
     Args:
         override_oc: Optional override from tool argument
-        session_oc: Optional value from session configuration
 
     Returns:
         Resolved OC value
 
     Raises:
-        ValueError: If OC cannot be resolved from any source, with helpful message
+        ValueError: If OC cannot be resolved from any source
 
     Examples:
         >>> resolve_oc(override_oc="tool_value")
         'tool_value'
 
-        >>> resolve_oc(session_oc="session_value")
-        'session_value'
-
         >>> os.environ["OC"] = "env_value"
         >>> resolve_oc()
         'env_value'
-
-        >>> resolve_oc()  # All sources empty
-        ValueError: OC parameter is required but not provided...
     """
     # Priority 1: Tool argument override
     if override_oc and override_oc.strip():
         return override_oc.strip()
 
-    # Priority 2: Session configuration
-    if session_oc and session_oc.strip():
-        return session_oc.strip()
-
-    # Priority 3: Environment variable
+    # Priority 2: Environment variable
     env_oc = os.getenv("OC", "").strip()
     if env_oc:
         return env_oc
@@ -66,8 +51,7 @@ def resolve_oc(
         "OC parameter is required but not provided. "
         "Please provide it via:\n"
         "  1. Tool argument: oc='your_value' (highest priority)\n"
-        "  2. Session config: Set 'oc' in Smithery settings\n"
-        "  3. Environment variable: OC=your_value (fallback)\n"
+        "  2. Environment variable: OC=your_value\n"
         "\n"
         "OC should be your email local part (e.g., g4c@korea.kr → g4c)"
     )
