@@ -2,9 +2,9 @@
 # 국가법령정보 공동활용 Open API — 완전한 API 사양서
 
 > **목적:** LLM/에이전트가 그대로 ingest / parse / convert 할 수 있도록 통일된 포맷의 스펙 제공
-> **범위:** All 191 APIs available from law.go.kr Open API (24 implemented in LexLink)
+> **범위:** All 191 APIs available from law.go.kr Open API (26 implemented in LexLink)
 > **Source:** https://open.law.go.kr/LSO/openApi/guideList.do
-> **Last Updated:** 2025-12-09
+> **Last Updated:** 2026-02-28
 
 ---
 
@@ -23,11 +23,11 @@
 | **법령용어 (Legal Terms)** | 2 | 0 | Not implemented |
 | **모바일 (Mobile)** | 22 | 0 | Not implemented (duplicate) |
 | **맞춤형 (Customized)** | 6 | 0 | Not implemented |
-| **법령정보 지식베이스 (Knowledge Base)** | 9 | 0 | Not implemented |
+| **법령정보 지식베이스 (Knowledge Base)** | 9 | 2 | ✅ AI search implemented |
 | **중앙부처 1차 해석 (Ministry Interpretations)** | 64 | 0 | Not implemented |
 | **특별행정심판 (Special Appeals)** | 8 | 0 | Not implemented |
 | **Custom (article_citation)** | 1 | 1 | ✅ HTML parsing tool |
-| **Total** | **191** | **24** | **12.5% coverage** |
+| **Total** | **191** | **26** | **~13.6% coverage** |
 
 ---
 

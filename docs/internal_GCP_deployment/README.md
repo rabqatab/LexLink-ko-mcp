@@ -1,10 +1,10 @@
 # LexLink MCP Server - GCP Deployment Guide
 
-> **Note**: This guide is **separate from** the existing PlayMCP/AWS deployment at [`assets/DEPLOYMENT_GUIDE.md`](../../assets/DEPLOYMENT_GUIDE.md).
+> **Note**: This guide is **separate from** the existing PlayMCP/AWS deployment at [`DEPLOYMENT_GUIDE.md`](../DEPLOYMENT_GUIDE.md).
 >
 > | Guide | Target | Transport | Use Case |
 > |-------|--------|-----------|----------|
-> | `assets/DEPLOYMENT_GUIDE.md` | AWS EC2 + Kakao PlayMCP | SSE/Streaming | Public PlayMCP marketplace |
+> | `docs/DEPLOYMENT_GUIDE.md` | AWS EC2 + Kakao PlayMCP | SSE/Streaming | Public PlayMCP marketplace |
 > | **This guide** | GCP Cloud Run | HTTP (non-streaming) | In-company enterprise use |
 
 ## Why GCP Instead of PlayMCP?
@@ -47,16 +47,16 @@ gcloud services enable \
 
 > **Note**: Project ID must be lowercase with hyphens (e.g., `my-mcp-server`), not display name.
 
-### Step 1: Add Entry Point to pyproject.toml
+### Step 1: Verify Entry Point in pyproject.toml
 
-Add this to your existing `pyproject.toml` (Smithery-compatible):
+Ensure `pyproject.toml` has the `serve` script (already present by default):
 
 ```toml
 [project.scripts]
 serve = "lexlink.http_server:main"
 ```
 
-> **Warning**: Do NOT declare `[project.scripts]` twice in pyproject.toml. If it already exists, add the entry to the existing block. Duplicate TOML tables cause Cloud Build to fail.
+> **Warning**: Do NOT declare `[project.scripts]` twice in pyproject.toml. Duplicate TOML tables cause Cloud Build to fail.
 
 ### Step 2: Create Procfile (Optional but Recommended)
 
@@ -372,7 +372,7 @@ git clone https://github.com/your-org/lexlink-ko-mcp.git
 cd lexlink-ko-mcp && uv sync
 
 # Create systemd service and nginx reverse proxy
-# (See assets/DEPLOYMENT_GUIDE.md for detailed nginx/systemd config)
+# (See docs/DEPLOYMENT_GUIDE.md for detailed nginx/systemd config)
 ```
 
 ### Appendix C: Cloud Build CI/CD
@@ -397,7 +397,6 @@ docs/internal_GCP_deployment/
 ├── README.md                       # This guide
 ├── QUICKSTART.md                   # One-page quick reference
 ├── smoke_test.sh                   # Verification script (run after deploy)
-├── lexlink_mcp_errors_summary.md   # Debugging log (Korean)
 ├── Dockerfile                      # Container build (Appendix A)
 └── cloudbuild.yaml                 # CI/CD pipeline (Appendix C)
 ```

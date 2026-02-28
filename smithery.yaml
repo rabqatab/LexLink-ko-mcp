@@ -1,1 +1,13 @@
-runtime: python
+# Smithery configuration file: https://smithery.ai/docs/config#smitheryyaml
+
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    properties:
+      oc:
+        type: string
+        description: Your law.go.kr API identifier (email local part). Register at open.law.go.kr to get one.
+  commandFunction:
+    |-
+    config => ({ command: 'uv', args: ['run', 'start'], env: config.oc ? { OC: config.oc } : {} })

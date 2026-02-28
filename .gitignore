@@ -29,6 +29,8 @@ venv/
 # AI tools & docs
 # docs/
 .claude/
+.obsidian/
+.serena/
 
 # tests
 test/

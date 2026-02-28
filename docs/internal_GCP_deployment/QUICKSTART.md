@@ -2,7 +2,7 @@
 
 **Deploy LexLink to Cloud Run in 5 minutes—no Dockerfile needed.**
 
-> For PlayMCP/AWS, see [`assets/DEPLOYMENT_GUIDE.md`](../../assets/DEPLOYMENT_GUIDE.md)
+> For PlayMCP/AWS, see [`DEPLOYMENT_GUIDE.md`](../DEPLOYMENT_GUIDE.md)
 
 ---
 
@@ -22,14 +22,9 @@ gcloud services enable run.googleapis.com secretmanager.googleapis.com cloudbuil
 
 ## Deploy (Source-Based)
 
-### 1. Add entry point to `pyproject.toml`
+### 1. Verify entry point in `pyproject.toml`
 
-```toml
-[project.scripts]
-serve = "lexlink.http_server:main"
-```
-
-> **Warning**: Don't duplicate `[project.scripts]`. Merge if it exists.
+Ensure `serve = "lexlink.http_server:main"` exists under `[project.scripts]` (already present by default).
 
 ### 2. Create `Procfile` in project root
 
@@ -122,7 +117,6 @@ docs/internal_GCP_deployment/
 ├── README.md                    # Full guide
 ├── QUICKSTART.md                # This file
 ├── smoke_test.sh                # Verification script
-├── lexlink_mcp_errors_summary.md # Debugging reference
 ├── Dockerfile                   # Appendix option
 └── cloudbuild.yaml              # CI/CD option
 ```
