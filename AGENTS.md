@@ -1,12 +1,12 @@
 # AGENTS.md
 
-LexLink is a Model Context Protocol (MCP) server providing structured access to 191+ Korean law APIs from the National Law Information Center (law.go.kr). It exposes 26 tools and 6 prompts for AI-powered legal research.
+LexLink is a Model Context Protocol (MCP) server providing structured access to 191+ Korean law APIs from the National Law Information Center (law.go.kr). It exposes 26 tools, 6 prompts, and 2 resources for AI-powered legal research.
 
 ## Architecture
 
 ```
 src/lexlink/
-├── server.py        # MCP server: 26 tools + 6 prompts (~3,300 lines)
+├── server.py        # MCP server: 26 tools + 6 prompts + 2 resources (~3,400 lines)
 ├── client.py        # HTTP client for law.go.kr API
 ├── config.py        # Pydantic config schema (oc, timeout, base_url)
 ├── params.py        # Parameter mapping (snake_case → upstream camelCase)
@@ -38,6 +38,11 @@ src/lexlink/
 4. `analyze-law-citations` - Multi-article citation analysis
 5. `search-admin-rules` - Search administrative rules
 6. `tool-selection-guide` - Which search tool to use (vague vs specific)
+
+## MCP Resources (2 total)
+
+1. `lexlink://laws/frequently-used` (static) - Cached mapping of ~20 frequently-used law names to 법령ID codes
+2. `lexlink://law/{name}` (template) - Look up a specific law's 법령ID by Korean name or abbreviation
 
 ## Key Patterns
 

@@ -163,6 +163,12 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
 - aiSearch: Semantic search for law articles - returns FULL article text
 - aiRltLs_search: Find semantically related laws
 
+## Resources
+- Read `lexlink://laws/frequently-used` to get cached law name→법령ID mappings
+- Use `lexlink://law/{name}` to look up a specific law's 법령ID by name
+- Use the 법령ID directly with eflaw_service, law_service, etc. to skip the search step
+- For article_citation: you MUST first call eflaw_search to get the current MST (법령일련번호), as MST changes on law revision
+
 ## Quick Reference
 - MST (법령일련번호): Unique law identifier from search results
 - Article format: "000300" = 제3조, "001102" = 제11조의2
@@ -179,6 +185,91 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
                 timeout=session_config.http_timeout_s
             )
         return LawAPIClient()
+
+    # ==================== MCP Resources: Law ID Cache ====================
+
+    # In-memory cache: law_name -> {id, full_name, abbrev, type}
+    _law_cache: dict[str, dict] = {}
+
+    def _seed_cache() -> None:
+        """Populate cache with frequently-referenced Korean laws."""
+        # Verified against live law.go.kr API (2026-02-28)
+        seed = [
+            {"id": "001706", "full_name": "민법", "abbrev": None, "type": "법률"},
+            {"id": "001692", "full_name": "형법", "abbrev": None, "type": "법률"},
+            {"id": "001702", "full_name": "상법", "abbrev": None, "type": "법률"},
+            {"id": "001444", "full_name": "대한민국헌법", "abbrev": "헌법", "type": "헌법"},
+            {"id": "001700", "full_name": "민사소송법", "abbrev": None, "type": "법률"},
+            {"id": "001671", "full_name": "형사소송법", "abbrev": None, "type": "법률"},
+            {"id": "001218", "full_name": "행정소송법", "abbrev": None, "type": "법률"},
+            {"id": "001362", "full_name": "행정절차법", "abbrev": None, "type": "법률"},
+            {"id": "001586", "full_name": "국세기본법", "abbrev": None, "type": "법률"},
+            {"id": "001565", "full_name": "소득세법", "abbrev": None, "type": "법률"},
+            {"id": "001563", "full_name": "법인세법", "abbrev": None, "type": "법률"},
+            {"id": "001872", "full_name": "근로기준법", "abbrev": None, "type": "법률"},
+            {"id": "001823", "full_name": "건축법", "abbrev": None, "type": "법률"},
+            {"id": "010513", "full_name": "자본시장과 금융투자업에 관한 법률", "abbrev": "자본시장법", "type": "법률"},
+            {"id": "009294", "full_name": "국토의 계획 및 이용에 관한 법률", "abbrev": "국토계획법", "type": "법률"},
+            {"id": "001638", "full_name": "도로교통법", "abbrev": None, "type": "법률"},
+            {"id": "011357", "full_name": "개인정보 보호법", "abbrev": None, "type": "법률"},
+            {"id": "001827", "full_name": "부동산 가격공시에 관한 법률", "abbrev": "부동산공시법", "type": "법률"},
+            {"id": "009290", "full_name": "민사집행법", "abbrev": None, "type": "법률"},
+            {"id": "001676", "full_name": "특정범죄 가중처벌 등에 관한 법률", "abbrev": "특정범죄가중법", "type": "법률"},
+        ]
+        for entry in seed:
+            _law_cache[entry["full_name"]] = entry
+            if entry["abbrev"]:
+                _law_cache[entry["abbrev"]] = entry
+
+    _seed_cache()
+
+    def _cache_law(full_name: str, law_id: str, abbrev: str | None, law_type: str) -> None:
+        """Add a law to the cache (called after search results are ranked)."""
+        if not full_name or not law_id:
+            return
+        entry = {
+            "id": str(law_id),
+            "full_name": full_name,
+            "abbrev": abbrev or None,
+            "type": law_type,
+        }
+        _law_cache[full_name] = entry
+        if entry["abbrev"]:
+            _law_cache[entry["abbrev"]] = entry
+
+    @server.resource(
+        "lexlink://laws/frequently-used",
+        name="frequently-used-laws",
+        description="Cached mapping of frequently-used Korean law names to their stable 법령ID codes. Use these IDs directly with eflaw_service, law_service, etc. to skip the search step.",
+        mime_type="application/json",
+    )
+    def get_frequently_used_laws() -> str:
+        """Return deduplicated list of all cached law entries as JSON."""
+        import json
+        # Deduplicate by id (abbrev keys point to same entry)
+        seen_ids: set[str] = set()
+        unique: list[dict] = []
+        for entry in _law_cache.values():
+            if entry["id"] not in seen_ids:
+                seen_ids.add(entry["id"])
+                unique.append(entry)
+        return json.dumps(unique, ensure_ascii=False, indent=2)
+
+    @server.resource(
+        "lexlink://law/{name}",
+        name="law-code-lookup",
+        description="Look up a specific Korean law's stable 법령ID by name (Korean). Returns the law's ID, full name, abbreviation, and type. If not found, use eflaw_search or law_search tool instead.",
+        mime_type="application/json",
+    )
+    def get_law_by_name(name: str) -> str:
+        """Look up a law by name or abbreviation."""
+        import json
+        if entry := _law_cache.get(name):
+            return json.dumps(entry, ensure_ascii=False, indent=2)
+        return json.dumps(
+            {"error": "not_found", "message": f"'{name}' not in cache. Use eflaw_search or law_search tool to find it."},
+            ensure_ascii=False,
+        )
 
     # ==================== TOOL 1: eflaw_search ====================
     @server.tool(
@@ -306,6 +397,15 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
                             # Add ranked data to response for LLM consumption
                             response["ranked_data"] = parsed_data
 
+                            # Cache top results for resource lookups
+                            for law in ranked_laws[:3]:
+                                _cache_law(
+                                    full_name=law.get("법령명한글", ""),
+                                    law_id=law.get("법령ID", ""),
+                                    abbrev=law.get("법령약칭명") or None,
+                                    law_type=law.get("법령구분명", ""),
+                                )
+
             return slim_response(response)
 
         except ValueError as e:
@@ -432,6 +532,15 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
                             # Update numOfRows to reflect trimmed results
                             parsed_data["numOfRows"] = str(original_display)
                             response["ranked_data"] = parsed_data
+
+                            # Cache top results for resource lookups
+                            for law in ranked_laws[:3]:
+                                _cache_law(
+                                    full_name=law.get("법령명한글", ""),
+                                    law_id=law.get("법령ID", ""),
+                                    abbrev=law.get("법령약칭명") or None,
+                                    law_type=law.get("법령구분명", ""),
+                                )
 
             return slim_response(response)
 
@@ -3304,7 +3413,7 @@ Tool selection priority for unclear queries:
             }
         ]
 
-    logger.info("LexLink server initialized with 26 tools and 6 prompts")
+    logger.info("LexLink server initialized with 26 tools, 6 prompts, and 2 resources")
     logger.info("Phase 1 & 2 Tools (15):")
     logger.info("  - eflaw_search, law_search, eflaw_service, law_service, eflaw_josub, law_josub")
     logger.info("  - elaw_search, elaw_service, admrul_search, admrul_service")
@@ -3317,6 +3426,7 @@ Tool selection priority for unclear queries:
     logger.info("Phase 5 Tools (2):")
     logger.info("  - aiSearch, aiRltLs_search (Knowledge Base AI-powered search)")
     logger.info("Prompts (6): search-korean-law, get-law-article, get-article-with-citations, analyze-law-citations, search-admin-rules, tool-selection-guide")
+    logger.info("Resources (2): frequently-used-laws (static), law-code-lookup (template)")
     logger.info(f"Session config: {session_config is not None}")
 
     return server

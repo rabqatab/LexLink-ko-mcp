@@ -1,7 +1,7 @@
 # LexLink Project Status
 
 **Last Updated:** 2026-02-28
-**Version:** v1.3.2
+**Version:** v1.4.0
 **Status:** Production-Ready (Phase 5 Complete)
 
 ---
@@ -12,6 +12,7 @@
 |--------|--------|
 | **Tools Implemented** | 26/26 (100%) |
 | **MCP Prompts** | 6/6 (100%) |
+| **MCP Resources** | 2 (1 static + 1 template) |
 | **Semantic Validation** | 26/26 (100%) |
 | **E2E Tests** | 5/5 (100%) |
 | **LLM Integration** | 26/26 (100%) |
@@ -32,7 +33,7 @@
 
 | File | Description |
 |------|-------------|
-| `src/lexlink/server.py` | Main server (~3,300 lines, 26 tools, 6 prompts) |
+| `src/lexlink/server.py` | Main server (~3,400 lines, 26 tools, 6 prompts, 2 resources) |
 | `src/lexlink/citation.py` | HTML citation extraction (~450 lines) |
 | `src/lexlink/client.py` | HTTP client for law.go.kr |
 | `src/lexlink/config.py` | Session configuration |
@@ -48,7 +49,7 @@
 | `ROADMAP.md` | Phase-by-phase implementation history |
 | `ISSUES.md` | Bug tracker (9 fixed, 2 open) |
 | `DEPLOYMENT_GUIDE.md` | EC2/PlayMCP deployment instructions |
-| `../CHANGELOG.md` | Version history (v1.0.0 - v1.3.2) |
+| `../CHANGELOG.md` | Version history (v1.0.0 - v1.4.0) |
 
 ## Open Issues
 

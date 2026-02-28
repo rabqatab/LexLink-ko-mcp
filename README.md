@@ -13,7 +13,7 @@ LexLink is an MCP (Model Context Protocol) server that exposes the Korean Nation
 
 ## Features
 
-- **26 MCP Tools** for comprehensive Korean law information access
+- **26 MCP Tools + 2 MCP Resources** for comprehensive Korean law information access
   - Search and retrieve Korean laws (effective date & announcement date)
   - Search and retrieve English-translated laws
   - Search and retrieve administrative rules (행정규칙)
@@ -30,6 +30,10 @@ LexLink is an MCP (Model Context Protocol) server that exposes the Korean Nation
   - **NEW: Phase 5 - AI-Powered Search**
     - Semantic search for natural language queries (aiSearch)
     - Related laws discovery (aiRltLs_search)
+  - **MCP Resources - Law ID Cache**
+    - Cached mapping of ~20 frequently-used law names to stable 법령ID codes
+    - Template lookup by Korean name or abbreviation (`lexlink://law/{name}`)
+    - Dynamic caching: search results automatically populate the cache
 - **100% Semantic Validation** - All 26 tools confirmed returning real law data
 - **Session Configuration** - Configure once, use across all tool calls
 - **Error Handling** - Actionable error messages with resolution hints
@@ -45,12 +49,13 @@ LexLink is an MCP (Model Context Protocol) server that exposes the Korean Nation
 | **Tools Implemented** | 26/26 (100%) ✅ |
 | **Semantic Validation** | 26/26 (100%) ✅ |
 | **MCP Prompts** | 6/6 (100%) ✅ |
+| **MCP Resources** | 2 (1 static + 1 template) ✅ |
 | **API Coverage** | ~17% of 150+ endpoints |
 | **LLM Integration** | ✅ Validated (Gemini) |
 | **Code Quality** | Clean, documented, tested |
-| **Version** | v1.3.2 |
+| **Version** | v1.4.0 |
 
-**Latest Achievement:** Phase 5 complete! Added AI-powered semantic search tools (aiSearch, aiRltLs_search) for natural language queries.
+**Latest Achievement:** MCP Resources added! Law ID cache eliminates redundant search calls (100% LLM adoption in testing).
 
 ## Prerequisites
 
@@ -856,22 +861,17 @@ This project is open source. See LICENSE file for details.
 
 ## Changelog
 
+### v1.4.0 - 2026-02-28
+**Feature: MCP Resources - Law ID Cache**
+
+- **New:** 2 MCP resources for cached law name→법령ID lookups
+  - `lexlink://laws/frequently-used` (static list of ~20 laws)
+  - `lexlink://law/{name}` (template lookup by name/abbreviation)
+- **Dynamic caching** from `eflaw_search` and `law_search` results
+- **LLM test:** 100% resource adoption across 100 runs (Gemini 2.5/3 Flash)
+- Seed IDs verified against live law.go.kr API
+
 ### v1.3.2 - 2026-01-13
-**Fix: Smithery Build npm Detection Error**
-
-- **Issue:** Smithery build system incorrectly detected npm as package manager, failing with "npm error path /home/repo/package.json"
-- **Root Cause:** Previous `smithery.yaml` only had `runtime: python` which is insufficient for Smithery's current build system
-- **Solution:**
-  - Rewrote `smithery.yaml` with proper `startCommand` configuration
-  - Added `type: stdio` to declare stdio-based MCP server
-  - Added `configSchema` for optional `oc` parameter in Smithery UI
-  - Added `commandFunction` to run `uv run start` with `OC` env var
-- **Files Changed:**
-  - `smithery.yaml` - Complete rewrite with `startCommand` configuration
-- **Reference:**
-  - [perplexity-mcp smithery.yaml](https://github.com/jsonallen/perplexity-mcp/blob/main/smithery.yaml) - Working Python MCP example
-
-### v1.3.1 - 2025-12-25
 **Feature: PlayMCP Traffic Logging**
 
 - **New Modules:**
@@ -890,7 +890,7 @@ This project is open source. See LICENSE file for details.
   - Enables traffic analysis for PlayMCP deployments
   - Dashboard-compatible format for monitoring
 
-For the full changelog (v1.0.0 – v1.3.2), see [CHANGELOG.md](CHANGELOG.md).
+For the full changelog (v1.0.0 – v1.4.0), see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 

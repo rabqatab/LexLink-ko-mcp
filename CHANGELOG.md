@@ -6,6 +6,27 @@ All notable changes to LexLink are documented here in both English and Korean.
 
 ## English
 
+### v1.4.0 - 2026-02-28
+**Feature: MCP Resources - Law ID Cache**
+
+- **New MCP Resources:**
+  - `lexlink://laws/frequently-used` (static) - Cached list of ~20 frequently-used Korean law names mapped to stable 법령ID codes
+  - `lexlink://law/{name}` (template) - Look up a specific law's 법령ID by Korean name or abbreviation
+- **Implementation:**
+  - In-memory cache seeded with 20 verified law entries (IDs verified against live law.go.kr API)
+  - Dynamic caching: `eflaw_search` and `law_search` auto-cache top 3 ranked results after each search
+  - Both full names and abbreviations are matchable (e.g., "자본시장법" → 자본시장과 금융투자업에 관한 법률)
+  - Template resource returns fallback message directing to `eflaw_search` or `law_search` when law is not cached
+- **LLM Preference Test (100 runs):**
+  - Both Gemini 2.5 Flash and Gemini 3 Flash Preview showed 100% resource adoption (0% search tool fallback)
+  - Template resource preferred over static: 92% (2.5-flash) / 70% (3-flash-preview)
+- **Other Changes:**
+  - Fixed `__init__.py` version: `0.1.0` → `1.3.2`
+  - Updated `SERVER_INSTRUCTIONS` with resources section and MST requirement for `article_citation`
+- **Impact:**
+  - Eliminates redundant `eflaw_search` calls for frequently-used laws
+  - LLMs can look up 법령ID directly via resources, skipping the search step
+
 ### v1.3.2 - 2026-01-13
 **Fix: Smithery Build npm Detection Error**
 
@@ -376,6 +397,27 @@ All notable changes to LexLink are documented here in both English and Korean.
 ---
 
 ## 한국어 (Korean)
+
+### v1.4.0 - 2026-02-28
+**기능: MCP 리소스 - 법령 ID 캐시**
+
+- **신규 MCP 리소스:**
+  - `lexlink://laws/frequently-used` (정적) - 자주 사용되는 ~20개 한국 법령명과 안정적인 법령ID 매핑 캐시
+  - `lexlink://law/{name}` (템플릿) - 한글 법령명 또는 약칭으로 특정 법령의 법령ID 조회
+- **구현:**
+  - 20개 검증된 법령 항목으로 시드된 인메모리 캐시 (실제 law.go.kr API로 ID 검증)
+  - 동적 캐싱: `eflaw_search`와 `law_search`가 검색 후 상위 3개 결과를 자동 캐시
+  - 정식명칭과 약칭 모두 검색 가능 (예: "자본시장법" → 자본시장과 금융투자업에 관한 법률)
+  - 캐시에 없는 법령은 `eflaw_search` 또는 `law_search` 사용 안내 메시지 반환
+- **LLM 선호도 테스트 (100회):**
+  - Gemini 2.5 Flash와 Gemini 3 Flash Preview 모두 100% 리소스 채택 (검색 도구 폴백 0%)
+  - 템플릿 리소스 선호: 92% (2.5-flash) / 70% (3-flash-preview)
+- **기타 변경:**
+  - `__init__.py` 버전 수정: `0.1.0` → `1.3.2`
+  - `SERVER_INSTRUCTIONS`에 리소스 섹션 및 `article_citation`의 MST 요구사항 추가
+- **영향:**
+  - 자주 사용되는 법령에 대한 불필요한 `eflaw_search` 호출 제거
+  - LLM이 리소스를 통해 법령ID를 직접 조회하여 검색 단계 생략 가능
 
 ### v1.3.2 - 2026-01-13
 **수정: Smithery 빌드 npm 감지 오류**

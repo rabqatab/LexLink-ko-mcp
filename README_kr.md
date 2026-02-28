@@ -13,7 +13,7 @@ LexLink는 대한민국 국가법령정보 API ([open.law.go.kr](https://open.la
 
 ## 주요 기능
 
-- **26개의 MCP 도구**로 포괄적인 한국 법령 정보 접근
+- **26개의 MCP 도구 + 2개의 MCP 리소스**로 포괄적인 한국 법령 정보 접근
   - 한국 법령 검색 및 조회 (시행일 & 공포일 기준)
   - 영문 번역 법령 검색 및 조회
   - 행정규칙 검색 및 조회 (훈령, 예규, 고시, 공고, 지침)
@@ -30,6 +30,10 @@ LexLink는 대한민국 국가법령정보 API ([open.law.go.kr](https://open.la
   - **신규: Phase 5 - AI 기반 검색**
     - 자연어 쿼리를 위한 의미론적 검색 (aiSearch)
     - 연관 법령 탐색 (aiRltLs_search)
+  - **MCP 리소스 - 법령 ID 캐시**
+    - 자주 사용되는 ~20개 법령명과 안정적인 법령ID 매핑 캐시
+    - 한글 법령명 또는 약칭으로 조회 (`lexlink://law/{name}`)
+    - 동적 캐싱: 검색 결과가 자동으로 캐시에 추가
 - **100% 의미론적 검증** - 26개 도구 모두 실제 법령 데이터 반환 확인
 - **세션 설정** - 한 번 설정하면 모든 도구 호출에서 사용
 - **오류 처리** - 해결 방법이 포함된 실행 가능한 오류 메시지
@@ -45,12 +49,13 @@ LexLink는 대한민국 국가법령정보 API ([open.law.go.kr](https://open.la
 | **구현된 도구** | 26/26 (100%) ✅ |
 | **의미론적 검증** | 26/26 (100%) ✅ |
 | **MCP 프롬프트** | 6/6 (100%) ✅ |
+| **MCP 리소스** | 2개 (정적 1 + 템플릿 1) ✅ |
 | **API 커버리지** | 150개 이상 엔드포인트 중 ~17% 커버 |
 | **LLM 통합** | ✅ 검증 완료 (Gemini) |
 | **코드 품질** | 깔끔하고 문서화되고 테스트됨 |
-| **버전** | v1.3.2 |
+| **버전** | v1.4.0 |
 
-**최근 성과:** Phase 5 완성! AI 기반 의미론적 검색 도구 (aiSearch, aiRltLs_search) 추가로 자연어 쿼리 지원.
+**최근 성과:** MCP 리소스 추가! 법령 ID 캐시로 불필요한 검색 호출 제거 (테스트에서 LLM 100% 채택).
 
 ## 사전 요구사항
 
@@ -857,22 +862,17 @@ uv sync --reinstall
 
 ## 변경 로그
 
+### v1.4.0 - 2026-02-28
+**기능: MCP 리소스 - 법령 ID 캐시**
+
+- **신규:** 법령명→법령ID 캐시 조회를 위한 MCP 리소스 2개
+  - `lexlink://laws/frequently-used` (~20개 법령 정적 목록)
+  - `lexlink://law/{name}` (법령명/약칭으로 템플릿 조회)
+- `eflaw_search`와 `law_search` 결과로 **동적 캐싱**
+- **LLM 테스트:** 100회 실행에서 100% 리소스 채택 (Gemini 2.5/3 Flash)
+- 시드 ID를 실제 law.go.kr API로 검증
+
 ### v1.3.2 - 2026-01-13
-**수정: Smithery 빌드 npm 감지 오류**
-
-- **문제:** Smithery 빌드 시스템이 npm을 패키지 매니저로 잘못 감지하여 "npm error path /home/repo/package.json" 오류 발생
-- **원인:** 기존 `smithery.yaml`에 `runtime: python`만 있어 현재 Smithery 빌드 시스템에 부족함
-- **해결책:**
-  - `smithery.yaml`을 적절한 `startCommand` 설정으로 재작성
-  - stdio 기반 MCP 서버 선언을 위해 `type: stdio` 추가
-  - Smithery UI에서 선택적 `oc` 파라미터를 위한 `configSchema` 추가
-  - `OC` 환경변수와 함께 `uv run start`를 실행하는 `commandFunction` 추가
-- **변경된 파일:**
-  - `smithery.yaml` - `startCommand` 설정으로 전면 재작성
-- **참조:**
-  - [perplexity-mcp smithery.yaml](https://github.com/jsonallen/perplexity-mcp/blob/main/smithery.yaml) - 작동하는 Python MCP 예시
-
-### v1.3.1 - 2025-12-25
 **기능: PlayMCP 트래픽 로깅**
 
 - **신규 모듈:**
@@ -891,7 +891,7 @@ uv sync --reinstall
   - PlayMCP 배포 환경의 트래픽 분석 가능
   - 모니터링을 위한 대시보드 호환 형식
 
-전체 변경 로그(v1.0.0 – v1.3.2)는 [CHANGELOG.md](CHANGELOG.md)를 참조하세요.
+전체 변경 로그(v1.0.0 – v1.4.0)는 [CHANGELOG.md](CHANGELOG.md)를 참조하세요.
 
 ---
 

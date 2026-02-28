@@ -1,7 +1,7 @@
 # LexLink API Implementation Roadmap
 
 **Last Updated:** 2026-02-28
-**Status:** All 26 tools implemented (v1.3.2)
+**Status:** All 26 tools + 2 resources implemented (v1.4.0)
 
 ---
 
@@ -85,6 +85,8 @@ For detailed parameter specs, see `API_REFERENCE.md`.
 **Key Innovation:** Uses law.go.kr's built-in AI search API for semantic/vague queries, complementing keyword-based tools.
 
 **MCP Prompt Added:** `tool-selection-guide`
+
+**MCP Resources Added:** `frequently-used-laws` (static list of ~20 law→ID mappings), `law-code-lookup` (template lookup by name). Search tools dynamically cache results for future resource lookups.
 
 ---
 
