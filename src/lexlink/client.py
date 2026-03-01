@@ -6,6 +6,7 @@ error normalization, and request logging.
 """
 
 import logging
+import re
 import time
 import uuid
 from typing import Literal
@@ -113,6 +114,7 @@ class LawAPIClient:
         try:
             response = self.client.get(url)
             response.raise_for_status()
+            response = self._follow_antibot(response)
 
             elapsed_ms = int((time.time() - start_time) * 1000)
 
@@ -178,6 +180,53 @@ class LawAPIClient:
                 ],
                 request_id=request_id,
             )
+
+    def _follow_antibot(self, response: httpx.Response, max_hops: int = 3) -> httpx.Response:
+        """
+        Follow law.go.kr JS anti-bot redirects.
+
+        law.go.kr sometimes returns HTML pages with JavaScript redirects
+        instead of API data. This method detects and follows them.
+        """
+        for i in range(max_hops):
+            if "location.assign" not in response.text:
+                return response
+
+            path = self._parse_antibot_url(response.text)
+            if not path:
+                logger.warning(f"Anti-bot page detected but could not parse redirect (hop {i+1})")
+                return response
+
+            logger.info(f"Following anti-bot redirect (hop {i+1})")
+            response = self.client.get(f"{self.base_url}{path}")
+            response.raise_for_status()
+
+        return response
+
+    @staticmethod
+    def _parse_antibot_url(html: str) -> str | None:
+        """
+        Parse redirect URL from law.go.kr anti-bot JavaScript.
+
+        Handles two known patterns:
+        - Pattern A (concat): x={t:'...', h:'...', o:'...'}; return x.t+x.h+x.o
+        - Pattern B (substr): x={o:'...', c:N}; z=M; return o.substr(0,c)+o.substr(c+z)
+        """
+        # Pattern A: three-part concatenation (t + h + o)
+        m = re.search(r"t:'([^']*)',h:'([^']*)'", html)
+        if m:
+            # Also need 'o' value
+            mo = re.search(r"o:'([^']*)'", html)
+            if mo:
+                return m.group(1) + m.group(2) + mo.group(1)
+
+        # Pattern B: substring slicing
+        m = re.search(r"o:'([^']*)',c:(\d+)},z=(\d+)", html)
+        if m:
+            o, c, z = m.group(1), int(m.group(2)), int(m.group(3))
+            return o[:c] + o[c + z:]
+
+        return None
 
     def _passthrough_response(
         self,
