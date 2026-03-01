@@ -98,7 +98,7 @@ External law names are text only. To get the MST of a cited law, a separate `efl
 
 ### LLM Instruction Adherence Varies by Model
 
-Not all LLMs follow `SERVER_INSTRUCTIONS` reliably. Embedded law IDs are used consistently by gpt-4o-mini and gpt-4.1 (100%), but ignored by all Gemini models (0-40%), gpt-4.1-nano (0%), and misapplied by gpt-4.1-mini (confuses 법령ID with MST). Tested 2026-03-01 across 7 models, 5 rounds each.
+Not all LLMs follow `SERVER_INSTRUCTIONS` reliably. Tested 2026-03-01 across 15 models, 50 rounds each (750 total API calls). Reliable (90%+): gemini-2.5-pro (100%), gpt-4.1 (100%), gpt-5.1 (94%), gpt-4o-mini (84%). Non-adherent (0-5%): gemini-3-flash/pro (0%), gpt-5/5-mini/5-nano (0%), gemini-3.1-pro (4%). gpt-4.1-mini misapplies embedded data (passes 법령ID as MST to wrong tool, 38% of responses). Model generation does not predict adherence — GPT-5 family is worse than GPT-4.1, Gemini 3.x is worse than Gemini 2.5-pro.
 
 ### Server IP Registration Required
 
