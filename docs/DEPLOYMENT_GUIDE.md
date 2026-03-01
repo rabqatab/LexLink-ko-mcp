@@ -40,6 +40,20 @@ OC=your_oc TRANSPORT=http uv run serve
 
 ---
 
+## Important: Server IP Registration
+
+When deploying to any cloud server (GCP, AWS, etc.), you **must register your server's public IP address** at [open.law.go.kr](https://open.law.go.kr):
+
+1. Log in to open.law.go.kr
+2. Go to IP/domain registration settings
+3. Add your server's public IP (e.g., `34.47.86.246`)
+
+Without IP registration, the API returns "사용자 정보 검증에 실패하였습니다" (user verification failed). Excessive requests from unregistered IPs may trigger temporary IP blocks.
+
+**Note:** LexLink includes an anti-bot bypass (`client.py`) that automatically handles law.go.kr's JavaScript redirect protection. No additional configuration is needed for this.
+
+---
+
 ## AWS EC2 Deployment
 
 ### Step 1: Launch EC2 Instance

@@ -6,6 +6,19 @@ All notable changes to LexLink are documented here in both English and Korean.
 
 ## English
 
+### v1.5.1 - 2026-03-01
+**Fix: Handle law.go.kr Anti-Bot JS Redirects**
+
+- **Issue:** law.go.kr returns HTML pages with JavaScript redirects (`window.location.assign()`) instead of API data, especially from cloud server IPs (GCP, AWS)
+- **Root cause:** Anti-bot protection injects JS-based redirect pages that return HTTP 200, causing the XML parser to fail silently
+- **Solution:**
+  - Added `_follow_antibot()` method in `client.py` that detects and follows JS redirects (up to 3 hops)
+  - Added `_parse_antibot_url()` parser handling two known JS patterns:
+    - Pattern A (concat): `x={t:'...', h:'...', o:'...'}; return x.t+x.h+x.o`
+    - Pattern B (substr): `x={o:'...', c:N}; z=M; return o.substr(0,c)+o.substr(c+z)`
+  - Enabled `follow_redirects=True` on httpx client (anti-bot token URLs return HTTP 302)
+- **Impact:** API calls from cloud servers now work reliably through anti-bot protection
+
 ### v1.5.0 - 2026-02-28
 **Refactor: Remove Smithery Dependency**
 
@@ -410,6 +423,19 @@ All notable changes to LexLink are documented here in both English and Korean.
 ---
 
 ## 한국어 (Korean)
+
+### v1.5.1 - 2026-03-01
+**수정: law.go.kr 안티봇 JS 리다이렉트 처리**
+
+- **문제:** law.go.kr가 클라우드 서버 IP(GCP, AWS 등)에서 API 데이터 대신 JavaScript 리다이렉트(`window.location.assign()`)가 포함된 HTML 페이지를 반환
+- **원인:** 안티봇 보호 기능이 HTTP 200으로 JS 기반 리다이렉트 페이지를 삽입하여 XML 파서가 조용히 실패
+- **해결책:**
+  - `client.py`에 JS 리다이렉트를 감지하고 따라가는 `_follow_antibot()` 메서드 추가 (최대 3홉)
+  - 두 가지 알려진 JS 패턴을 처리하는 `_parse_antibot_url()` 파서 추가:
+    - 패턴 A (문자열 결합): `x={t:'...', h:'...', o:'...'}; return x.t+x.h+x.o`
+    - 패턴 B (부분 문자열): `x={o:'...', c:N}; z=M; return o.substr(0,c)+o.substr(c+z)`
+  - httpx 클라이언트에 `follow_redirects=True` 활성화 (안티봇 토큰 URL이 HTTP 302 반환)
+- **영향:** 클라우드 서버에서의 API 호출이 안티봇 보호를 통과하여 안정적으로 작동
 
 ### v1.5.0 - 2026-02-28
 **리팩토링: Smithery 의존성 제거**

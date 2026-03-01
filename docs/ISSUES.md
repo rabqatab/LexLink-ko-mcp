@@ -1,6 +1,6 @@
 # LexLink - Bugs and Issues Tracker
 
-**Last Updated:** 2026-02-28
+**Last Updated:** 2026-03-01
 
 ---
 
@@ -31,6 +31,18 @@ Other service tools (prec, detc, expc, decc) vary in size and usually fit under 
 ---
 
 ## Resolved Issues
+
+### Issue #12: law.go.kr Anti-Bot JS Redirects Block API Responses - FIXED v1.5.1
+
+**Status:** FIXED | **Severity:** CRITICAL | **Discovered:** 2026-03-01
+
+law.go.kr returns HTML pages with JavaScript redirects (`window.location.assign()`) instead of XML data when called from cloud server IPs (GCP, AWS). The anti-bot pages return HTTP 200, so the client treats them as successful responses. Combined with `SLIM_RESPONSE=true` stripping `raw_content`, tools returned empty results (only `status`, `request_id`, `upstream_type`).
+
+**Root cause:** Anti-bot protection on law.go.kr injects JS-based redirect pages for non-browser clients. Two JS patterns observed: string concatenation (Pattern A) and substring slicing (Pattern B).
+
+**Fix:** Added `_follow_antibot()` and `_parse_antibot_url()` in `client.py` to detect and follow JS redirects (up to 3 hops). Enabled `follow_redirects=True` on httpx client for subsequent HTTP 302 redirects.
+
+**Note:** Server IP must also be registered at [open.law.go.kr](https://open.law.go.kr) for API access.
 
 ### Issue #11: Smithery Build Detects npm Instead of Python - FIXED v1.3.2 (HISTORICAL)
 
@@ -84,6 +96,10 @@ Citations may reference articles that no longer exist in current law versions. S
 
 External law names are text only. To get the MST of a cited law, a separate `eflaw_search` call is needed.
 
+### Server IP Registration Required
+
+When deploying to cloud servers (GCP, AWS, etc.), the server's public IP must be registered at [open.law.go.kr](https://open.law.go.kr). Without IP registration, the API returns "사용자 정보 검증에 실패하였습니다" (user verification failed). Excessive requests from unregistered IPs may trigger temporary IP blocks.
+
 ### OC Parameter Registration Required
 
 Users must register at [open.law.go.kr](https://open.law.go.kr) and enable specific API categories. This is an API provider requirement, not a bug.
@@ -94,11 +110,11 @@ Users must register at [open.law.go.kr](https://open.law.go.kr) and enable speci
 
 | Category | Total | Fixed | Open |
 |----------|-------|-------|------|
-| Critical | 5 | 4 | 1 |
+| Critical | 6 | 5 | 1 |
 | High | 3 | 3 | 0 |
 | Medium | 2 | 1 | 1 |
 | Low | 1 | 1 | 0 |
-| **Total** | **11** | **9** | **2** |
+| **Total** | **12** | **10** | **2** |
 
 ---
 

@@ -7,7 +7,7 @@ LexLink is a Model Context Protocol (MCP) server providing structured access to 
 ```
 src/lexlink/
 ├── server.py        # MCP server: 26 tools + 6 prompts + 2 resources (~3,400 lines)
-├── client.py        # HTTP client for law.go.kr API
+├── client.py        # HTTP client for law.go.kr API (with anti-bot bypass)
 ├── stdio_server.py  # Stdio transport entry point
 ├── params.py        # Parameter mapping (snake_case → upstream camelCase)
 ├── parser.py        # XML response parsing
@@ -49,6 +49,7 @@ src/lexlink/
 - **OC parameter resolution**: Tool arg > Environment variable
 - **XML-only responses**: law.go.kr JSON format is broken; all tools default to XML
 - **SLIM_RESPONSE mode**: `SLIM_RESPONSE=true` env var strips raw XML for size-constrained platforms (PlayMCP 24KB limit)
+- **Anti-bot bypass**: `client.py` detects and follows law.go.kr JS anti-bot redirects (2 patterns: string concat, substring slicing)
 - **Auto-ranking**: Search tools auto-fetch 100 results and re-rank by relevance for keyword queries
 - **Context injection**: `ctx: Context` parameter on every tool for MCP logging/progress
 
