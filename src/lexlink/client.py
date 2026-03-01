@@ -34,7 +34,7 @@ class LawAPIClient:
         """
         self.base_url = base_url
         self.timeout = timeout
-        self.client = httpx.Client(timeout=timeout)
+        self.client = httpx.Client(timeout=timeout, follow_redirects=True)
 
     def build_url(self, endpoint: str, params: dict) -> str:
         """
