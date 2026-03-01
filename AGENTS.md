@@ -51,6 +51,7 @@ src/lexlink/
 - **SLIM_RESPONSE mode**: `SLIM_RESPONSE=true` env var strips raw XML for size-constrained platforms (PlayMCP 24KB limit)
 - **Anti-bot bypass**: `client.py` detects and follows law.go.kr JS anti-bot redirects (2 patterns: string concat, substring slicing)
 - **Auto-ranking**: Search tools auto-fetch 100 results and re-rank by relevance for keyword queries
+- **Embedded law IDs**: `SERVER_INSTRUCTIONS` contains 20 common 법령ID mappings for clients that don't support MCP resources
 - **Context injection**: `ctx: Context` parameter on every tool for MCP logging/progress
 
 ## Deployment

@@ -27,6 +27,8 @@
 - **Response format:** XML only (JSON not supported by law.go.kr)
 - **Citation extraction:** HTML parsing (100% accuracy, zero API cost)
 - **AI search:** law.go.kr knowledge base API for semantic queries
+- **Anti-bot bypass:** Automatic JS redirect following for cloud server deployments
+- **Embedded law IDs:** 20 common 법령IDs in SERVER_INSTRUCTIONS (fallback for resource-unaware clients)
 
 ## Key Files
 

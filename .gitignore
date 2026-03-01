@@ -31,6 +31,10 @@ venv/
 
 # tests
 test/
+tests/
+
+# LLM test results
+docs/LLM_INSTRUCTIONS_TEST.md
 
 # tmp
 references/

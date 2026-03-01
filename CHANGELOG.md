@@ -7,17 +7,20 @@ All notable changes to LexLink are documented here in both English and Korean.
 ## English
 
 ### v1.5.1 - 2026-03-01
-**Fix: Handle law.go.kr Anti-Bot JS Redirects**
+**Fix: Anti-Bot Bypass & Embedded Law IDs**
 
-- **Issue:** law.go.kr returns HTML pages with JavaScript redirects (`window.location.assign()`) instead of API data, especially from cloud server IPs (GCP, AWS)
-- **Root cause:** Anti-bot protection injects JS-based redirect pages that return HTTP 200, causing the XML parser to fail silently
-- **Solution:**
+- **Anti-bot bypass:**
+  - law.go.kr returns HTML pages with JavaScript redirects (`window.location.assign()`) instead of API data from cloud server IPs (GCP, AWS)
   - Added `_follow_antibot()` method in `client.py` that detects and follows JS redirects (up to 3 hops)
   - Added `_parse_antibot_url()` parser handling two known JS patterns:
     - Pattern A (concat): `x={t:'...', h:'...', o:'...'}; return x.t+x.h+x.o`
     - Pattern B (substr): `x={o:'...', c:N}; z=M; return o.substr(0,c)+o.substr(c+z)`
   - Enabled `follow_redirects=True` on httpx client (anti-bot token URLs return HTTP 302)
-- **Impact:** API calls from cloud servers now work reliably through anti-bot protection
+- **Embedded law IDs in SERVER_INSTRUCTIONS:**
+  - MCP resources (`lexlink://laws/frequently-used`) are not surfaced to LLMs by PlayMCP or Smithery proxy clients
+  - Embedded 20 verified 법령ID mappings directly in `SERVER_INSTRUCTIONS` so LLMs can skip `eflaw_search` for common laws regardless of client resource support
+  - All 20 IDs verified against live law.go.kr API (2026-03-01)
+- **Impact:** API calls work through anti-bot protection; common law lookups work on all MCP clients
 
 ### v1.5.0 - 2026-02-28
 **Refactor: Remove Smithery Dependency**
@@ -425,17 +428,20 @@ All notable changes to LexLink are documented here in both English and Korean.
 ## 한국어 (Korean)
 
 ### v1.5.1 - 2026-03-01
-**수정: law.go.kr 안티봇 JS 리다이렉트 처리**
+**수정: 안티봇 우회 및 법령ID 내장**
 
-- **문제:** law.go.kr가 클라우드 서버 IP(GCP, AWS 등)에서 API 데이터 대신 JavaScript 리다이렉트(`window.location.assign()`)가 포함된 HTML 페이지를 반환
-- **원인:** 안티봇 보호 기능이 HTTP 200으로 JS 기반 리다이렉트 페이지를 삽입하여 XML 파서가 조용히 실패
-- **해결책:**
+- **안티봇 우회:**
+  - law.go.kr가 클라우드 서버 IP(GCP, AWS 등)에서 API 데이터 대신 JavaScript 리다이렉트(`window.location.assign()`) HTML 페이지를 반환하는 문제
   - `client.py`에 JS 리다이렉트를 감지하고 따라가는 `_follow_antibot()` 메서드 추가 (최대 3홉)
   - 두 가지 알려진 JS 패턴을 처리하는 `_parse_antibot_url()` 파서 추가:
     - 패턴 A (문자열 결합): `x={t:'...', h:'...', o:'...'}; return x.t+x.h+x.o`
     - 패턴 B (부분 문자열): `x={o:'...', c:N}; z=M; return o.substr(0,c)+o.substr(c+z)`
   - httpx 클라이언트에 `follow_redirects=True` 활성화 (안티봇 토큰 URL이 HTTP 302 반환)
-- **영향:** 클라우드 서버에서의 API 호출이 안티봇 보호를 통과하여 안정적으로 작동
+- **SERVER_INSTRUCTIONS에 법령ID 내장:**
+  - MCP 리소스(`lexlink://laws/frequently-used`)가 PlayMCP, Smithery 프록시 클라이언트에서 LLM에 전달되지 않는 문제
+  - 20개 검증된 법령ID 매핑을 `SERVER_INSTRUCTIONS`에 직접 내장하여 클라이언트 리소스 지원 여부와 무관하게 LLM이 주요 법령의 검색 단계를 건너뛸 수 있도록 함
+  - 모든 20개 ID를 law.go.kr 실시간 API로 검증 (2026-03-01)
+- **영향:** 안티봇 보호를 통과하여 API 호출 가능; 모든 MCP 클라이언트에서 주요 법령 조회 지원
 
 ### v1.5.0 - 2026-02-28
 **리팩토링: Smithery 의존성 제거**

@@ -96,6 +96,10 @@ Citations may reference articles that no longer exist in current law versions. S
 
 External law names are text only. To get the MST of a cited law, a separate `eflaw_search` call is needed.
 
+### LLM Instruction Adherence Varies by Model
+
+Not all LLMs follow `SERVER_INSTRUCTIONS` reliably. Embedded law IDs are used consistently by gpt-4o-mini and gpt-4.1 (100%), but ignored by all Gemini models (0-40%), gpt-4.1-nano (0%), and misapplied by gpt-4.1-mini (confuses 법령ID with MST). Tested 2026-03-01 across 7 models, 5 rounds each.
+
 ### Server IP Registration Required
 
 When deploying to cloud servers (GCP, AWS, etc.), the server's public IP must be registered at [open.law.go.kr](https://open.law.go.kr). Without IP registration, the API returns "사용자 정보 검증에 실패하였습니다" (user verification failed). Excessive requests from unregistered IPs may trigger temporary IP blocks.
