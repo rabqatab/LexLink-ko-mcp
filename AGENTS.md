@@ -48,7 +48,7 @@ src/lexlink/
 
 - **OC parameter resolution**: Tool arg > Environment variable
 - **XML-only responses**: law.go.kr JSON format is broken; all tools default to XML
-- **SLIM_RESPONSE mode**: `SLIM_RESPONSE=true` env var strips raw XML for size-constrained platforms (PlayMCP 24KB limit)
+- **SLIM_RESPONSE mode**: `SLIM_RESPONSE=true` env var removes redundant `raw_content` XML when `ranked_data` exists. Does NOT filter or truncate fields — search tools already return slim data from API. Service tools without `ranked_data` keep `raw_content` as safety fallback
 - **Anti-bot bypass**: `client.py` detects and follows law.go.kr JS anti-bot redirects (2 patterns: string concat, substring slicing)
 - **Auto-ranking**: Search tools auto-fetch 100 results and re-rank by relevance for keyword queries
 - **Embedded law IDs**: `SERVER_INSTRUCTIONS` contains 20 common 법령ID mappings for clients that don't support MCP resources

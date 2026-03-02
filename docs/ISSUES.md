@@ -22,11 +22,21 @@ Newer MCP clients send `protocolVersion: "2025-06-18"` which may cause intermitt
 
 **Status:** OPEN | **Severity:** HIGH | **Discovered:** 2025-12-09
 
-Law full-text tools (`eflaw_service`, `law_service`) always exceed PlayMCP's 24KB response limit (e.g., 형법=198KB, 민법=153KB). Even small laws like 난민법 are 36KB.
+Law full-text tools (`eflaw_service`, `law_service`) always exceed PlayMCP's 24KB response limit. Measured sizes (v1.5.2 real-world test):
+
+| Tool | Size | Content |
+|---|---|---|
+| `lsDelegated_service` | 3,122KB | Full delegation tree (건축법) |
+| `law_service` | 1,153KB | Full law text (민법) |
+| `eflaw_service` | 538KB | Full law text (건축법) |
+| `admrul_service` | 150KB | Full admin rule text |
+| `drlaw_search` | 46KB | HTML dashboard (no XML parsing) |
+
+These tools don't set `ranked_data`, so `slim_response()` correctly preserves `raw_content` (full text is the response). Size reduction is not possible without losing content.
 
 **Planned fix:** Conditional tool registration - exclude `eflaw_service`/`law_service` when `SLIM_RESPONSE=true`, directing users to `eflaw_josub`/`law_josub` instead.
 
-Other service tools (prec, detc, expc, decc) vary in size and usually fit under 24KB.
+Other service tools (prec_service, detc_service, expc_service, decc_service) vary in size and usually fit under 24KB.
 
 ---
 
@@ -36,7 +46,7 @@ Other service tools (prec, detc, expc, decc) vary in size and usually fit under 
 
 **Status:** FIXED | **Severity:** CRITICAL | **Discovered:** 2026-03-01
 
-law.go.kr returns HTML pages with JavaScript redirects (`window.location.assign()`) instead of XML data when called from cloud server IPs (GCP, AWS). The anti-bot pages return HTTP 200, so the client treats them as successful responses. Combined with `SLIM_RESPONSE=true` stripping `raw_content`, tools returned empty results (only `status`, `request_id`, `upstream_type`).
+law.go.kr returns HTML pages with JavaScript redirects (`window.location.assign()`) instead of XML data when called from cloud server IPs (GCP, AWS). The anti-bot pages return HTTP 200, so the client treats them as successful responses. Combined with `SLIM_RESPONSE=true` stripping `raw_content`, tools returned empty results (only `status`, `request_id`, `upstream_type`). Note: the empty-response aspect was further addressed in v1.5.2 with a safety guard — `raw_content` is now only removed when `ranked_data` exists as replacement.
 
 **Root cause:** Anti-bot protection on law.go.kr injects JS-based redirect pages for non-browser clients. Two JS patterns observed: string concatenation (Pattern A) and substring slicing (Pattern B).
 
@@ -56,17 +66,17 @@ Smithery's build system incorrectly detected npm for this Python project. Fixed 
 
 Three linkage tools (`lnkLs_search`, `lnkLsOrdJo_search`, `lnkDep_search`) were missing the XML parsing step, returning `ranked_data: null`. Added `parse_xml_response()` calls.
 
-### Issue #6: Non-Law Searches Return Empty Results - FIXED v1.2.6
+### Issue #6: Non-Law Searches Return Empty Results - FIXED v1.2.6, redesigned v1.5.2
 
-`slim_response()` used law-specific field names for all data types, stripping all fields from non-law results. Fixed with `essential_fields_by_type` dict mapping each data type (prec, detc, expc, decc, admrul) to its essential fields.
+`slim_response()` used law-specific field names for all data types, stripping all fields from non-law results. Fixed in v1.2.6 with `essential_fields_by_type` dict. **Redesigned in v1.5.2:** removed all field filtering entirely — real API testing showed search tools already return slim identifier-only data from the API (no bulk text to filter). Field filtering was removing useful fields (사건종류명, 상세링크) from already-small responses.
 
-### Issue #5: LLM Parameter Confusion (id vs mst) - FIXED v1.2.5
+### Issue #5: LLM Parameter Confusion (id vs mst) - FIXED v1.2.5, obsolete v1.5.2
 
-Removing `법령ID` from `essential_fields` (in v1.2.4) caused LLMs to confuse `법령일련번호` (MST) with `id`. Restored `법령ID` to essential fields so LLMs can use the correct parameter.
+Removing `법령ID` from `essential_fields` (in v1.2.4) caused LLMs to confuse `법령일련번호` (MST) with `id`. Restored `법령ID` to essential fields. **Obsolete in v1.5.2:** field filtering removed entirely, all fields preserved.
 
-### Issue #4: PlayMCP Response Size Limit Error - FIXED v1.2.4
+### Issue #4: PlayMCP Response Size Limit Error - FIXED v1.2.4, redesigned v1.5.2
 
-All search tools exceeded PlayMCP's 24KB limit (~50KB per response). Implemented `slim_response()` that removes `raw_content` and filters `ranked_data` to essential fields only, reducing responses to ~3-5KB. Controlled by `SLIM_RESPONSE=true` env var.
+All search tools exceeded PlayMCP's 24KB limit (~50KB per response). Originally fixed by implementing `slim_response()` with field filtering (v1.2.4). **Redesigned in v1.5.2:** `slim_response()` now only removes redundant `raw_content` XML when `ranked_data` exists. No field filtering or truncation — search tools already return slim data. `aiSearch` default display reduced from 20 → 7 to stay under 20KB.
 
 ### Issue #3: Parameter Type Inconsistency Across Tools - FIXED v1.0.8
 

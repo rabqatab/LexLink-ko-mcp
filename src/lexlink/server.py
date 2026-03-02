@@ -33,80 +33,28 @@ logger = logging.getLogger(__name__)
 
 def slim_response(response: dict) -> dict:
     """
-    Slim down response for size-constrained platforms (e.g., Kakao PlayMCP).
+    Remove redundant raw XML when parsed data exists.
 
     When SLIM_RESPONSE=true:
-    - Removes 'raw_content' (XML) entirely
-    - Keeps only essential fields in 'ranked_data' items
+    - Removes 'raw_content' (XML) only if 'ranked_data' exists as replacement
 
     When not set, returns response unchanged.
 
     Args:
-        response: The response dictionary containing 'raw_content' and/or 'ranked_data'
+        response: The response dictionary from a tool
 
     Returns:
-        Original response or slimmed response with essential fields only
+        Response with raw XML removed (if parsed data available), or unchanged
     """
     if not os.getenv("SLIM_RESPONSE"):
         return response
 
     result = response.copy()
 
-    # Remove raw_content entirely
-    result.pop("raw_content", None)
-
-    # Slim down ranked_data to essential fields only
-    if "ranked_data" in result and isinstance(result["ranked_data"], dict):
-        ranked_data = result["ranked_data"].copy()
-
-        # Pattern-based essential field detection
-        # Works automatically for any data type without manual definitions
-        essential_patterns = [
-            r'.*일련번호$',      # IDs: 판례일련번호, 법령일련번호, 헌재결정례일련번호, etc.
-            r'.*명한글$',        # Korean names: 법령명한글
-            r'^사건명$',         # Case name
-            r'^사건번호$',       # Case number
-            r'^안건번호$',       # Agenda number
-            r'.*일자$',          # Dates: 선고일자, 시행일자, 재결일자, 회신일자, etc.
-            r'^법령ID$',         # Law ID (special case)
-            r'^현행연혁코드$',   # Law status code
-            r'^법원명$',         # Court name
-            r'^종국결과$',       # Constitutional court result
-            r'^재결결과$',       # Administrative appeal result
-            r'^회신기관$',       # Reply organization
-            r'^소관부처명$',     # Ministry name
-            r'.*규칙명$',        # Rule names: 행정규칙명
-            r'.*해석례명$',      # Interpretation names: 법령해석례명
-        ]
-
-        def is_essential_field(field_name: str) -> bool:
-            """Check if field matches any essential pattern."""
-            return any(re.match(pattern, field_name) for pattern in essential_patterns)
-
-        # Find and slim the data list (case-insensitive key matching)
-        # API uses inconsistent casing: 'prec' vs 'Detc' vs 'Expc' vs 'Decc'
-        list_keys = ["law", "prec", "detc", "expc", "decc", "admrul", "elaw"]
-        for target_key in list_keys:
-            # Case-insensitive key lookup
-            actual_key = None
-            for key in ranked_data.keys():
-                if key.lower() == target_key.lower():
-                    actual_key = key
-                    break
-
-            if actual_key:
-                items = ranked_data[actual_key]
-                if isinstance(items, list):
-                    ranked_data[actual_key] = [
-                        {k: v for k, v in item.items() if is_essential_field(k)}
-                        for item in items
-                    ]
-                elif isinstance(items, dict):
-                    ranked_data[actual_key] = {k: v for k, v in items.items() if is_essential_field(k)}
-                break
-
-        result["ranked_data"] = ranked_data
-        result["slimmed"] = True
+    # Remove raw_content only if ranked_data exists as replacement
+    # Without this guard, failed ranking chains leave empty responses
+    if "ranked_data" in result:
+        result.pop("raw_content", None)
 
     return result
 
@@ -2896,7 +2844,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
     def aiSearch(
         query: str,
         search: int = 0,
-        display: int = 20,
+        display: int = 7,
         page: int = 1,
         oc: Optional[str] = None,
         type: str = "XML",

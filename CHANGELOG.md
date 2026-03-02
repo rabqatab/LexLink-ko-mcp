@@ -6,6 +6,17 @@ All notable changes to LexLink are documented here in both English and Korean.
 
 ## English
 
+### v1.5.2 - 2026-03-02
+**Fix: slim_response() redesign — safety guard + no field stripping**
+
+- **Bug fix (empty responses):** `slim_response()` unconditionally removed `raw_content` even when `ranked_data` was missing (ranking chain failure), leaving empty responses `{status, request_id, upstream_type}` on PlayMCP
+- **Bug fix (aiSearch oversized):** `list_keys` whitelist didn't include `법령조문`, so field filtering silently skipped for `aiSearch` — responses remained ~46KB
+- **Redesign:** Removed all field filtering and truncation logic. `slim_response()` now only removes `raw_content` (redundant raw XML) when `ranked_data` exists as replacement
+  - **Rationale:** Real API testing showed search tools already return slim identifier-only data (~5-13KB). The old field-filtering approach was stripping useful fields (사건종류명, 상세링크, etc.) from already-small responses
+  - Service tools (`_service`) don't set `ranked_data`, so `raw_content` is correctly preserved (full text is the response)
+- **aiSearch default display:** Changed from 20 → 7 to stay under 20KB (조문내용 ~600 chars/item × 7 = ~15KB)
+- **Verified:** All search tools under 20KB; service tools preserve full text
+
 ### v1.5.1 - 2026-03-01
 **Fix: Anti-Bot Bypass & Embedded Law IDs**
 
@@ -426,6 +437,17 @@ All notable changes to LexLink are documented here in both English and Korean.
 ---
 
 ## 한국어 (Korean)
+
+### v1.5.2 - 2026-03-02
+**수정: slim_response() 재설계 — 안전 가드 + 필드 제거 폐지**
+
+- **버그 수정 (빈 응답):** `slim_response()`가 `ranked_data` 없이도 `raw_content`를 무조건 제거하여, 랭킹 체인 실패 시 PlayMCP에서 빈 응답 `{status, request_id, upstream_type}` 반환
+- **버그 수정 (aiSearch 과대):** `list_keys` 화이트리스트에 `법령조문` 누락, `aiSearch` 필드 필터링이 무시되어 응답 ~46KB 유지
+- **재설계:** 모든 필드 필터링 및 트렁케이션 로직 제거. `slim_response()`는 이제 `ranked_data`가 존재할 때만 `raw_content`(중복 raw XML)를 제거
+  - **근거:** 실제 API 테스트 결과 검색 도구는 이미 식별자 위주의 소형 데이터 반환 (~5-13KB). 기존 필드 필터링은 이미 작은 응답에서 유용한 필드(사건종류명, 상세링크 등)를 제거하고 있었음
+  - 서비스 도구(`_service`)는 `ranked_data`를 설정하지 않으므로 `raw_content` 올바르게 보존 (본문 자체가 응답)
+- **aiSearch 기본 display:** 20 → 7로 변경하여 20KB 이내 유지 (조문내용 ~600자/항목 × 7 = ~15KB)
+- **검증:** 모든 검색 도구 20KB 미만; 서비스 도구는 전체 텍스트 보존
 
 ### v1.5.1 - 2026-03-01
 **수정: 안티봇 우회 및 법령ID 내장**

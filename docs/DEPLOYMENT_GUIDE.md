@@ -34,7 +34,7 @@ OC=your_oc TRANSPORT=http uv run serve
 | `OC` | No | - | Fallback OC (used if not provided via HTTP header) |
 | `PORT` | No | 8000 | Server port |
 | `HOST` | No | 0.0.0.0 | Server host |
-| `SLIM_RESPONSE` | No | - | Set to `true` to slim down responses for PlayMCP (removes raw_content, keeps essential fields only) |
+| `SLIM_RESPONSE` | No | - | Set to `true` to remove redundant raw XML from responses when parsed data exists (for PlayMCP size limits) |
 
 *PlayMCP requires Streamable HTTP transport (`TRANSPORT=http`), not SSE.
 
@@ -240,7 +240,26 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 
-> **Note:** `SLIM_RESPONSE=true` prevents "Tool call returned too large content part" errors on PlayMCP by removing raw XML and keeping only essential fields.
+> **Note:** `SLIM_RESPONSE=true` prevents "Tool call returned too large content part" errors on PlayMCP by removing redundant raw XML when parsed `ranked_data` exists. All fields in `ranked_data` are preserved — no filtering or truncation.
+>
+> **How it works:**
+> - Search tools (`_search`): `raw_content` removed, `ranked_data` preserved with all fields → ~5-15KB
+> - Service tools (`_service`): No `ranked_data` exists → `raw_content` kept as-is (full text)
+> - `aiSearch`: Default display reduced to 7 (조문내용 ~600 chars/item × 7 ≈ 15KB)
+>
+> **Response fields preserved per search tool (v1.5.2 verified):**
+>
+> | Tool | Data Key | Fields |
+> |------|----------|--------|
+> | `eflaw_search`, `law_search` | `law` | id, 법령일련번호, 현행연혁코드, 법령명한글, 법령약칭명, 법령ID, 공포일자, 공포번호, 제개정구분명, 소관부처코드, 소관부처명, 법령구분명, 시행일자, 법령상세링크 |
+> | `elaw_search` | `law` | id, 법령일련번호, 현행연혁코드, 법령명한글, 법령명영문, 법령ID, 공포일자, 공포번호, 제개정구분명, 소관부처명, 법령구분명, 시행일자, 법령상세링크 |
+> | `admrul_search` | `admrul` | id, 행정규칙일련번호, 행정규칙명, 행정규칙종류, 발령일자, 발령번호, 소관부처명, 현행연혁구분, 제개정구분명, 행정규칙ID, 행정규칙상세링크, 시행일자 |
+> | `prec_search` | `prec` | id, 판례일련번호, 사건명, 사건번호, 선고일자, 법원명, 법원종류코드, 사건종류명, 사건종류코드, 판결유형, 선고, 데이터출처명, 판례상세링크 |
+> | `detc_search` | `Detc` | id, 헌재결정례일련번호, 종국일자, 사건번호, 사건명, 헌재결정례상세링크 |
+> | `expc_search` | `expc` | id, 법령해석례일련번호, 안건명, 안건번호, 질의기관명, 회신기관명, 회신일자, 법령해석례상세링크 |
+> | `decc_search` | `decc` | id, 행정심판재결례일련번호, 사건명, 사건번호, 처분일자, 의결일자, 처분청, 재결청, 재결구분명, 행정심판례상세링크 |
+> | `aiSearch` | `법령조문` | id, 법령일련번호, 법령ID, 법령명, 시행일자, 공포일자, 소관부처명, 법령종류명, 조문일련번호, 조문번호, 조문가지번호, 조문제목, **조문내용** |
+> | `aiRltLs_search` | `법령조문` | id, 법령ID, 법령명, 시행일자, 공포일자, 조문번호, 조문가지번호, 조문제목 |
 
 > **Important:** Make sure paths match your actual directory name (case-sensitive!)
 > Check with: `ls ~/ | grep -i lexlink`

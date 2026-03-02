@@ -460,7 +460,7 @@ aiRltLs_search(
 | `OC` | *(필수)* | law.go.kr API 식별자 (이메일 로컬 부분) |
 | `LEXLINK_BASE_URL` | `http://www.law.go.kr` | API 기본 URL |
 | `LEXLINK_TIMEOUT` | `60` | HTTP 요청 타임아웃 (초) |
-| `SLIM_RESPONSE` | *(미설정)* | `true` 설정 시 크기 제한 플랫폼용 XML 제거 |
+| `SLIM_RESPONSE` | *(미설정)* | `true` 설정 시 파싱된 데이터 존재할 때 중복 raw XML 제거 (PlayMCP용) |
 | `TRANSPORT` | `sse` | 전송 유형: `sse` 또는 `http` |
 
 ### OC 우선순위

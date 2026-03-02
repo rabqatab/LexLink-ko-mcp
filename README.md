@@ -459,7 +459,7 @@ When searching Korean law, select tools based on query clarity:
 | `OC` | *(required)* | law.go.kr API identifier (email local part) |
 | `LEXLINK_BASE_URL` | `http://www.law.go.kr` | API base URL |
 | `LEXLINK_TIMEOUT` | `60` | HTTP request timeout in seconds |
-| `SLIM_RESPONSE` | *(unset)* | Set `true` to strip raw XML for size-constrained platforms |
+| `SLIM_RESPONSE` | *(unset)* | Set `true` to remove redundant raw XML when parsed data exists (for PlayMCP) |
 | `TRANSPORT` | `sse` | Transport type: `sse` or `http` |
 
 ### OC Priority
