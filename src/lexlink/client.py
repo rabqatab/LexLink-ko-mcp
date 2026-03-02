@@ -187,7 +187,14 @@ class LawAPIClient:
 
         law.go.kr sometimes returns HTML pages with JavaScript redirects
         instead of API data. This method detects and follows them.
+
+        Some endpoints (e.g., aiSearch) don't support the tokenized redirect
+        path and return 404. In that case, retry the original URL — the
+        anti-bot hop typically sets a session cookie that lets the retry
+        succeed.
         """
+        original_url = str(response.request.url)
+
         for i in range(max_hops):
             if "location.assign" not in response.text:
                 return response
@@ -199,6 +206,13 @@ class LawAPIClient:
 
             logger.info(f"Following anti-bot redirect (hop {i+1})")
             response = self.client.get(f"{self.base_url}{path}")
+
+            if response.status_code == 404:
+                logger.info("Anti-bot redirect got 404, retrying original URL")
+                response = self.client.get(original_url)
+                response.raise_for_status()
+                return response
+
             response.raise_for_status()
 
         return response
