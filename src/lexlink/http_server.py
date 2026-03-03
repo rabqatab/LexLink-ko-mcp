@@ -9,26 +9,23 @@ Transport Options:
     - SSE (/sse): Legacy transport, may not work with some platforms
 
 Authentication:
-    PlayMCP passes user's OC via HTTP header. This server extracts the
-    "OC" header and uses it for law.go.kr API calls.
+    The server uses its own OC from the environment variable (OC=...).
+    law.go.kr validates OC + requesting IP as a pair, so the server's OC
+    must have the server's public IP registered at open.law.go.kr.
 
 Usage:
     # Run with Streamable HTTP transport (recommended for PlayMCP)
-    TRANSPORT=http uv run serve
+    OC=your_oc TRANSPORT=http uv run serve
 
     # Run with SSE transport (legacy)
-    uv run serve
-
-    # With fallback OC (used if no header provided)
-    OC=your_oc TRANSPORT=http uv run serve
+    OC=your_oc uv run serve
 
 Endpoints:
     - HTTP (Streamable): http://your-host:8000/mcp  <- Use this for PlayMCP
     - SSE (Legacy): http://your-host:8000/sse
 
 PlayMCP Registration:
-    - 인증 방식: Key/Token 인증
-    - Header 이름: OC
+    - 인증 방식: 인증 없음
     - MCP Endpoint: http://your-domain/mcp (domain required, not raw IP)
     - Use sslip.io for IP-to-domain: http://1-2-3-4.sslip.io/mcp
 
@@ -42,9 +39,7 @@ Note:
 import os
 import json
 import logging
-import contextvars
 import time
-from typing import Optional
 
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
@@ -64,39 +59,6 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
-
-# Context variable to store OC from HTTP header (thread-safe for concurrent requests)
-_oc_from_header: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
-    'oc_from_header', default=None
-)
-
-
-def get_oc_from_header() -> Optional[str]:
-    """Get OC value extracted from HTTP header (for current request context)."""
-    return _oc_from_header.get()
-
-
-class OCHeaderMiddleware(BaseHTTPMiddleware):
-    """
-    Middleware to extract OC from HTTP headers for PlayMCP authentication.
-
-    PlayMCP sends the user's OC via custom HTTP header when connecting.
-    This middleware extracts it and makes it available to the MCP tools.
-    """
-
-    async def dispatch(self, request: Request, call_next):
-        # Extract OC from header (PlayMCP Key/Token auth)
-        oc_value = request.headers.get("OC") or request.headers.get("oc")
-
-        if oc_value:
-            logger.debug(f"Received OC from header: {oc_value[:4]}***")
-            # Store in context variable (thread-safe)
-            _oc_from_header.set(oc_value)
-            # Also set environment variable as fallback for tools
-            os.environ["OC"] = oc_value
-
-        response = await call_next(request)
-        return response
 
 
 class RawLoggingMiddleware(BaseHTTPMiddleware):
@@ -218,11 +180,10 @@ _server: FastMCP = get_fastmcp_server()
 # Get the raw SSE app from FastMCP
 _sse_app = _server.sse_app()
 
-# Wrap with our middleware for OC header extraction and raw logging
+# Wrap with our middleware for raw logging
 app = Starlette(
     routes=[Mount("/", app=_sse_app)],
     middleware=[
-        Middleware(OCHeaderMiddleware),
         Middleware(RawLoggingMiddleware),
     ]
 )
@@ -243,7 +204,6 @@ def run_sse_server(host: str = "0.0.0.0", port: int = 8000):
 
     logger.info(f"Starting LexLink MCP server (SSE) on {host}:{port}")
     logger.info(f"Endpoint: http://{host}:{port}/sse")
-    logger.info("PlayMCP Auth: Send OC via 'OC' HTTP header")
 
     uvicorn.run(app, host=host, port=port)
 
@@ -264,7 +224,6 @@ def run_http_server(host: str = "0.0.0.0", port: int = 8000):
 
     logger.info(f"Starting LexLink MCP server (HTTP) on {host}:{port}")
     logger.info(f"Endpoint: http://{host}:{port}/mcp")
-    logger.info("PlayMCP Auth: Send OC via 'OC' HTTP header")
 
     fastmcp = create_server()
 
@@ -280,7 +239,6 @@ def run_http_server(host: str = "0.0.0.0", port: int = 8000):
     http_app = Starlette(
         routes=[Mount("/", app=_http_app)],
         middleware=[
-            Middleware(OCHeaderMiddleware),
             Middleware(RawLoggingMiddleware),
         ],
         lifespan=lifespan
@@ -296,7 +254,7 @@ def main():
         PORT: Port to listen on (default: 8000)
         HOST: Host to bind to (default: 0.0.0.0)
         TRANSPORT: Transport type - "sse" or "http" (default: sse)
-        OC: Fallback OC if not provided via header
+        OC: Server's OC for law.go.kr API (must have server IP registered)
     """
     port = int(os.getenv("PORT", "8000"))
     host = os.getenv("HOST", "0.0.0.0")

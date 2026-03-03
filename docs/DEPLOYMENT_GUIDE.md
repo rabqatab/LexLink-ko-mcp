@@ -3,12 +3,10 @@
 This guide explains how to deploy LexLink as an HTTP server for Kakao PlayMCP.
 
 > **Critical Requirements for PlayMCP:**
-> 1. **HTTPS required** - If using Key/Token auth, PlayMCP requires HTTPS endpoint
-> 2. **Domain name required** - Raw IP addresses are rejected
-> 3. **Streamable HTTP transport** - Set `TRANSPORT=http` (not SSE)
-> 4. **Port 80/443 only** - Use Nginx as reverse proxy
->
-> **Quick Solution:** Use ngrok for free HTTPS tunneling (see below)
+> 1. **Domain name required** - Raw IP addresses are rejected
+> 2. **Streamable HTTP transport** - Set `TRANSPORT=http` (not SSE)
+> 3. **Port 80/443 only** - Use Nginx as reverse proxy
+> 4. **Server OC must have server IP registered** at open.law.go.kr
 
 ---
 
@@ -18,7 +16,7 @@ This guide explains how to deploy LexLink as an HTTP server for Kakao PlayMCP.
 # Run with Streamable HTTP transport (required for PlayMCP)
 TRANSPORT=http uv run serve
 
-# With fallback OC for testing
+# With your registered OC
 OC=your_oc TRANSPORT=http uv run serve
 
 # Server will start at: http://localhost:8000/mcp
@@ -31,7 +29,7 @@ OC=your_oc TRANSPORT=http uv run serve
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `TRANSPORT` | **Yes*** | sse | Set to `http` for PlayMCP |
-| `OC` | No | - | Fallback OC (used if not provided via HTTP header) |
+| `OC` | **Yes** | - | Server's OC for law.go.kr API (must have server IP registered) |
 | `PORT` | No | 8000 | Server port |
 | `HOST` | No | 0.0.0.0 | Server host |
 | `SLIM_RESPONSE` | No | - | Set to `true` to remove redundant raw XML from responses when parsed data exists (for PlayMCP size limits) |
@@ -40,15 +38,16 @@ OC=your_oc TRANSPORT=http uv run serve
 
 ---
 
-## Important: Server IP Registration
+## Important: Server OC & IP Registration
 
-When deploying to any cloud server (GCP, AWS, etc.), you **must register your server's public IP address** at [open.law.go.kr](https://open.law.go.kr):
+law.go.kr validates each API call by checking the OC + the requesting IP as a registered pair. Since the server makes all API calls from its own IP, **the server's `OC` environment variable must be an OC that has the server's public IP registered**.
 
-1. Log in to open.law.go.kr
-2. Go to IP/domain registration settings
+1. Log in to [open.law.go.kr](https://open.law.go.kr)
+2. Go to IP/domain registration settings for the OC you will use
 3. Add your server's public IP (e.g., `34.47.86.246`)
+4. Set `OC=that_oc` in the server's environment (systemd service file)
 
-Without IP registration, the API returns "사용자 정보 검증에 실패하였습니다" (user verification failed). Excessive requests from unregistered IPs may trigger temporary IP blocks.
+Without this, the API returns "사용자 정보 검증에 실패하였습니다" (user verification failed). Per-user OC values will **not** work because the server's IP is not registered under each user's OC.
 
 **Note:** LexLink includes an anti-bot bypass (`client.py`) that automatically handles law.go.kr's JavaScript redirect protection. No additional configuration is needed for this.
 
@@ -165,7 +164,7 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 
-        # Pass OC header for authentication
+        # Pass through custom headers
         proxy_set_header OC $http_oc;
     }
 }
@@ -206,7 +205,7 @@ After=network.target
 Type=simple
 User=ubuntu
 WorkingDirectory=/home/ubuntu/lexlink-ko-mcp
-Environment="OC=fallback_oc"
+Environment="OC=your_registered_oc"
 Environment="PORT=8000"
 Environment="TRANSPORT=http"
 Environment="SLIM_RESPONSE=true"
@@ -228,7 +227,7 @@ After=network.target
 Type=simple
 User=ec2-user
 WorkingDirectory=/home/ec2-user/lexlink-ko-mcp
-Environment="OC=fallback_oc"
+Environment="OC=your_registered_oc"
 Environment="PORT=8000"
 Environment="TRANSPORT=http"
 Environment="SLIM_RESPONSE=true"
@@ -303,27 +302,11 @@ Fill in the registration form:
 | **대화 예시 1** | 민법 제20조 내용 알려줘 |
 | **대화 예시 2** | 건축법과 관련된 대법원 판례 검색해줘 |
 | **대화 예시 3** | 자동차관리법 시행령 검색 |
-| **인증 방식** | Key/Token 인증 |
-| **MCP Endpoint** | `https://YOUR-NGROK-SUBDOMAIN.ngrok-free.dev/mcp` |
+| **인증 방식** | 인증 없음 |
+| **MCP Endpoint** | `http://YOUR-IP-WITH-DASHES.sslip.io/mcp` |
 
-> **Important:** Key/Token auth requires HTTPS!
-> - With ngrok: `https://abc123.ngrok-free.dev/mcp`
-> - With custom domain: `https://your-domain.com/mcp`
-
-### Key/Token Authentication Setup
-
-When you select **Key/Token 인증**, configure:
-
-| Setting | Value |
-|---------|-------|
-| **Header 이름** | `OC` |
-| **설명** | 법제처 국가법령정보 API OC 식별자 (open.law.go.kr에서 발급) |
-
-**How it works:**
-1. Each user registers at [open.law.go.kr](https://open.law.go.kr) to get their own OC
-2. User enters their OC in PlayMCP settings
-3. PlayMCP sends the OC via HTTP header when connecting to your server
-4. Your server uses the user's OC for API calls (each user uses their own quota)
+> **Note:** The server uses its own OC (set via environment variable) for all API calls.
+> Users do not need to provide their own OC — law.go.kr validates OC + server IP as a pair.
 
 ---
 
@@ -468,9 +451,9 @@ sudo nano /etc/nginx/nginx.conf
 
 ---
 
-## HTTPS Setup (Required for Key/Token Auth)
+## HTTPS Setup (Optional)
 
-PlayMCP requires HTTPS for MCP servers using Key/Token authentication.
+HTTPS is not required when using "인증 없음" auth, but recommended for production.
 
 ### Option 1: ngrok (Free, Quickest)
 
@@ -544,14 +527,14 @@ sudo certbot --nginx -d your-domain.com
 │  ┌─────────────────────────────────────────────────────┐    │
 │  │         LexLink MCP Server (port 8000)               │    │
 │  │         - uvicorn + FastMCP                          │    │
-│  │         - OCHeaderMiddleware                         │    │
 │  │         - Streamable HTTP transport (/mcp)           │    │
+│  │         - Uses server's OC (env var)                 │    │
 │  └─────────────────────────────────────────────────────┘    │
 │                          │                                   │
 │                          ▼                                   │
 │  ┌─────────────────────────────────────────────────────┐    │
 │  │              law.go.kr API                           │    │
-│  │              (using user's OC)                       │    │
+│  │              (using server's OC)                     │    │
 │  └─────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────┘
 ```
