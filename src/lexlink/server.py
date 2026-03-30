@@ -20,7 +20,7 @@ from .errors import ErrorCode, create_error_response
 from .params import map_params_to_upstream, resolve_oc
 from .validation import validate_date_range
 from .parser import parse_xml_response, extract_law_list, update_law_list
-from .ranking import detect_query_language
+from .ranking import detect_query_language, should_apply_ranking, rank_search_results
 from ._helpers import (
     TOOL_ANNOTATIONS, stringify_id, handle_tool_error,
     slim_response, run_search, run_service,
@@ -1852,7 +1852,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         return run_search(
             get_client=_get_client, target="ordin", query=query,
             snake_params=snake_params, response_type=type, display=display,
-            ranking_field="자치법규명", list_type="ordin",
+            ranking_field="자치법규명", list_type="law",
             over_fetch_key="numOfRows",
         )
 
