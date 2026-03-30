@@ -1,13 +1,15 @@
 # AGENTS.md
 
-LexLink is a Model Context Protocol (MCP) server providing structured access to 191+ Korean law APIs from the National Law Information Center (law.go.kr). It exposes 44 tools, 6 prompts, and 2 resources for AI-powered legal research.
+LexLink is a Model Context Protocol (MCP) server providing structured access to 191+ Korean law APIs from the National Law Information Center (law.go.kr). It exposes 54 tools, 9 prompts, and 2 resources for AI-powered legal research.
 
 ## Architecture
 
 ```
 src/lexlink/
-├── server.py        # MCP server: 44 tools + 6 prompts + 2 resources
+├── server.py        # MCP server: 54 tools + 9 prompts + 2 resources
 ├── _helpers.py      # Shared helpers: TOOL_ANNOTATIONS, handle_tool_error, run_search, run_service
+├── cache.py         # Intelligent per-tool TTL caching (~183 lines) — inspired by korean-law-mcp
+├── resolver.py      # Korean law name/abbreviation resolution (~225 lines) — inspired by korean-law-mcp
 ├── client.py        # HTTP client for law.go.kr API (with anti-bot bypass)
 ├── stdio_server.py  # Stdio transport entry point
 ├── params.py        # Parameter mapping (snake_case → upstream camelCase)
@@ -21,7 +23,7 @@ src/lexlink/
 └── log_processor.py # Log analysis for dashboard
 ```
 
-## Tools (44 total)
+## Tools (54 total)
 
 | Phase | Tools | Purpose |
 |-------|-------|---------|
@@ -31,8 +33,10 @@ src/lexlink/
 | Phase 4 (1) | `article_citation` | HTML-based citation extraction (zero API cost, 100% accuracy) |
 | Phase 5 (2) | `aiSearch`, `aiRltLs_search` | AI-powered semantic search |
 | Phase 7 (18) | `ordin_search`, `ordin_service`, `ordinLsCon_search`, `trty_search`, `trty_service`, `lstrm_ai_search`, `dlytrm_search`, `lstrm_rlt_search`, `dlytrm_rlt_search`, `lstrm_rlt_jo_search`, `jo_rlt_lstrm_search`, `ls_rlt_search`, `committee_search`, `committee_service`, `cgm_expc_search`, `cgm_expc_service`, `special_decc_search`, `special_decc_service` | Local ordinances, treaties, legal terms KB, committee decisions, ministry interpretations, special appeals |
+| Phase 8 (5) | `check_precedent_odds`, `legal_resolver`, `simplify_article`, `law_amendment_summary`, `article_amendment_diff` | AI-powered legal reasoning tools |
+| Phase 9 (5) | `chain_full_research`, `chain_amendment_track`, `chain_dispute_prep`, `chain_law_system`, `cache_stats` | Multi-step research chain tools + cache monitoring. Inspired by [korean-law-mcp](https://github.com/chrisryugj/korean-law-mcp) |
 
-## MCP Prompts (6 total)
+## MCP Prompts (9 total)
 
 1. `search-korean-law` - Search for a law by name
 2. `get-law-article` - Retrieve and explain a specific article
@@ -40,6 +44,9 @@ src/lexlink/
 4. `analyze-law-citations` - Multi-article citation analysis
 5. `search-admin-rules` - Search administrative rules
 6. `tool-selection-guide` - Which search tool to use (vague vs specific)
+7. `legal-reasoning-guide` - Guide for AI-powered legal reasoning tools (Phase 8)
+8. `precedent-analysis` - Analyze precedent patterns for a legal question
+9. `dispute-resolution` - Guide through legal dispute resolution paths
 
 ## MCP Resources (2 total)
 
@@ -55,6 +62,8 @@ src/lexlink/
 - **Auto-ranking**: Search tools auto-fetch 100 results and re-rank by relevance for keyword queries
 - **Embedded law IDs**: `SERVER_INSTRUCTIONS` contains 20 common 법령ID mappings for clients that don't support MCP resources
 - **Context injection**: `ctx: Context` parameter on every tool for MCP logging/progress
+- **Intelligent caching** (`cache.py`): Per-tool TTL caching integrated into `run_search` and `run_service`. TTLs: search 1hr, articles 24hr, AI search 30min. Inspired by [korean-law-mcp](https://github.com/chrisryugj/korean-law-mcp)
+- **Law name resolution** (`resolver.py`): Auto-resolves Korean law abbreviations before API calls in `run_search`. 52 seed aliases + dynamic learning from API responses. Inspired by [korean-law-mcp](https://github.com/chrisryugj/korean-law-mcp)
 
 ## Deployment
 

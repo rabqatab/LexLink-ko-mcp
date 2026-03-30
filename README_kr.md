@@ -14,7 +14,7 @@ LexLink는 대한민국 국가법령정보 API ([open.law.go.kr](https://open.la
 
 ## 주요 기능
 
-- **44개의 MCP 도구 + 2개의 MCP 리소스**로 포괄적인 한국 법령 정보 접근
+- **54개의 MCP 도구 + 2개의 MCP 리소스**로 포괄적인 한국 법령 정보 접근
   - 한국 법령 검색 및 조회 (시행일 & 공포일 기준)
   - 영문 번역 법령 검색 및 조회
   - 행정규칙 검색 및 조회 (훈령, 예규, 고시, 공고, 지침)
@@ -35,27 +35,31 @@ LexLink는 대한민국 국가법령정보 API ([open.law.go.kr](https://open.la
     - 자주 사용되는 ~20개 법령명과 안정적인 법령ID 매핑 캐시
     - 한글 법령명 또는 약칭으로 조회 (`lexlink://law/{name}`)
     - 동적 캐싱: 검색 결과가 자동으로 캐시에 추가
-- **100% 의미론적 검증** - 44개 도구 모두 실제 법령 데이터 반환 확인
+- **스마트 기능** ([korean-law-mcp](https://github.com/chrisryugj/korean-law-mcp)에서 영감):
+  - **지능형 캐싱** - 도구별 TTL 캐싱 (검색 1시간, 조문 24시간, AI 검색 30분)
+  - **법령약칭 해석** - 자동 약칭 해석 (자통법→자본시장과 금융투자업에 관한 법률), 52개 기본 별칭 + 동적 학습
+  - **체인 도구** - 한 번의 호출로 다단계 조사 워크플로 실행 (Phase 9)
+- **100% 의미론적 검증** - Phase 1-5 도구 모두 실제 법령 데이터 반환 확인
 - **오류 처리** - 해결 방법이 포함된 실행 가능한 오류 메시지
 - **한글 텍스트 지원** - UTF-8 인코딩으로 한글 문자 정확히 처리
 - **응답 형식** - JSON (기본), HTML, XML 지원 (다양한 형식 지원)
 
 ## 프로젝트 상태
 
-🎉 **프로덕션 준비 완료 - Phase 5 완성!**
+🎉 **프로덕션 준비 완료 - Phase 9 완성!**
 
 | 지표 | 상태 |
 |--------|--------|
-| **구현된 도구** | 44/44 (100%) ✅ |
+| **구현된 도구** | 54/54 (100%) ✅ |
 | **의미론적 검증** | 26/26 (Phase 1-5 도구) ✅ |
-| **MCP 프롬프트** | 6/6 (100%) ✅ |
+| **MCP 프롬프트** | 9/9 (100%) ✅ |
 | **MCP 리소스** | 2개 (정적 1 + 템플릿 1) ✅ |
-| **API 커버리지** | 150개 이상 엔드포인트 중 ~17% 커버 |
+| **API 커버리지** | 191개 이상 엔드포인트 중 ~28% 커버 |
 | **LLM 통합** | ✅ 검증 완료 (Gemini) |
 | **코드 품질** | 깔끔하고 문서화되고 테스트됨 |
-| **버전** | v2.0.0 |
+| **버전** | v2.1.0 |
 
-**최근:** v2.0.0 — 44개 도구 (Phase 7 추가), JSON 기본 응답 형식, 판례 서비스 도구에 `sections` 파라미터, `_helpers.py` 리팩토링.
+**최근:** v2.1.0 — 54개 도구 (Phase 9 추가), 지능형 캐싱 (`cache.py`), 법령약칭 해석 (`resolver.py`), 다단계 조사를 위한 체인 도구.
 
 ## 사전 요구사항
 
@@ -454,6 +458,18 @@ aiRltLs_search(
 | 중앙부처 1차 해석 | `cgm_expc_search`, `cgm_expc_service` |
 | 특별행정심판 | `special_decc_search`, `special_decc_service` |
 
+### Phase 9: 체인 도구 (5개 도구)
+
+[korean-law-mcp](https://github.com/chrisryugj/korean-law-mcp)에서 영감을 받아 개발된 체인 도구는 다단계 조사 워크플로를 한 번의 호출로 실행합니다. LLM이 순차적 도구 호출을 직접 조율할 필요가 없습니다.
+
+| 도구 | 설명 |
+|------|------|
+| `chain_full_research` | 완전한 법령 조사: 법령 + 판례 분석 + 해석례 |
+| `chain_amendment_track` | 개정 이력 + 조문별 개정 비교 |
+| `chain_dispute_prep` | 4개 데이터베이스(판례, 헌재결정례, 법령해석례, 행정심판례)에서 모든 판례 조회 |
+| `chain_law_system` | 전체 법령 체계: 위임 체계 + 행정규칙 + 자치법규 |
+| `cache_stats` | 캐시 및 법령약칭 해석기 성능 모니터링 |
+
 ### 도구 선택 가이드
 
 한국 법령 검색 시, 쿼리 명확성에 따라 도구를 선택하세요:
@@ -661,7 +677,10 @@ result = eflaw_search(query="test")
 ```
 lexlink-ko-mcp/
 ├── src/lexlink/
-│   ├── server.py        # 44개 도구가 포함된 메인 MCP 서버
+│   ├── server.py        # 54개 도구가 포함된 메인 MCP 서버
+│   ├── _helpers.py      # 공통 헬퍼: run_search, run_service, TOOL_ANNOTATIONS
+│   ├── cache.py         # 지능형 도구별 TTL 캐싱 (~183줄)
+│   ├── resolver.py      # 법령명/약칭 해석 (~225줄)
 │   ├── http_server.py   # Kakao PlayMCP용 HTTP/SSE 서버
 │   ├── stdio_server.py  # Stdio 전송 진입점
 │   ├── params.py        # 매개변수 확인 및 매핑
@@ -698,7 +717,7 @@ uv run pytest -m e2e
 
 ### 새로운 도구 추가
 
-**현재 상태:** 44/44 도구 구현 완료 (Phase 1-7 완료), Phase 1-5 도구 검증 완료
+**현재 상태:** 54/54 도구 구현 완료 (Phase 1-9 완료), Phase 1-5 도구 검증 완료
 
 124개 이상의 남은 API에서 추가 도구를 구현하려면:
 1. `src/lexlink/server.py`에 확립된 패턴 따르기
@@ -830,6 +849,7 @@ uv sync --reinstall
 
 - **law.go.kr** - 대한민국 국가법령정보 API
 - **MCP** - Anthropic의 Model Context Protocol
+- **[korean-law-mcp](https://github.com/chrisryugj/korean-law-mcp)** - 캐싱, 법령약칭 해석, 체인 도구(Phase 9) 아이디어의 출처
 
 ## 지원
 
@@ -839,6 +859,15 @@ uv sync --reinstall
 ---
 
 ## 변경 로그
+
+### v2.1.0 - 2026-03-30
+**신규: 캐싱, 법령약칭 해석, 체인 도구 (Phase 9)**
+
+- 지능형 도구별 TTL 캐싱 추가 (`cache.py`): 검색 1시간, 조문 24시간, AI 검색 30분
+- 법령명/약칭 해석 추가 (`resolver.py`): 52개 기본 별칭 + 동적 학습
+- 5개의 Phase 9 체인 도구 추가: `chain_full_research`, `chain_amendment_track`, `chain_dispute_prep`, `chain_law_system`, `cache_stats`
+- [korean-law-mcp](https://github.com/chrisryugj/korean-law-mcp)에서 영감
+- 자세한 내용은 [CHANGELOG.md](CHANGELOG.md) 참조
 
 ### v2.0.0 - 2026-03-30
 **주요 릴리스: Phase 7 도구, JSON 기본 형식, sections 파라미터**
@@ -857,7 +886,7 @@ uv sync --reinstall
 - stdio 전송을 위한 `stdio_server.py` 진입점 추가
 - 자세한 내용은 [CHANGELOG.md](CHANGELOG.md) 참조
 
-전체 변경 로그(v1.0.0 – v2.0.0)는 [CHANGELOG.md](CHANGELOG.md)를 참조하세요.
+전체 변경 로그(v1.0.0 – v2.1.0)는 [CHANGELOG.md](CHANGELOG.md)를 참조하세요.
 
 ---
 

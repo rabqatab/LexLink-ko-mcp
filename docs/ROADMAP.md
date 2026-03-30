@@ -1,7 +1,7 @@
 # LexLink API Implementation Roadmap
 
 **Last Updated:** 2026-03-30
-**Status:** All 49 tools + 2 resources + 9 prompts implemented (v2.0.0)
+**Status:** All 54 tools + 2 resources + 9 prompts implemented (v2.1.0)
 
 ---
 
@@ -139,6 +139,26 @@ Explicit `@server.tool()` decorators and `ctx: Context = None` signatures remain
 
 ---
 
+## Phase 9: Chain Tools & Smart Infrastructure - COMPLETE
+
+**Completed:** 2026-03-30 | **Tools:** 5/5 | **Version:** v2.1.0
+
+Inspired by [korean-law-mcp](https://github.com/chrisryugj/korean-law-mcp), this phase adds intelligent caching, law name resolution, and chain tools for multi-step research workflows.
+
+| Tool | Description |
+|------|-------------|
+| `chain_full_research` | Complete legal research: statutes + precedent analysis + interpretations |
+| `chain_amendment_track` | Revision history + article-level diff across amendments |
+| `chain_dispute_prep` | All case law sources across 4 databases (판례, 헌재결정례, 법령해석례, 행정심판례) |
+| `chain_law_system` | Full law hierarchy: delegation tree + admin rules + ordinances |
+| `cache_stats` | Cache and resolver performance monitoring |
+
+**New Modules:**
+- `src/lexlink/cache.py` (~183 lines): Per-tool TTL caching integrated into `run_search`/`run_service`
+- `src/lexlink/resolver.py` (~225 lines): 52 seed aliases + dynamic learning from API responses
+
+---
+
 ## Future Expansion
 
 **Additional APIs available (remaining):**
@@ -147,6 +167,6 @@ Explicit `@server.tool()` decorators and `ctx: Context = None` signatures remain
 - 별표·서식 (Tables & Forms) - 3 tools
 - 학칙·공단·공공기관 - 2 tools
 
-**Note:** Local ordinances, treaties, committee decisions, ministry interpretations, special appeals, and knowledge base tools are implemented in Phase 7. AI-powered legal reasoning tools are implemented in Phase 8.
+**Note:** Local ordinances, treaties, committee decisions, ministry interpretations, special appeals, and knowledge base tools are implemented in Phase 7. AI-powered legal reasoning tools are implemented in Phase 8. Chain tools, caching, and law name resolution are implemented in Phase 9.
 
 See `API_REFERENCE.md` for the full 191-API catalog.

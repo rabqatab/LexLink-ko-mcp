@@ -302,7 +302,7 @@ Fill in the registration form:
 | **대표 이미지** | Upload `LexLink_logo.png` from assets folder |
 | **MCP 이름** | LexLink - 한국 법령정보 |
 | **MCP 식별자** | lexlink |
-| **MCP 설명** | 대한민국 법률, 판례, 행정규칙 검색 및 조회를 위한 MCP 서버. law.go.kr 국가법령정보 API 연동. 49개 도구 지원. |
+| **MCP 설명** | 대한민국 법률, 판례, 행정규칙 검색 및 조회를 위한 MCP 서버. law.go.kr 국가법령정보 API 연동. 54개 도구 지원. |
 | **대화 예시 1** | 민법 제20조 내용 알려줘 |
 | **대화 예시 2** | 건축법과 관련된 대법원 판례 검색해줘 |
 | **대화 예시 3** | 자동차관리법 시행령 검색 |

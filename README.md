@@ -14,7 +14,7 @@ LexLink is an MCP (Model Context Protocol) server that exposes the Korean Nation
 
 ## Features
 
-- **44 MCP Tools + 2 MCP Resources** for comprehensive Korean law information access
+- **54 MCP Tools + 2 MCP Resources** for comprehensive Korean law information access
   - Search and retrieve Korean laws (effective date & announcement date)
   - Search and retrieve English-translated laws
   - Search and retrieve administrative rules (행정규칙)
@@ -35,6 +35,10 @@ LexLink is an MCP (Model Context Protocol) server that exposes the Korean Nation
     - Cached mapping of ~20 frequently-used law names to stable 법령ID codes
     - Template lookup by Korean name or abbreviation (`lexlink://law/{name}`)
     - Dynamic caching: search results automatically populate the cache
+- **Smart Features** (inspired by [korean-law-mcp](https://github.com/chrisryugj/korean-law-mcp)):
+  - **Intelligent Caching** - Per-tool TTL caching (search 1hr, articles 24hr, AI search 30min)
+  - **Law Name Resolution** - Auto-resolves Korean abbreviations (자통법→자본시장과 금융투자업에 관한 법률), 52 seed aliases + dynamic learning
+  - **Chain Tools** - Multi-step research workflows in one call (Phase 9)
 - **100% Semantic Validation** - All Phase 1-5 tools confirmed returning real law data
 - **Error Handling** - Actionable error messages with resolution hints
 - **Korean Text Support** - Proper UTF-8 encoding for Korean characters
@@ -42,20 +46,20 @@ LexLink is an MCP (Model Context Protocol) server that exposes the Korean Nation
 
 ## Project Status
 
-🎉 **Production Ready - Phase 5 Complete!**
+🎉 **Production Ready - Phase 9 Complete!**
 
 | Metric | Status |
 |--------|--------|
-| **Tools Implemented** | 44/44 (100%) ✅ |
+| **Tools Implemented** | 54/54 (100%) ✅ |
 | **Semantic Validation** | 26/26 (Phase 1-5 tools) ✅ |
-| **MCP Prompts** | 6/6 (100%) ✅ |
+| **MCP Prompts** | 9/9 (100%) ✅ |
 | **MCP Resources** | 2 (1 static + 1 template) ✅ |
-| **API Coverage** | ~17% of 150+ endpoints |
+| **API Coverage** | ~28% of 191+ endpoints |
 | **LLM Integration** | ✅ Validated (Gemini) |
 | **Code Quality** | Clean, documented, tested |
-| **Version** | v2.0.0 |
+| **Version** | v2.1.0 |
 
-**Latest:** v2.0.0 — 44 tools (Phase 7 added), JSON default response format, `sections` parameter for case law service tools, `_helpers.py` refactoring.
+**Latest:** v2.1.0 — 54 tools (Phase 9 added), intelligent caching (`cache.py`), law name resolution (`resolver.py`), chain tools for multi-step research workflows.
 
 ## Prerequisites
 
@@ -453,6 +457,18 @@ aiRltLs_search(
 | 중앙부처 1차 해석 (Ministry Interpretations) | `cgm_expc_search`, `cgm_expc_service` |
 | 특별행정심판 (Special Appeals) | `special_decc_search`, `special_decc_service` |
 
+### Phase 9: Chain Tools (5 tools)
+
+Inspired by [korean-law-mcp](https://github.com/chrisryugj/korean-law-mcp), these tools run multi-step research workflows in a single call — eliminating the need for an LLM to orchestrate sequential tool calls manually.
+
+| Tool | Description |
+|------|-------------|
+| `chain_full_research` | Complete legal research: statutes + precedent analysis + interpretations |
+| `chain_amendment_track` | Revision history + article-level diff across amendments |
+| `chain_dispute_prep` | All case law sources across 4 databases (판례, 헌재결정례, 법령해석례, 행정심판례) |
+| `chain_law_system` | Full law hierarchy: delegation tree + admin rules + ordinances |
+| `cache_stats` | Cache and resolver performance monitoring |
+
 ### Tool Selection Guide
 
 When searching Korean law, select tools based on query clarity:
@@ -660,7 +676,10 @@ These examples demonstrate real-world conversation flows showing how LLMs intera
 ```
 lexlink-ko-mcp/
 ├── src/lexlink/
-│   ├── server.py        # Main MCP server with 44 tools
+│   ├── server.py        # Main MCP server with 54 tools
+│   ├── _helpers.py      # Shared helpers: run_search, run_service, TOOL_ANNOTATIONS
+│   ├── cache.py         # Intelligent per-tool TTL caching (~183 lines)
+│   ├── resolver.py      # Korean law name/abbreviation resolution (~225 lines)
 │   ├── http_server.py   # HTTP/SSE server for Kakao PlayMCP
 │   ├── stdio_server.py  # Stdio transport entry point
 │   ├── params.py        # Parameter resolution & mapping
@@ -697,7 +716,7 @@ uv run pytest -m e2e
 
 ### Adding New Tools
 
-**Current Status:** 44/44 tools implemented (Phase 1-7 complete). Phase 1-5 tools validated.
+**Current Status:** 54/54 tools implemented (Phase 1-9 complete). Phase 1-5 tools validated.
 
 For implementing additional tools from the 124+ remaining APIs:
 1. Follow the pattern established in `src/lexlink/server.py`
@@ -829,6 +848,7 @@ This project is open source. See LICENSE file for details.
 
 - **law.go.kr** - Korean National Law Information API
 - **MCP** - Model Context Protocol by Anthropic
+- **[korean-law-mcp](https://github.com/chrisryugj/korean-law-mcp)** - Inspiration for caching, law name resolution, and chain tools (Phase 9)
 
 ## Support
 
@@ -838,6 +858,15 @@ This project is open source. See LICENSE file for details.
 ---
 
 ## Changelog
+
+### v2.1.0 - 2026-03-30
+**New: Caching, Law Name Resolution, Chain Tools (Phase 9)**
+
+- Added intelligent per-tool TTL caching (`cache.py`): search 1hr, articles 24hr, AI search 30min
+- Added law name/abbreviation resolution (`resolver.py`): 52 seed aliases + dynamic learning
+- Added 5 Phase 9 chain tools: `chain_full_research`, `chain_amendment_track`, `chain_dispute_prep`, `chain_law_system`, `cache_stats`
+- Inspired by [korean-law-mcp](https://github.com/chrisryugj/korean-law-mcp)
+- See [CHANGELOG.md](CHANGELOG.md) for full details
 
 ### v2.0.0 - 2026-03-30
 **Major Release: Phase 7 Tools, JSON Default, sections Parameter**
@@ -856,7 +885,7 @@ This project is open source. See LICENSE file for details.
 - Added `stdio_server.py` entry point for stdio transport
 - See [CHANGELOG.md](CHANGELOG.md) for full details
 
-For the full changelog (v1.0.0 – v2.0.0), see [CHANGELOG.md](CHANGELOG.md).
+For the full changelog (v1.0.0 – v2.1.0), see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 

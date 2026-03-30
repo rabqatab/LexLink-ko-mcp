@@ -6,6 +6,27 @@ All notable changes to LexLink are documented here in both English and Korean.
 
 ## English
 
+### v2.1.0 (2026-03-30)
+
+#### Added
+- **Intelligent Caching** (`cache.py`): Per-tool TTL caching with semantic query normalization. Search results cached 1hr, articles 24hr, AI search 30min. Inspired by [korean-law-mcp](https://github.com/chrisryugj/korean-law-mcp).
+- **Law Name Resolution** (`resolver.py`): Auto-resolves Korean law abbreviations (자통법→자본시장과 금융투자업에 관한 법률). 52 seed aliases + dynamic learning from API responses. Inspired by [korean-law-mcp](https://github.com/chrisryugj/korean-law-mcp).
+- **Phase 9: Chain Tools** (5 new tools): Multi-step research workflows in one call. Inspired by [korean-law-mcp](https://github.com/chrisryugj/korean-law-mcp).
+  - chain_full_research: Complete legal research (statutes + precedent analysis + interpretations)
+  - chain_amendment_track: Revision history + article-level diff
+  - chain_dispute_prep: All case law sources across 4 databases
+  - chain_law_system: Full law hierarchy (delegation tree + admin rules + ordinances)
+  - cache_stats: Cache and resolver performance monitoring
+
+#### Infrastructure
+- New module: `src/lexlink/cache.py` (~183 lines)
+- New module: `src/lexlink/resolver.py` (~225 lines)
+- Caching integrated into `run_search` and `run_service` helpers
+- Law name resolution integrated into `run_search`
+- Total tools: 54 (was 49)
+
+---
+
 ### v2.0.0 - 2026-03-30
 
 #### Added
@@ -461,6 +482,38 @@ All notable changes to LexLink are documented here in both English and Korean.
 ---
 
 ## 한국어 (Korean)
+
+### v2.1.0 (2026-03-30)
+
+#### 추가
+- **지능형 캐싱** (`cache.py`): 의미론적 쿼리 정규화를 포함한 도구별 TTL 캐싱. 검색 결과 1시간, 조문 24시간, AI 검색 30분 캐싱. [korean-law-mcp](https://github.com/chrisryugj/korean-law-mcp)에서 영감.
+- **법령약칭 해석** (`resolver.py`): 한국 법령 약칭 자동 해석 (자통법→자본시장과 금융투자업에 관한 법률). 52개 기본 별칭 + API 응답으로부터 동적 학습. [korean-law-mcp](https://github.com/chrisryugj/korean-law-mcp)에서 영감.
+- **Phase 9: 체인 도구** (5개 신규 도구): 한 번의 호출로 다단계 조사 워크플로 실행. [korean-law-mcp](https://github.com/chrisryugj/korean-law-mcp)에서 영감.
+  - chain_full_research: 완전한 법령 조사 (법령 + 판례 분석 + 해석례)
+  - chain_amendment_track: 개정 이력 + 조문별 개정 비교
+  - chain_dispute_prep: 4개 데이터베이스에서 모든 판례 조회
+  - chain_law_system: 전체 법령 체계 (위임 체계 + 행정규칙 + 자치법규)
+  - cache_stats: 캐시 및 법령약칭 해석기 성능 모니터링
+
+#### 인프라
+- 신규 모듈: `src/lexlink/cache.py` (~183줄)
+- 신규 모듈: `src/lexlink/resolver.py` (~225줄)
+- `run_search` 및 `run_service` 헬퍼에 캐싱 통합
+- `run_search`에 법령약칭 해석 통합
+- 총 도구 수: 54개 (기존 49개)
+
+---
+
+### v2.0.0 - 2026-03-30
+**주요 릴리스: Phase 7 도구, JSON 기본 형식, sections 파라미터**
+
+- 18개의 Phase 7 도구 추가 (자치법규, 조약, 법령정보 지식베이스, 위원회 결정문, 중앙부처 해석, 특별행정심판)
+- JSON이 기본 응답 형식으로 변경 (기존: XML)
+- 판례 서비스 도구에 `sections="summary"` 파라미터 추가
+- 공통 로직을 `_helpers.py`로 리팩토링
+- 총 도구 수: 44개 (기존 26개)
+
+---
 
 ### v1.5.2 - 2026-03-02
 **수정: slim_response() 재설계 — 안전 가드 + 필드 제거 폐지**

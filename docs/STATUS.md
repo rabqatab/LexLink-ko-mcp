@@ -1,8 +1,8 @@
 # LexLink Project Status
 
 **Last Updated:** 2026-03-30
-**Version:** v2.0.0
-**Status:** Production-Ready (Phase 8 Complete)
+**Version:** v2.1.0
+**Status:** Production-Ready (Phase 9 Complete)
 
 ---
 
@@ -10,7 +10,7 @@
 
 | Metric | Status |
 |--------|--------|
-| **Tools Implemented** | 49/49 (100%) |
+| **Tools Implemented** | 54/54 (100%) |
 | **MCP Prompts** | 9/9 (100%) |
 | **MCP Resources** | 2 (1 static + 1 template) |
 | **Semantic Validation** | 26/26 (Phase 1-5 tools) |
@@ -34,8 +34,10 @@
 
 | File | Description |
 |------|-------------|
-| `src/lexlink/server.py` | Main server (49 tools, 9 prompts, 2 resources) |
+| `src/lexlink/server.py` | Main server (54 tools, 9 prompts, 2 resources) |
 | `src/lexlink/_helpers.py` | Shared helpers (~380 lines): TOOL_ANNOTATIONS, handle_tool_error, run_search, run_service |
+| `src/lexlink/cache.py` | Intelligent per-tool TTL caching (~183 lines) |
+| `src/lexlink/resolver.py` | Korean law name/abbreviation resolution (~225 lines) |
 | `src/lexlink/citation.py` | HTML citation extraction (~450 lines) |
 | `src/lexlink/client.py` | HTTP client for law.go.kr (with anti-bot bypass) |
 | `src/lexlink/stdio_server.py` | Stdio transport entry point |
@@ -47,11 +49,11 @@
 
 | Document | Purpose |
 |----------|---------|
-| `API_REFERENCE.md` | All 49 tool specs + 191 API catalog |
+| `API_REFERENCE.md` | All 54 tool specs + 191 API catalog |
 | `ROADMAP.md` | Phase-by-phase implementation history |
 | `ISSUES.md` | Bug tracker (11 fixed, 1 open) |
 | `DEPLOYMENT_GUIDE.md` | EC2/PlayMCP deployment instructions |
-| `../CHANGELOG.md` | Version history (v1.0.0 - v2.0.0) |
+| `../CHANGELOG.md` | Version history (v1.0.0 - v2.1.0) |
 
 ## Open Issues
 
@@ -62,4 +64,5 @@
 - **Phase 6:** DONE — Refactored `server.py` with `_helpers.py` (~38% line reduction)
 - **Phase 7:** DONE — Added 18 new tools (자치법규, 조약, 지식베이스, 위원회 결정문, 중앙부처 해석, 특별행정심판)
 - **Phase 8:** DONE — Added 5 new tools (check_precedent_odds, legal_resolver, simplify_article, law_amendment_summary, article_amendment_diff) + 3 prompts; JSON is now default format
+- **Phase 9:** DONE — Added 5 chain tools, `cache.py` (intelligent caching), `resolver.py` (law name resolution); inspired by [korean-law-mcp](https://github.com/chrisryugj/korean-law-mcp)
 - **Issue #10:** FIXED v2.0.0 — upgraded to mcp>=1.26.0
