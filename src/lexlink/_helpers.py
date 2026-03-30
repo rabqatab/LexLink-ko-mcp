@@ -152,6 +152,9 @@ def run_search(
 
     if ranking_enabled and over_fetch and original_display < 100:
         upstream_params[over_fetch_key] = "100"
+        # JSON format ignores numOfRows — must also set display for JSON over-fetch
+        if response_type == "JSON":
+            upstream_params["display"] = "100"
         logger.debug(f"Ranking enabled: fetching 100 results instead of {original_display}")
 
     client = get_client()

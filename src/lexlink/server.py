@@ -708,6 +708,9 @@ For article_citation: you MUST first call eflaw_search to get the current MST (ë
         if ranking_enabled and original_display < 100:
             # Fetch more results to rank (up to 100, API max) for better relevance
             upstream_params["numOfRows"] = "100"
+            # JSON format ignores numOfRows â€” must also set display
+            if type == "JSON":
+                upstream_params["display"] = "100"
             logger.debug(f"Ranking enabled: fetching 100 results instead of {original_display}")
 
         # Call API
@@ -1024,8 +1027,9 @@ For article_citation: you MUST first call eflaw_search to get the current MST (ë
         }
         if knd: snake_params["knd"] = knd
         if jo is not None:
-            # Convert to 4-digit format if needed
-            snake_params["jo"] = jo if jo >= 1000 else jo
+            # Convert string to int if needed (LLMs may pass "0020" as string)
+            jo_val = int(jo) if isinstance(jo, str) else jo
+            snake_params["jo"] = jo_val
         if jobr is not None: snake_params["jobr"] = jobr
         if sort: snake_params["sort"] = sort
         return run_search(
