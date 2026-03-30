@@ -112,6 +112,10 @@ Not all LLMs follow `SERVER_INSTRUCTIONS` reliably. Tested 2026-03-01 across 15 
 
 When deploying to cloud servers (GCP, AWS, etc.), the server's public IP must be registered at [open.law.go.kr](https://open.law.go.kr). Without IP registration, the API returns "사용자 정보 검증에 실패하였습니다" (user verification failed). Excessive requests from unregistered IPs may trigger temporary IP blocks.
 
+### simplify_article — Partial Knowledge Base Coverage
+
+The `simplify_article` tool relies on the law.go.kr knowledge base API (`lstrm_ai_search`) for plain-language explanations. Coverage is partial: not all law articles have knowledge base entries. When an article is not found in the knowledge base, the tool falls back to returning the raw article text without simplification.
+
 ### OC Parameter Registration Required
 
 Users must register at [open.law.go.kr](https://open.law.go.kr) and enable specific API categories. This is an API provider requirement, not a bug.

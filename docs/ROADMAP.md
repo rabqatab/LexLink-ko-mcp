@@ -1,7 +1,7 @@
 # LexLink API Implementation Roadmap
 
 **Last Updated:** 2026-03-30
-**Status:** All 44 tools + 2 resources implemented (v2.0.0)
+**Status:** All 49 tools + 2 resources + 9 prompts implemented (v2.0.0)
 
 ---
 
@@ -121,6 +121,24 @@ Explicit `@server.tool()` decorators and `ctx: Context = None` signatures remain
 
 ---
 
+## Phase 8: AI-Powered Legal Reasoning Tools - COMPLETE
+
+**Completed:** 2026-03-30 | **Tools:** 5/5 | **Version:** v2.0.0
+
+| Tool | Korean Name | Description |
+|------|-------------|-------------|
+| `check_precedent_odds` | 판례 승소 가능성 분석 | Analyzes precedent patterns to estimate case odds |
+| `legal_resolver` | 법률 분쟁 해결 가이드 | Guides users through legal dispute resolution paths |
+| `simplify_article` | 법령 조문 쉬운 설명 | Explains law articles in plain language using knowledge base |
+| `law_amendment_summary` | 법령 개정 요약 | Summarizes law amendment history |
+| `article_amendment_diff` | 조문 개정 비교 | Shows diff between article versions across amendments |
+
+**MCP Prompts Added:** 3 prompts for legal reasoning guidance
+
+**Note:** JSON is now the default response format as of v2.0.0 (was XML in previous versions).
+
+---
+
 ## Future Expansion
 
 **Additional APIs available (remaining):**
@@ -129,6 +147,6 @@ Explicit `@server.tool()` decorators and `ctx: Context = None` signatures remain
 - 별표·서식 (Tables & Forms) - 3 tools
 - 학칙·공단·공공기관 - 2 tools
 
-**Note:** Local ordinances, treaties, committee decisions, ministry interpretations, special appeals, and knowledge base tools are now implemented in Phase 7.
+**Note:** Local ordinances, treaties, committee decisions, ministry interpretations, special appeals, and knowledge base tools are implemented in Phase 7. AI-powered legal reasoning tools are implemented in Phase 8.
 
 See `API_REFERENCE.md` for the full 191-API catalog.

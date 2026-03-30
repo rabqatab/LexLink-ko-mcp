@@ -27,18 +27,16 @@
 | **중앙부처 1차 해석 (Ministry Interpretations)** | 64 | 2 | ✅ cgm_expc_search, cgm_expc_service (39 ministries, parametric) |
 | **특별행정심판 (Special Appeals)** | 8 | 2 | ✅ special_decc_search, special_decc_service (4 tribunals, parametric) |
 | **Custom (article_citation)** | 1 | 1 | ✅ HTML parsing tool |
-| **Total** | **191** | **44** | **~23% coverage** |
+| **Total** | **191** | **49** | **~26% coverage** |
 
 ---
 
-## ⚠️ Known API Provider Issues
+## Response Format Support (Updated v2.0.0)
 
-**JSON Format Not Supported** (Verified 2025-11-07)
-- ❌ **JSON format does NOT work** - All APIs return HTML error pages when `type=JSON` is requested
-- ✅ **XML format WORKS** - Confirmed working on all endpoints
-- ✅ **HTML format WORKS** - Confirmed working
-
-**Use XML format for all requests** until the API provider fixes JSON support.
+**Response Format Support** (Updated v2.0.0)
+- ✅ **JSON format WORKS** - Default format for all tools as of v2.0.0
+- ✅ **XML format WORKS** - Available via `type="XML"` parameter
+- ✅ **HTML format WORKS** - Available via `type="HTML"` (limited endpoints)
 
 ---
 
@@ -46,7 +44,7 @@
 
 - 모든 엔드포인트는 **HTTP GET**
 - request parameters의 OC parameter는 test 시 **your_oc**로 사용할 것
-- **Response format:** Use `type=XML` (default) - JSON is documented but not supported by API
+- **Response format:** Use `type=JSON` (default) - JSON is the default format as of v2.0.0; XML and HTML also supported
 - **Base URL:** `http://www.law.go.kr/DRF/`
 - **List APIs:** `lawSearch.do?target=<target>`
 - **Content APIs:** `lawService.do?target=<target>`
