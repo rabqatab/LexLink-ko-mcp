@@ -1096,13 +1096,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
     # ==================== PHASE 3: CASE LAW & LEGAL RESEARCH ====================
 
     # ==================== TOOL 16: prec_search ====================
-    @server.tool(
-        annotations=ToolAnnotations(
-            readOnlyHint=True,
-            destructiveHint=False,
-            idempotentHint=True
-        )
-    )
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
     def prec_search(
         query: str = "*",
         display: int = 20,
@@ -1155,97 +1150,34 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             Search Supreme Court precedents:
             >>> prec_search(query="담보권", curt="대법원")
         """
-        try:
-            resolved_oc = resolve_oc(override_oc=oc)
-
-            # Build parameter dict
-            snake_params = {
-                "oc": resolved_oc,
-                "target": "prec",
-                "type": type,
-                "query": query,
-                "display": display,
-                "page": page,
-            }
-
-            # Add optional params
-            if search:
-                snake_params["search"] = search
-            if sort:
-                snake_params["sort"] = sort
-            if org:
-                snake_params["org"] = org
-            if curt:
-                snake_params["curt"] = curt
-            if jo:
-                snake_params["jo"] = jo
-            if gana:
-                snake_params["gana"] = gana
-            if date:
-                snake_params["date"] = date
-            if prnc_yd:
-                validate_date_range(prnc_yd, "prnc_yd")
-                snake_params["prnc_yd"] = prnc_yd
-            if nb:
-                snake_params["nb"] = nb
-            if dat_src_nm:
-                snake_params["dat_src_nm"] = dat_src_nm
-            if pop_yn:
-                snake_params["pop_yn"] = pop_yn
-
-            # Map to upstream format
-            upstream_params = map_params_to_upstream(snake_params)
-
-            # Determine if we need to fetch more results for ranking
-            original_display = display
-            ranking_enabled = (type == "XML" and should_apply_ranking(query))
-
-            if ranking_enabled and original_display < 100:
-                upstream_params["display"] = "100"
-                logger.debug(f"Ranking enabled: fetching 100 results instead of {original_display}")
-
-            # Execute request
-            client = _get_client()
-            response = client.get("/DRF/lawSearch.do", upstream_params, type)
-
-            # Apply relevance ranking if XML response
-            if response.get("status") == "ok" and ranking_enabled:
-                raw_content = response.get("raw_content", "")
-                if raw_content:
-                    parsed_data = parse_xml_response(raw_content)
-                    if parsed_data:
-                        items = extract_items_list(parsed_data, 'prec')
-                        if items:
-                            ranked_items = rank_search_results(items, query, "판례명")
-                            if len(ranked_items) > original_display:
-                                ranked_items = ranked_items[:original_display]
-                            parsed_data = update_items_list(parsed_data, ranked_items, 'prec')
-                            parsed_data["display"] = str(original_display)
-                            response["ranked_data"] = parsed_data
-
-            return slim_response(response)
-
-        except ValueError as e:
-            logger.error(f"Validation error in prec_search: {e}")
-            return create_error_response(
-                error_code=ErrorCode.VALIDATION_ERROR,
-                message=str(e)
-            )
-        except Exception as e:
-            logger.exception(f"Unexpected error in prec_search: {e}")
-            return create_error_response(
-                error_code=ErrorCode.INTERNAL_ERROR,
-                message=f"Unexpected error: {str(e)}"
-            )
+        resolved_oc = resolve_oc(override_oc=oc)
+        snake_params = {
+            "oc": resolved_oc, "target": "prec", "type": type,
+            "query": query, "display": display, "page": page,
+        }
+        if search: snake_params["search"] = search
+        if sort: snake_params["sort"] = sort
+        if org: snake_params["org"] = org
+        if curt: snake_params["curt"] = curt
+        if jo: snake_params["jo"] = jo
+        if gana: snake_params["gana"] = gana
+        if date: snake_params["date"] = date
+        if prnc_yd:
+            validate_date_range(prnc_yd, "prnc_yd")
+            snake_params["prnc_yd"] = prnc_yd
+        if nb: snake_params["nb"] = nb
+        if dat_src_nm: snake_params["dat_src_nm"] = dat_src_nm
+        if pop_yn: snake_params["pop_yn"] = pop_yn
+        return run_search(
+            get_client=_get_client, target="prec", query=query,
+            snake_params=snake_params, response_type=type, display=display,
+            ranking_field="판례명", list_type="items", item_category="prec",
+            over_fetch_key="display",
+        )
 
     # ==================== TOOL 17: prec_service ====================
-    @server.tool(
-        annotations=ToolAnnotations(
-            readOnlyHint=True,
-            destructiveHint=False,
-            idempotentHint=True
-        )
-    )
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
     def prec_service(
         id: Union[str, int],
         lm: Optional[str] = None,
@@ -1268,48 +1200,18 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         Examples:
             >>> prec_service(id="228541")
         """
-        try:
-            resolved_oc = resolve_oc(override_oc=oc)
-
-            # Build parameters
-            params = {
-                "oc": resolved_oc,
-                "target": "prec",
-                "id": str(id),
-                "type": type,
-            }
-
-            if lm:
-                params["lm"] = lm
-
-            # Map to upstream format
-            upstream_params = map_params_to_upstream(params)
-
-            # Call API
-            client = _get_client()
-            return client.get("/DRF/lawService.do", upstream_params, response_type=type)
-
-        except ValueError as e:
-            logger.error(f"Validation error in prec_service: {e}")
-            return create_error_response(
-                error_code=ErrorCode.VALIDATION_ERROR,
-                message=str(e)
-            )
-        except Exception as e:
-            logger.exception(f"Unexpected error in prec_service: {e}")
-            return create_error_response(
-                error_code=ErrorCode.INTERNAL_ERROR,
-                message=f"Unexpected error: {str(e)}"
-            )
+        resolved_oc = resolve_oc(override_oc=oc)
+        snake_params = {
+            "oc": resolved_oc, "target": "prec",
+            "id": str(id), "type": type,
+        }
+        if lm: snake_params["lm"] = lm
+        return run_service(get_client=_get_client, target="prec",
+                          snake_params=snake_params, response_type=type)
 
     # ==================== TOOL 18: detc_search ====================
-    @server.tool(
-        annotations=ToolAnnotations(
-            readOnlyHint=True,
-            destructiveHint=False,
-            idempotentHint=True
-        )
-    )
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
     def detc_search(
         query: str = "*",
         display: int = 20,
@@ -1354,89 +1256,30 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             Search by date:
             >>> detc_search(date=20150210)
         """
-        try:
-            resolved_oc = resolve_oc(override_oc=oc)
-
-            # Build parameter dict
-            snake_params = {
-                "oc": resolved_oc,
-                "target": "detc",
-                "type": type,
-                "query": query,
-                "display": display,
-                "page": page,
-            }
-
-            # Add optional params
-            if search:
-                snake_params["search"] = search
-            if gana:
-                snake_params["gana"] = gana
-            if sort:
-                snake_params["sort"] = sort
-            if date:
-                snake_params["date"] = date
-            if ed_yd:
-                validate_date_range(ed_yd, "ed_yd")
-                snake_params["ed_yd"] = ed_yd
-            if nb:
-                snake_params["nb"] = nb
-            if pop_yn:
-                snake_params["pop_yn"] = pop_yn
-
-            # Map to upstream format
-            upstream_params = map_params_to_upstream(snake_params)
-
-            # Determine if we need to fetch more results for ranking
-            original_display = display
-            ranking_enabled = (type == "XML" and should_apply_ranking(query))
-
-            if ranking_enabled and original_display < 100:
-                upstream_params["display"] = "100"
-                logger.debug(f"Ranking enabled: fetching 100 results instead of {original_display}")
-
-            # Execute request
-            client = _get_client()
-            response = client.get("/DRF/lawSearch.do", upstream_params, type)
-
-            # Apply relevance ranking if XML response
-            if response.get("status") == "ok" and ranking_enabled:
-                raw_content = response.get("raw_content", "")
-                if raw_content:
-                    parsed_data = parse_xml_response(raw_content)
-                    if parsed_data:
-                        items = extract_items_list(parsed_data, 'detc')
-                        if items:
-                            ranked_items = rank_search_results(items, query, "사건명")
-                            if len(ranked_items) > original_display:
-                                ranked_items = ranked_items[:original_display]
-                            parsed_data = update_items_list(parsed_data, ranked_items, 'detc')
-                            parsed_data["display"] = str(original_display)
-                            response["ranked_data"] = parsed_data
-
-            return slim_response(response)
-
-        except ValueError as e:
-            logger.error(f"Validation error in detc_search: {e}")
-            return create_error_response(
-                error_code=ErrorCode.VALIDATION_ERROR,
-                message=str(e)
-            )
-        except Exception as e:
-            logger.exception(f"Unexpected error in detc_search: {e}")
-            return create_error_response(
-                error_code=ErrorCode.INTERNAL_ERROR,
-                message=f"Unexpected error: {str(e)}"
-            )
+        resolved_oc = resolve_oc(override_oc=oc)
+        snake_params = {
+            "oc": resolved_oc, "target": "detc", "type": type,
+            "query": query, "display": display, "page": page,
+        }
+        if search: snake_params["search"] = search
+        if gana: snake_params["gana"] = gana
+        if sort: snake_params["sort"] = sort
+        if date: snake_params["date"] = date
+        if ed_yd:
+            validate_date_range(ed_yd, "ed_yd")
+            snake_params["ed_yd"] = ed_yd
+        if nb: snake_params["nb"] = nb
+        if pop_yn: snake_params["pop_yn"] = pop_yn
+        return run_search(
+            get_client=_get_client, target="detc", query=query,
+            snake_params=snake_params, response_type=type, display=display,
+            ranking_field="사건명", list_type="items", item_category="detc",
+            over_fetch_key="display",
+        )
 
     # ==================== TOOL 19: detc_service ====================
-    @server.tool(
-        annotations=ToolAnnotations(
-            readOnlyHint=True,
-            destructiveHint=False,
-            idempotentHint=True
-        )
-    )
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
     def detc_service(
         id: Union[str, int],
         lm: Optional[str] = None,
@@ -1459,48 +1302,18 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         Examples:
             >>> detc_service(id="58386")
         """
-        try:
-            resolved_oc = resolve_oc(override_oc=oc)
-
-            # Build parameters
-            params = {
-                "oc": resolved_oc,
-                "target": "detc",
-                "id": str(id),
-                "type": type,
-            }
-
-            if lm:
-                params["lm"] = lm
-
-            # Map to upstream format
-            upstream_params = map_params_to_upstream(params)
-
-            # Call API
-            client = _get_client()
-            return client.get("/DRF/lawService.do", upstream_params, response_type=type)
-
-        except ValueError as e:
-            logger.error(f"Validation error in detc_service: {e}")
-            return create_error_response(
-                error_code=ErrorCode.VALIDATION_ERROR,
-                message=str(e)
-            )
-        except Exception as e:
-            logger.exception(f"Unexpected error in detc_service: {e}")
-            return create_error_response(
-                error_code=ErrorCode.INTERNAL_ERROR,
-                message=f"Unexpected error: {str(e)}"
-            )
+        resolved_oc = resolve_oc(override_oc=oc)
+        snake_params = {
+            "oc": resolved_oc, "target": "detc",
+            "id": str(id), "type": type,
+        }
+        if lm: snake_params["lm"] = lm
+        return run_service(get_client=_get_client, target="detc",
+                          snake_params=snake_params, response_type=type)
 
     # ==================== TOOL 20: expc_search ====================
-    @server.tool(
-        annotations=ToolAnnotations(
-            readOnlyHint=True,
-            destructiveHint=False,
-            idempotentHint=True
-        )
-    )
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
     def expc_search(
         query: str = "*",
         display: int = 20,
@@ -1551,106 +1364,34 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             Search by date range:
             >>> expc_search(query="자동차", expl_yd="20240101~20241231", type="XML")
         """
-        try:
-            resolved_oc = resolve_oc(override_oc=oc)
-
-            # Validate date ranges if provided
-            if reg_yd:
-                validate_date_range(reg_yd, "reg_yd")
-            if expl_yd:
-                validate_date_range(expl_yd, "expl_yd")
-
-            # Build parameters
-            params = {
-                "oc": resolved_oc,
-                "target": "expc",
-                "query": query,
-                "display": display,
-                "page": page,
-                "search": search,
-            }
-
-            # Add optional parameters
-            if inq:
-                params["inq"] = inq
-            if rpl is not None:
-                params["rpl"] = rpl
-            if gana:
-                params["gana"] = gana
-            if itmno is not None:
-                params["itmno"] = itmno
-            if reg_yd:
-                params["reg_yd"] = reg_yd
-            if expl_yd:
-                params["expl_yd"] = expl_yd
-            if sort:
-                params["sort"] = sort
-            if pop_yn:
-                params["pop_yn"] = pop_yn
-
-            # Map to upstream format
-            upstream_params = map_params_to_upstream(params)
-
-            # Determine if we need to fetch more results for ranking
-            original_display = display
-            ranking_enabled = (type == "XML" and should_apply_ranking(query))
-
-            if ranking_enabled and original_display < 100:
-                # Fetch more results to rank (up to 100, API max) for better relevance
-                upstream_params["numOfRows"] = "100"
-                logger.debug(f"Ranking enabled: fetching 100 results instead of {original_display}")
-
-            # Call API
-            client = _get_client()
-            response = client.get("/DRF/lawSearch.do", upstream_params, response_type=type)
-
-            # Apply relevance ranking for legal interpretations
-            if response.get("status") == "ok" and ranking_enabled:
-                raw_content = response.get("raw_content", "")
-                if raw_content:
-                    parsed_data = parse_xml_response(raw_content)
-                    if parsed_data:
-                        # Extract interpretations list using 'Expc' tag
-                        from .parser import extract_items_list, update_items_list
-                        interpretations = extract_items_list(parsed_data, 'expc')
-                        if interpretations:
-                            # Rank by relevance using '안건명' field
-                            ranked_interpretations = rank_search_results(interpretations, query, "안건명")
-
-                            # Trim to original requested display amount
-                            if len(ranked_interpretations) > original_display:
-                                ranked_interpretations = ranked_interpretations[:original_display]
-                                logger.debug(f"Trimmed results from {len(interpretations)} to {original_display}")
-
-                            # Update parsed data with ranked results
-                            parsed_data = update_items_list(parsed_data, ranked_interpretations, 'expc')
-                            # Update numOfRows to reflect trimmed results
-                            parsed_data["numOfRows"] = str(original_display)
-                            response["ranked_data"] = parsed_data
-
-            return slim_response(response)
-
-        except ValueError as e:
-            logger.error(f"Validation error in expc_search: {e}")
-            return create_error_response(
-                error_code=ErrorCode.VALIDATION_ERROR,
-                message=str(e)
-            )
-        except Exception as e:
-            logger.exception(f"Unexpected error in expc_search: {e}")
-            return create_error_response(
-                error_code=ErrorCode.INTERNAL_ERROR,
-                message=f"Unexpected error: {str(e)}"
-            )
+        resolved_oc = resolve_oc(override_oc=oc)
+        if reg_yd:
+            validate_date_range(reg_yd, "reg_yd")
+        if expl_yd:
+            validate_date_range(expl_yd, "expl_yd")
+        snake_params = {
+            "oc": resolved_oc, "target": "expc", "type": type,
+            "query": query, "display": display, "page": page,
+            "search": search,
+        }
+        if inq: snake_params["inq"] = inq
+        if rpl is not None: snake_params["rpl"] = rpl
+        if gana: snake_params["gana"] = gana
+        if itmno is not None: snake_params["itmno"] = itmno
+        if reg_yd: snake_params["reg_yd"] = reg_yd
+        if expl_yd: snake_params["expl_yd"] = expl_yd
+        if sort: snake_params["sort"] = sort
+        if pop_yn: snake_params["pop_yn"] = pop_yn
+        return run_search(
+            get_client=_get_client, target="expc", query=query,
+            snake_params=snake_params, response_type=type, display=display,
+            ranking_field="사건명", list_type="items", item_category="expc",
+            over_fetch_key="display",
+        )
 
     # ==================== TOOL 17: expc_service ====================
-    @server.tool(
-        annotations=ToolAnnotations(
-            readOnlyHint=True,
-            destructiveHint=False,
-            idempotentHint=True
-        )
-    )
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
     def expc_service(
         id: Union[str, int],
         lm: Optional[str] = None,
@@ -1681,52 +1422,18 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             Retrieve with name:
             >>> expc_service(id="315191", lm="여성가족부 - 건강가정기본법 제35조 제2항 관련", type="XML")
         """
-        try:
-            # Convert id to string if it's an integer (LLMs may extract numbers as ints)
-            if id is not None:
-                id = str(id)
-
-            resolved_oc = resolve_oc(override_oc=oc)
-
-            # Build parameters
-            params = {
-                "oc": resolved_oc,
-                "target": "expc",
-                "id": id,
-            }
-
-            # Add optional parameter
-            if lm:
-                params["lm"] = lm
-
-            # Map to upstream format
-            upstream_params = map_params_to_upstream(params)
-
-            # Call API
-            client = _get_client()
-            return client.get("/DRF/lawService.do", upstream_params, response_type=type)
-
-        except ValueError as e:
-            logger.error(f"Validation error in expc_service: {e}")
-            return create_error_response(
-                error_code=ErrorCode.VALIDATION_ERROR,
-                message=str(e)
-            )
-        except Exception as e:
-            logger.exception(f"Unexpected error in expc_service: {e}")
-            return create_error_response(
-                error_code=ErrorCode.INTERNAL_ERROR,
-                message=f"Unexpected error: {str(e)}"
-            )
+        resolved_oc = resolve_oc(override_oc=oc)
+        snake_params = {
+            "oc": resolved_oc, "target": "expc",
+            "id": str(id), "type": type,
+        }
+        if lm: snake_params["lm"] = lm
+        return run_service(get_client=_get_client, target="expc",
+                          snake_params=snake_params, response_type=type)
 
     # ==================== TOOL 18: decc_search ====================
-    @server.tool(
-        annotations=ToolAnnotations(
-            readOnlyHint=True,
-            destructiveHint=False,
-            idempotentHint=True
-        )
-    )
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
     def decc_search(
         query: str = "*",
         display: int = 20,
@@ -1779,103 +1486,33 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             Search by date range:
             >>> decc_search(rsl_yd="20200101~20201231", type="XML")
         """
-        try:
-            resolved_oc = resolve_oc(override_oc=oc)
-
-            # Validate date ranges if provided
-            if dpa_yd:
-                validate_date_range(dpa_yd, "dpa_yd")
-            if rsl_yd:
-                validate_date_range(rsl_yd, "rsl_yd")
-
-            # Build parameters
-            params = {
-                "oc": resolved_oc,
-                "target": "decc",
-                "query": query,
-                "display": display,
-                "page": page,
-                "search": search,
-            }
-
-            # Add optional parameters
-            if cls:
-                params["cls"] = cls
-            if gana:
-                params["gana"] = gana
-            if date:
-                params["date"] = date
-            if dpa_yd:
-                params["dpa_yd"] = dpa_yd
-            if rsl_yd:
-                params["rsl_yd"] = rsl_yd
-            if sort:
-                params["sort"] = sort
-            if pop_yn:
-                params["pop_yn"] = pop_yn
-
-            # Map to upstream format
-            upstream_params = map_params_to_upstream(params)
-
-            # Determine if we need to fetch more results for ranking
-            original_display = display
-            ranking_enabled = (type == "XML" and should_apply_ranking(query))
-
-            if ranking_enabled and original_display < 100:
-                # Fetch more results to rank (up to 100, API max) for better relevance
-                upstream_params["numOfRows"] = "100"
-                logger.debug(f"Ranking enabled: fetching 100 results instead of {original_display}")
-
-            # Call API
-            client = _get_client()
-            response = client.get("/DRF/lawSearch.do", upstream_params, response_type=type)
-
-            # Apply relevance ranking for administrative appeal decisions
-            if response.get("status") == "ok" and ranking_enabled:
-                raw_content = response.get("raw_content", "")
-                if raw_content:
-                    parsed_data = parse_xml_response(raw_content)
-                    if parsed_data:
-                        # Extract administrative appeal decisions list using 'Decc' tag
-                        decisions = extract_items_list(parsed_data, 'decc')
-                        if decisions:
-                            # Administrative appeal decisions use "사건명" (case_name) field
-                            ranked_decisions = rank_search_results(decisions, query, "사건명")
-
-                            # Trim to original requested display amount
-                            if len(ranked_decisions) > original_display:
-                                ranked_decisions = ranked_decisions[:original_display]
-                                logger.debug(f"Trimmed results from {len(decisions)} to {original_display}")
-
-                            # Update parsed data with ranked results
-                            parsed_data = update_items_list(parsed_data, ranked_decisions, 'decc')
-                            # Update numOfRows to reflect trimmed results
-                            parsed_data["numOfRows"] = str(original_display)
-                            response["ranked_data"] = parsed_data
-
-            return slim_response(response)
-
-        except ValueError as e:
-            logger.error(f"Validation error in decc_search: {e}")
-            return create_error_response(
-                error_code=ErrorCode.VALIDATION_ERROR,
-                message=str(e)
-            )
-        except Exception as e:
-            logger.exception(f"Unexpected error in decc_search: {e}")
-            return create_error_response(
-                error_code=ErrorCode.INTERNAL_ERROR,
-                message=f"Unexpected error: {str(e)}"
-            )
+        resolved_oc = resolve_oc(override_oc=oc)
+        if dpa_yd:
+            validate_date_range(dpa_yd, "dpa_yd")
+        if rsl_yd:
+            validate_date_range(rsl_yd, "rsl_yd")
+        snake_params = {
+            "oc": resolved_oc, "target": "decc", "type": type,
+            "query": query, "display": display, "page": page,
+            "search": search,
+        }
+        if cls: snake_params["cls"] = cls
+        if gana: snake_params["gana"] = gana
+        if date: snake_params["date"] = date
+        if dpa_yd: snake_params["dpa_yd"] = dpa_yd
+        if rsl_yd: snake_params["rsl_yd"] = rsl_yd
+        if sort: snake_params["sort"] = sort
+        if pop_yn: snake_params["pop_yn"] = pop_yn
+        return run_search(
+            get_client=_get_client, target="decc", query=query,
+            snake_params=snake_params, response_type=type, display=display,
+            ranking_field="사건명", list_type="items", item_category="decc",
+            over_fetch_key="display",
+        )
 
     # ==================== TOOL 19: decc_service ====================
-    @server.tool(
-        annotations=ToolAnnotations(
-            readOnlyHint=True,
-            destructiveHint=False,
-            idempotentHint=True
-        )
-    )
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
     def decc_service(
         id: Union[str, int],
         lm: Optional[str] = None,
@@ -1906,43 +1543,14 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             Retrieve with case name:
             >>> decc_service(id="245011", lm="과징금 부과처분 취소청구", type="XML")
         """
-        try:
-            # Convert id to string if it's an integer (LLMs may extract numbers as ints)
-            if id is not None:
-                id = str(id)
-
-            resolved_oc = resolve_oc(override_oc=oc)
-
-            # Build parameters
-            params = {
-                "oc": resolved_oc,
-                "target": "decc",
-                "id": id,
-            }
-
-            # Add optional parameters
-            if lm:
-                params["lm"] = lm
-
-            # Map to upstream format
-            upstream_params = map_params_to_upstream(params)
-
-            # Call API
-            client = _get_client()
-            return client.get("/DRF/lawService.do", upstream_params, response_type=type)
-
-        except ValueError as e:
-            logger.error(f"Validation error in decc_service: {e}")
-            return create_error_response(
-                error_code=ErrorCode.VALIDATION_ERROR,
-                message=str(e)
-            )
-        except Exception as e:
-            logger.exception(f"Unexpected error in decc_service: {e}")
-            return create_error_response(
-                error_code=ErrorCode.INTERNAL_ERROR,
-                message=f"Unexpected error: {str(e)}"
-            )
+        resolved_oc = resolve_oc(override_oc=oc)
+        snake_params = {
+            "oc": resolved_oc, "target": "decc",
+            "id": str(id), "type": type,
+        }
+        if lm: snake_params["lm"] = lm
+        return run_service(get_client=_get_client, target="decc",
+                          snake_params=snake_params, response_type=type)
 
     # ==================== PHASE 4: ARTICLE CITATION ====================
 
