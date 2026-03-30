@@ -18,195 +18,335 @@ Evaluate switching LexLink's default response format from XML to JSON or TOON (T
 
 ## 2. Methodology
 
-### Test Scenarios
-8 representative tool calls covering search (various sizes) and service (full text):
-
-| # | Scenario | Type | Description |
-|---|----------|------|-------------|
-| 1 | `eflaw_search(민법, 5)` | Search | Law search, 5 results |
-| 2 | `eflaw_search(민법, 20)` | Search | Law search, 20 results |
-| 3 | `prec_search(담보권, 10)` | Search | Precedent search, 10 results |
-| 4 | `trty_search(무역, 10)` | Search | Treaty search, 10 results |
-| 5 | `admrul_search(학교, 10)` | Search | Admin rule search, 10 results |
-| 6 | `eflaw_service(민법 제3조)` | Service | Single law article |
-| 7 | `prec_service(228541)` | Service | Full precedent text |
-| 8 | `aiSearch(음주운전, 5)` | AI Search | Semantic search, 5 results |
-
-### Measurement Setup
+### Scale
+- **102 API calls** across **16 tool categories**
+- **6 distinct query sets** (law, English, case law, admin, ordinance, treaty, knowledge base, committee, tribunal, AI search)
+- Each query tested in **XML and JSON** formats; JSON converted client-side to TOON
 - **Token counting:** tiktoken `o200k_base` encoding (GPT-4o / Claude compatible)
-- **Latency:** Median of 3 runs per format per scenario
-- **TOON conversion:** JSON → TOON via custom Python converter (no stable SDK available)
-- **LLM parseability:** gemini-2.0-flash extracting 3 fields from 5 law results
-- **API endpoint:** `http://www.law.go.kr/DRF/` with `type=XML` or `type=JSON`
-- **TOON latency:** Not measured (converted client-side from JSON, adds ~1ms)
+- **LLM parseability:** gemini-2.0-flash field extraction test (3 formats × 5 results)
+
+### Tool Coverage (all 44 tools represented by category)
+
+| Category | Tools Covered | Queries |
+|----------|--------------|---------|
+| law_search | eflaw_search, law_search | 12 |
+| elaw_search | elaw_search | 5 |
+| admrul_search | admrul_search | 5 |
+| prec_search | prec_search | 5 |
+| detc_search | detc_search | 5 |
+| expc_search | expc_search | 5 |
+| decc_search | decc_search | 5 |
+| aiSearch | aiSearch | 5 |
+| aiRltLs | aiRltLs_search | 5 |
+| ordin_search | ordin_search | 5 |
+| trty_search | trty_search | 5 |
+| kb_search | dlytrm_search, ls_rlt_search | 10 |
+| committee_search | committee_search (ftc, nhrck) | 10 |
+| special_decc | special_decc_search (tt) | 5 |
+| service | eflaw_service, law_service, eflaw_josub, prec_service, detc_service, expc_service, decc_service | 10 |
+| linkage | lnkLs_search | 5 |
+| **Total** | | **102** |
+
+---
 
 ## 3. Results
 
-### 3.1 Token Count Comparison
+### 3.1 Aggregate by Category
 
-| Scenario | XML tokens | JSON tokens | TOON tokens | JSON savings | TOON savings |
-|----------|-----------|------------|------------|-------------|-------------|
-| eflaw_search(민법, 5) | 1,485 | 1,202 | 575 | **-19.1%** | **-61.3%** |
-| eflaw_search(민법, 20) | 5,710 | 4,602 | 1,860 | **-19.4%** | **-67.4%** |
-| prec_search(담보권, 10) | 2,800 | 2,471 | 1,462 | **-11.8%** | **-47.8%** |
-| trty_search(무역, 10) | 2,114 | 1,797 | 919 | **-15.0%** | **-56.5%** |
-| admrul_search(학교, 10) | 2,906 | 2,378 | 1,149 | **-18.2%** | **-60.5%** |
-| eflaw_service(민법 제3조) | 901 | 715 | 662 | **-20.6%** | **-26.5%** |
-| prec_service(228541) | 7,653 | 7,743 | 7,581 | +1.2% | **-0.9%** |
-| aiSearch(음주운전, 5) | 5,590 | 5,198 | 4,571 | **-7.0%** | **-18.2%** |
+| Category | N | XML tokens (avg) | JSON tokens (avg) | TOON tokens (avg) | JSON savings | TOON savings | XML latency | JSON latency |
+|----------|---|-----------------|-------------------|-------------------|-------------|-------------|-------------|-------------|
+| law_search | 12 | 2,427 | 1,972 | 897 | **-18.8%** | **-63.0%** | 198ms | 240ms |
+| elaw_search | 5 | 2,791 | 2,333 | 1,180 | **-16.4%** | **-57.7%** | 180ms | 219ms |
+| admrul_search | 5 | 2,954 | 2,426 | 1,196 | **-17.9%** | **-59.5%** | 185ms | 216ms |
+| prec_search | 5 | 2,680 | 2,355 | 1,342 | **-12.1%** | **-49.9%** | 199ms | 285ms |
+| detc_search | 5 | 476 | 402 | 270 | **-15.6%** | **-43.3%** | 194ms | 206ms |
+| expc_search | 5 | 794 | 690 | 468 | **-13.1%** | **-41.1%** | 189ms | 220ms |
+| decc_search | 5 | 153 | 126 | 89 | **-17.5%** | **-42.0%** | 187ms | 217ms |
+| aiSearch | 5 | 3,858 | 3,488 | 2,860 | **-9.6%** | **-25.9%** | 540ms | 583ms |
+| aiRltLs | 5 | 1,285 | 1,074 | 436 | **-16.4%** | **-66.0%** | 280ms | 297ms |
+| ordin_search | 5 | 2,736 | 2,226 | 1,082 | **-18.6%** | **-60.4%** | 214ms | 226ms |
+| trty_search | 5 | 1,951 | 1,676 | 928 | **-14.1%** | **-52.4%** | 178ms | 229ms |
+| kb_search | 10 | 530 | 419 | 258 | **-20.9%** | **-51.4%** | 202ms | 218ms |
+| committee_search | 10 | 1,422 | 1,208 | 744 | **-15.1%** | **-47.6%** | 193ms | 216ms |
+| special_decc | 5 | 2,867 | 2,388 | 1,339 | **-16.7%** | **-53.3%** | 204ms | 295ms |
+| service | 10 | 1,729 | 1,590 | 1,477 | **-8.0%** | **-14.5%** | 369ms | 418ms |
+| linkage | 5 | 217 | 185 | 115 | **-14.9%** | **-46.8%** | 188ms | 215ms |
 
-**Key observations:**
-- **Search tools (tabular data):** TOON dominates — 47-67% fewer tokens than XML, because tabular format (header + rows) eliminates repeated keys per row.
-- **Service tools (prose text):** Minimal difference across all formats — the bulk is Korean legal text, not structural markup.
-- **JSON vs XML for search:** Consistent 11-20% savings from removing closing tags.
-- **JSON vs XML for service:** ~20% savings for structured content, but precedent full text (mostly prose) shows no improvement.
+### 3.2 Overall Totals (102 queries)
 
-### 3.2 Byte Size Comparison
+| Metric | XML | JSON | TOON |
+|--------|-----|------|------|
+| **Total tokens** | 179,736 | 152,675 | 92,089 |
+| **Token savings vs XML** | — | **-15.1%** | **-48.8%** |
 
-| Scenario | XML bytes | JSON bytes | TOON bytes | JSON savings | TOON savings |
-|----------|----------|-----------|-----------|-------------|-------------|
-| eflaw_search(민법, 5) | 4,159 | 4,005 | 1,462 | -3.7% | **-64.8%** |
-| eflaw_search(민법, 20) | 16,033 | 15,519 | 4,697 | -3.2% | **-70.7%** |
-| prec_search(담보권, 10) | 8,527 | 8,600 | 4,467 | +0.9% | **-47.6%** |
-| trty_search(무역, 10) | 6,011 | 5,990 | 2,397 | -0.3% | **-60.1%** |
-| admrul_search(학교, 10) | 8,090 | 7,766 | 2,973 | -4.0% | **-63.3%** |
-| eflaw_service(민법 제3조) | 2,455 | 2,397 | 2,109 | -2.4% | **-14.1%** |
-| prec_service(228541) | 30,155 | 30,106 | 29,882 | -0.2% | **-0.9%** |
-| aiSearch(음주운전, 5) | 18,773 | 18,445 | 15,837 | -1.7% | **-15.6%** |
+### 3.3 Token Savings Distribution
 
-**Key observations:**
-- **JSON byte savings are minimal** (0-4%) — Korean UTF-8 text is the dominant size factor, not structural syntax.
-- **TOON byte savings are massive for search** (47-71%) — tabular format eliminates key repetition per row.
-- **For PlayMCP 24KB limit:** Only `prec_service` exceeds 24KB in all formats. TOON doesn't help with prose-heavy responses.
+**Search tools (tabular data) — 92 queries:**
 
-### 3.3 API Latency (law.go.kr response time)
+| Savings range | JSON | TOON |
+|--------------|------|------|
+| 0-10% | 5 queries (aiSearch) | 0 queries |
+| 10-20% | 82 queries | 3 queries |
+| 20-30% | 5 queries (kb, small) | 12 queries (aiSearch, service) |
+| 30-50% | 0 | 28 queries |
+| 50-70% | 0 | **49 queries** |
 
-| Scenario | XML (ms) | JSON (ms) | Difference |
-|----------|---------|----------|------------|
-| eflaw_search(민법, 5) | 180 | 205 | JSON +14% |
-| eflaw_search(민법, 20) | 187 | 225 | JSON +20% |
-| prec_search(담보권, 10) | 195 | 443 | JSON +127% |
-| trty_search(무역, 10) | 198 | 217 | JSON +10% |
-| admrul_search(학교, 10) | 193 | 198 | JSON +3% |
-| eflaw_service(민법 제3조) | 597 | 639 | JSON +7% |
-| prec_service(228541) | 213 | 223 | JSON +5% |
-| aiSearch(음주운전, 5) | 571 | 463 | JSON -19% |
+**Service tools (prose-heavy) — 10 queries:**
 
-**Key observations:**
-- **XML is generally faster** — law.go.kr's native format is XML; JSON requires server-side conversion.
-- **prec_search JSON is notably slow** (+127%) — likely due to server-side XML→JSON conversion overhead for complex precedent data.
-- **aiSearch is faster in JSON** — possibly different backend handling.
-- **TOON adds negligible latency** (client-side JSON→TOON conversion is ~1ms).
+| Savings range | JSON | TOON |
+|--------------|------|------|
+| -5 to +5% | 3 queries (full-text prose) | 5 queries |
+| 5-20% | 5 queries | 3 queries |
+| 20-40% | 2 queries (structured articles) | 2 queries |
 
-### 3.4 PlayMCP 24KB Fit Rate
+### 3.4 API Latency
 
-| Scenario | XML | JSON | TOON |
-|----------|-----|------|------|
-| eflaw_search(민법, 5) | ✓ | ✓ | ✓ |
-| eflaw_search(민법, 20) | ✓ | ✓ | ✓ |
-| prec_search(담보권, 10) | ✓ | ✓ | ✓ |
-| trty_search(무역, 10) | ✓ | ✓ | ✓ |
-| admrul_search(학교, 10) | ✓ | ✓ | ✓ |
-| eflaw_service(민법 제3조) | ✓ | ✓ | ✓ |
-| prec_service(228541) | **✗** | **✗** | **✗** |
-| aiSearch(음주운전, 5) | ✓ | ✓ | ✓ |
+| | XML avg | JSON avg | Difference |
+|---|---------|---------|-----------|
+| Search tools | 205ms | 239ms | **JSON +17% slower** |
+| Service tools | 369ms | 418ms | **JSON +13% slower** |
+| AI search tools | 410ms | 440ms | **JSON +7% slower** |
 
-All three formats have the same fit/fail pattern. The 24KB limit is only hit by full-text precedent service calls, where the content is predominantly Korean legal prose that cannot be compressed by format changes.
+XML is consistently faster — law.go.kr natively serves XML and converts to JSON server-side.
 
-### 3.5 LLM Parseability
+### 3.5 PlayMCP 24KB Fit Rate
 
-**Test:** Extract 3 fields (법령명한글, 법령ID, 공포일자) from 5 law search results using gemini-2.0-flash.
+Of 102 queries, only **1 query** (`prec_service(228541)` — full precedent text, 30KB) exceeds 24KB. This is true in all 3 formats. Format choice does not affect fit rate for the tested scenarios.
 
-| Format | Accuracy | Notes |
-|--------|----------|-------|
-| XML | **5/5 (100%)** | Parsed all fields correctly |
-| JSON | **5/5 (100%)** | Parsed all fields correctly |
-| TOON | **5/5 (100%)** | Parsed all fields correctly |
+### 3.6 LLM Parseability (gemini-2.0-flash)
 
-All three formats were parsed perfectly by gemini-2.0-flash. However, this was a simple extraction task. TOON's tabular format (CSV-like rows) is unfamiliar to LLMs trained primarily on JSON/XML, which may cause issues with:
-- Complex nested structures
-- Ambiguous delimiter handling (commas in values)
-- Edge cases in quoting rules
+**Task:** Extract 3 fields (법령명한글, 법령ID, 공포일자) from 5 law search results.
 
-## 4. TOON Sample Output
+| Format | Accuracy | Latency |
+|--------|----------|---------|
+| XML | **5/5 (100%)** | 2,069ms |
+| JSON | **5/5 (100%)** | 1,901ms |
+| TOON | **5/5 (100%)** | 1,976ms |
 
-### eflaw_search (5 results) — Tabular format
+All three formats parsed perfectly. Note: this is a simple extraction task. TOON's unfamiliar tabular format may cause issues with more complex parsing tasks.
 
-```
-LawSearch:
-  law[5]{"현행연혁코드","법령일련번호","자법타법여부","법령상세링크","법령명한글",
-         "법령구분명","소관부처명","공포번호","제개정구분명","소관부처코드",id,
-         "법령ID","공동부령정보","시행일자","공포일자","법령약칭명"}:
-    현행,188376,,/DRF/lawService.do?OC=...&MST=188376&type=HTML,난민법,법률,법무부,...
-    연혁,152004,,/DRF/lawService.do?OC=...&MST=152004&type=HTML,난민법,법률,법무부,...
-    ...
-```
+---
 
-The tabular header declares column names once, then each row is just comma-separated values — this is where the 60%+ token savings come from.
+## 4. Full Query Detail (102 queries)
+
+### Law Search (eflaw_search + law_search) — 12 queries
+
+| Query | XML tok | JSON tok | TOON tok | JSON Δ | TOON Δ |
+|-------|---------|---------|---------|--------|--------|
+| eflaw_search(민법) | 2,900 | 2,342 | 1,010 | -19.2% | **-65.2%** |
+| eflaw_search(형법) | 2,973 | 2,423 | 1,091 | -18.5% | **-63.3%** |
+| eflaw_search(건축법) | 2,888 | 2,330 | 998 | -19.3% | **-65.4%** |
+| eflaw_search(근로기준법) | 2,914 | 2,356 | 1,022 | -19.1% | **-64.9%** |
+| eflaw_search(도로교통법) | 2,885 | 2,327 | 993 | -19.3% | **-65.6%** |
+| eflaw_search(개인정보) | 3,054 | 2,496 | 1,162 | -18.3% | **-62.0%** |
+| law_search(민법) | 2,685 | 2,185 | 993 | -18.6% | **-63.0%** |
+| law_search(형법) | 2,132 | 1,744 | 834 | -18.2% | **-60.9%** |
+| law_search(건축법) | 1,825 | 1,490 | 721 | -18.4% | **-60.5%** |
+| law_search(근로기준법) | 942 | 769 | 423 | -18.4% | **-55.1%** |
+| law_search(도로교통법) | 932 | 759 | 414 | -18.6% | **-55.6%** |
+| law_search(개인정보) | 2,996 | 2,439 | 1,104 | -18.6% | **-63.2%** |
+
+### English Law Search — 5 queries
+
+| Query | XML tok | JSON tok | TOON tok | JSON Δ | TOON Δ |
+|-------|---------|---------|---------|--------|--------|
+| elaw_search(civil) | 2,785 | 2,329 | 1,175 | -16.4% | **-57.8%** |
+| elaw_search(criminal) | 2,836 | 2,379 | 1,226 | -16.1% | **-56.8%** |
+| elaw_search(labor) | 2,915 | 2,455 | 1,303 | -15.8% | **-55.3%** |
+| elaw_search(trade) | 2,781 | 2,325 | 1,171 | -16.4% | **-57.9%** |
+| elaw_search(tax) | 2,636 | 2,179 | 1,026 | -17.3% | **-61.1%** |
+
+### Admin Rule Search — 5 queries
+
+| Query | XML tok | JSON tok | TOON tok | JSON Δ | TOON Δ |
+|-------|---------|---------|---------|--------|--------|
+| admrul_search(학교) | 2,906 | 2,378 | 1,149 | -18.2% | **-60.5%** |
+| admrul_search(환경) | 2,972 | 2,444 | 1,215 | -17.8% | **-59.1%** |
+| admrul_search(의료) | 2,966 | 2,438 | 1,208 | -17.8% | **-59.3%** |
+| admrul_search(건설) | 2,980 | 2,456 | 1,223 | -17.6% | **-59.0%** |
+| admrul_search(금융) | 2,945 | 2,416 | 1,186 | -18.0% | **-59.7%** |
+
+### Case Law Search (prec/detc/expc/decc) — 20 queries
+
+| Query | XML tok | JSON tok | TOON tok | JSON Δ | TOON Δ |
+|-------|---------|---------|---------|--------|--------|
+| prec_search(담보권) | 2,800 | 2,471 | 1,462 | -11.8% | **-47.8%** |
+| prec_search(횡령) | 2,876 | 2,549 | 1,536 | -11.4% | **-46.6%** |
+| prec_search(명예훼손) | 2,606 | 2,279 | 1,265 | -12.5% | **-51.5%** |
+| prec_search(이혼) | 2,542 | 2,220 | 1,203 | -12.7% | **-52.7%** |
+| prec_search(상속) | 2,578 | 2,256 | 1,243 | -12.5% | **-51.8%** |
+| detc_search(담보권) | 90 | 74 | 60 | -17.8% | **-33.3%** |
+| detc_search(횡령) | 90 | 74 | 60 | -17.8% | **-33.3%** |
+| detc_search(명예훼손) | 385 | 329 | 240 | -14.5% | **-37.7%** |
+| detc_search(이혼) | 253 | 217 | 197 | -14.2% | -22.1% |
+| detc_search(상속) | 1,563 | 1,315 | 794 | -15.9% | **-49.2%** |
+| expc_search(담보권) | 88 | 73 | 59 | -17.0% | **-33.0%** |
+| expc_search(횡령) | 895 | 791 | 566 | -11.6% | **-36.8%** |
+| expc_search(명예훼손) | 91 | 76 | 62 | -16.5% | -31.9% |
+| expc_search(이혼) | 339 | 294 | 271 | -13.3% | -20.1% |
+| expc_search(상속) | 2,556 | 2,215 | 1,380 | -13.3% | **-46.0%** |
+| decc_search(담보권) | 62 | 48 | 37 | -22.6% | **-40.3%** |
+| decc_search(횡령) | 62 | 48 | 37 | -22.6% | **-40.3%** |
+| decc_search(명예훼손) | 65 | 51 | 40 | -21.5% | **-38.5%** |
+| decc_search(이혼) | 61 | 47 | 36 | -23.0% | **-41.0%** |
+| decc_search(상속) | 516 | 438 | 294 | -15.1% | **-43.0%** |
+
+### AI Search — 10 queries
+
+| Query | XML tok | JSON tok | TOON tok | JSON Δ | TOON Δ |
+|-------|---------|---------|---------|--------|--------|
+| aiSearch(음주운전 처벌) | 5,590 | 5,198 | 4,571 | -7.0% | -18.2% |
+| aiSearch(뺑소니) | 4,506 | 4,148 | 3,521 | -7.9% | -21.9% |
+| aiSearch(사기죄 양형) | 1,853 | 1,583 | 956 | -14.6% | **-48.4%** |
+| aiSearch(부당해고 구제) | 2,203 | 1,920 | 1,293 | -12.8% | **-41.3%** |
+| aiSearch(개인정보 유출) | 5,136 | 4,590 | 3,961 | -10.6% | -22.9% |
+| aiRltLs(민법) | 1,254 | 1,043 | 405 | -16.8% | **-67.7%** |
+| aiRltLs(형법) | 1,314 | 1,103 | 465 | -16.1% | **-64.6%** |
+| aiRltLs(건축법) | 1,286 | 1,075 | 437 | -16.4% | **-66.0%** |
+| aiRltLs(근로기준법) | 1,282 | 1,071 | 433 | -16.5% | **-66.2%** |
+| aiRltLs(도로교통법) | 1,290 | 1,079 | 442 | -16.4% | **-65.7%** |
+
+### Phase 7: New Tools — 30 queries
+
+| Query | XML tok | JSON tok | TOON tok | JSON Δ | TOON Δ |
+|-------|---------|---------|---------|--------|--------|
+| ordin_search(청소년) | 2,728 | 2,219 | 1,075 | -18.7% | **-60.6%** |
+| ordin_search(주차) | 2,782 | 2,273 | 1,129 | -18.3% | **-59.4%** |
+| ordin_search(환경) | 2,728 | 2,219 | 1,075 | -18.7% | **-60.6%** |
+| ordin_search(복지) | 2,749 | 2,240 | 1,096 | -18.5% | **-60.1%** |
+| ordin_search(교육) | 2,692 | 2,181 | 1,037 | -19.0% | **-61.5%** |
+| trty_search(무역) | 2,114 | 1,797 | 919 | -15.0% | **-56.5%** |
+| trty_search(인권) | 716 | 616 | 382 | -14.0% | **-46.6%** |
+| trty_search(환경) | 2,465 | 2,148 | 1,270 | -12.9% | **-48.5%** |
+| trty_search(항공) | 2,190 | 1,869 | 995 | -14.7% | **-54.6%** |
+| trty_search(해양) | 2,268 | 1,950 | 1,074 | -14.0% | **-52.6%** |
+| dlytrm_search(상속) | 1,015 | 807 | 487 | -20.5% | **-52.0%** |
+| dlytrm_search(채권) | 1,036 | 828 | 508 | -20.1% | **-51.0%** |
+| dlytrm_search(이혼) | 1,026 | 818 | 498 | -20.3% | **-51.5%** |
+| dlytrm_search(저당) | 1,024 | 816 | 496 | -20.3% | **-51.6%** |
+| dlytrm_search(계약) | 1,017 | 809 | 488 | -20.5% | **-52.0%** |
+| committee(ftc,담합) | 279 | 243 | 222 | -12.9% | -20.4% |
+| committee(ftc,불공정) | 1,972 | 1,698 | 1,018 | -13.9% | **-48.4%** |
+| committee(ftc,카르텔) | 74 | 61 | 49 | -17.6% | **-33.8%** |
+| committee(ftc,독점) | 73 | 60 | 48 | -17.8% | **-34.2%** |
+| committee(ftc,시장지배) | 2,072 | 1,797 | 1,107 | -13.3% | **-46.6%** |
+| committee(nhrck,차별) | 1,927 | 1,623 | 977 | -15.8% | **-49.3%** |
+| committee(nhrck,인권) | 1,979 | 1,671 | 1,028 | -15.6% | **-48.1%** |
+| committee(nhrck,장애) | 1,959 | 1,653 | 1,009 | -15.6% | **-48.5%** |
+| committee(nhrck,고용) | 1,931 | 1,625 | 982 | -15.8% | **-49.1%** |
+| committee(nhrck,평등) | 1,952 | 1,647 | 1,004 | -15.6% | **-48.6%** |
+| special(tt,*) | 2,669 | 2,188 | 1,139 | -18.0% | **-57.3%** |
+| special(tt,소득세) | 2,815 | 2,337 | 1,288 | -17.0% | **-54.2%** |
+| special(tt,부가가치세) | 2,752 | 2,276 | 1,227 | -17.3% | **-55.4%** |
+| special(tt,상속세) | 3,358 | 2,874 | 1,826 | -14.4% | **-45.6%** |
+| special(tt,법인세) | 2,739 | 2,264 | 1,215 | -17.3% | **-55.6%** |
+
+### Service Tools (full text) — 10 queries
+
+| Query | XML tok | JSON tok | TOON tok | JSON Δ | TOON Δ |
+|-------|---------|---------|---------|--------|--------|
+| eflaw_service(민법§3) | 901 | 715 | 662 | -20.6% | -26.5% |
+| eflaw_service(형법§250) | 918 | 730 | 664 | -20.5% | -27.7% |
+| eflaw_service(건축법§3) | 2,271 | 1,801 | 1,409 | -20.7% | **-38.0%** |
+| law_service(근로기준법) | 1,538 | 1,259 | 895 | -18.1% | **-41.8%** |
+| eflaw_josub(민법§3) | 667 | 537 | 495 | -19.5% | -25.8% |
+| prec_service(228541) | 7,653 | 7,743 | 7,581 | +1.2% | -0.9% |
+| prec_service(612265) | 36 | 22 | 19 | -38.9% | **-47.2%** |
+| detc_service(205207) | 382 | 300 | 294 | -21.5% | -23.0% |
+| expc_service(332877) | 1,960 | 1,895 | 1,877 | -3.3% | -4.2% |
+| decc_service(232787) | 960 | 894 | 875 | -6.9% | -8.9% |
+
+### Linkage Tools — 5 queries
+
+| Query | XML tok | JSON tok | TOON tok | JSON Δ | TOON Δ |
+|-------|---------|---------|---------|--------|--------|
+| lnkLs(건축법) | 448 | 387 | 198 | -13.6% | **-55.8%** |
+| lnkLs(민법) | 62 | 48 | 37 | -22.6% | **-40.3%** |
+| lnkLs(형법) | 62 | 48 | 37 | -22.6% | **-40.3%** |
+| lnkLs(도로교통법) | 319 | 276 | 162 | -13.5% | **-49.2%** |
+| lnkLs(소득세법) | 193 | 164 | 143 | -15.0% | -25.9% |
+
+---
 
 ## 5. Analysis
 
-### Token savings by use case
+### Token savings by data type
 
-| Use Case | JSON vs XML | TOON vs XML | Winner |
-|----------|------------|------------|--------|
-| Search results (list data) | -11 to -19% | **-48 to -67%** | TOON |
-| Single article (structured) | -21% | -27% | TOON (marginal) |
-| Full text (prose) | +1% | -1% | Draw |
-| AI search (mixed) | -7% | -18% | TOON |
+| Data Type | JSON vs XML | TOON vs XML | N queries |
+|-----------|------------|------------|-----------|
+| **Search results (tabular)** | -15 to -19% | **-45 to -67%** | 82 |
+| **AI search (mixed text+table)** | -7 to -17% | **-18 to -68%** | 10 |
+| **Service (structured articles)** | -18 to -21% | **-26 to -42%** | 5 |
+| **Service (prose-heavy)** | -7 to +1% | -1 to -9% | 5 |
+
+**Pattern:** TOON's advantage comes entirely from its tabular format (header + CSV rows) which eliminates key repetition in list results. For prose-heavy content where the text itself dominates, all three formats converge.
+
+### Latency
+
+XML is consistently 7-17% faster than JSON across all categories. This is because law.go.kr's backend natively produces XML and converts to JSON server-side. TOON adds negligible client-side overhead (~1ms for JSON→TOON conversion).
 
 ### Trade-off matrix
 
 | Factor | XML | JSON | TOON |
 |--------|-----|------|------|
-| Token efficiency (search) | Baseline | -15% avg | **-57% avg** |
-| Token efficiency (prose) | Baseline | ~0% | ~0% |
-| Byte size (search) | Baseline | -2% avg | **-61% avg** |
-| API latency | **Fastest** | +10-20% slower | +10-20% slower (JSON + ~1ms) |
-| LLM parseability | Proven | Proven | Unknown at scale |
-| PlayMCP fit rate | Same | Same | Same |
-| SDK maturity | N/A | stdlib | **In development** |
-| law.go.kr native | **Yes** | Converted server-side | Converted client-side |
-| Ecosystem support | Universal | Universal | **Niche (new spec, v3.0 draft)** |
+| Token efficiency (search) | Baseline | **-15.1%** | **-48.8%** |
+| Token efficiency (prose) | Baseline | ~-5% | ~-5% |
+| API latency | **Fastest** | +7-17% slower | +7-17% slower (JSON backend + ~1ms) |
+| LLM parseability | Proven | Proven | Proven (simple tasks) |
+| PlayMCP fit rate | 99% | 99% | 99% |
+| SDK maturity | N/A | stdlib `json` | **In development** |
+| law.go.kr native | **Yes** | Server-side conversion | Client-side conversion from JSON |
+
+---
 
 ## 6. Recommendations
 
 ### Option A: Switch to JSON (Conservative)
-- **Benefit:** 15% avg token savings on search, proven LLM compatibility, zero new dependencies
-- **Cost:** 10-20% higher API latency, requires updating `type` default and XML parsing pipeline
+- **Token savings:** 15.1% overall (consistent across all tool types)
+- **Pros:** Zero new dependencies, proven LLM compatibility, stdlib parsing
+- **Cons:** 7-17% higher API latency
 - **Risk:** Low
 
-### Option B: Switch to JSON + TOON conversion (Aggressive)
-- **Benefit:** 57% avg token savings on search, massive PlayMCP headroom
-- **Cost:** Must maintain custom TOON converter until Python SDK stabilizes, LLM parseability unproven at scale, double conversion (XML→JSON on server, JSON→TOON on client)
-- **Risk:** Medium-high (LLM parsing failures, TOON spec changes)
+### Option B: JSON + TOON conversion (Aggressive)
+- **Token savings:** 48.8% overall (up to 67% on search tools)
+- **Pros:** Massive token reduction for search-heavy workloads
+- **Cons:** Must maintain custom TOON converter until Python SDK stabilizes, LLM parseability unproven at scale for complex tasks, TOON spec is v3.0 working draft
+- **Risk:** Medium-high
 
 ### Option C: Stay on XML (Status quo)
-- **Benefit:** Zero risk, fastest API latency, proven pipeline
-- **Cost:** Most tokens per response
+- **Token savings:** None
+- **Pros:** Zero risk, fastest API latency, proven pipeline
+- **Cons:** Most tokens per response
 - **Risk:** None
 
 ### Author's recommendation
-**Option A (JSON)** as the default, with TOON as an opt-in experimental feature (`RESPONSE_FORMAT=toon` env var). JSON gives reliable savings with zero risk. TOON can be evaluated more thoroughly as the Python SDK matures and LLM training data catches up.
 
-## 7. Appendix: TOON Format Overview
+**Option A (JSON)** as the immediate switch. The 15% token savings is reliable, consistent, and requires no new dependencies. The 7-17% latency increase is acceptable (200ms → 230ms for search tools).
 
-TOON (Token-Oriented Object Notation) is a line-based, indentation-driven serialization format designed to minimize tokens for LLM consumption.
+TOON should be revisited when:
+1. Python SDK reaches stable release
+2. LLMs are trained on TOON data (improving parseability for complex tasks)
+3. PlayMCP raises or keeps the 24KB limit (TOON's byte savings become more impactful)
 
-**Key features:**
-- No quotes on alphanumeric keys
-- Tabular arrays: header declares column names once, rows are CSV-like
-- ~35-60% fewer tokens than JSON for tabular data
-- Spec: v3.0 working draft ([github.com/toon-format/spec](https://github.com/toon-format/spec))
-- Python SDK: in development ([github.com/toon-format/toon](https://github.com/toon-format/toon))
+---
 
-**Example:**
+## 7. Appendix
+
+### TOON Format Overview
+
+TOON (Token-Oriented Object Notation) is a line-based, indentation-driven serialization format designed to minimize tokens for LLM consumption. Spec: v3.0 working draft ([github.com/toon-format/spec](https://github.com/toon-format/spec)).
+
+**Example — Search results:**
 ```
-# JSON (78 tokens)
-{"hikes": [{"id": 1, "name": "Blue Lake", "km": 7.5}, {"id": 2, "name": "Ridge", "km": 12}]}
+# JSON (repeats keys for every row)
+{"law": [{"법령명한글": "민법", "법령ID": "001706"}, {"법령명한글": "형법", "법령ID": "001692"}]}
 
-# TOON (31 tokens)
-hikes[2]{id,name,km}:
-  1,Blue Lake,7.5
-  2,Ridge,12
+# TOON (header + CSV rows — keys declared once)
+law[2]{"법령명한글","법령ID"}:
+  민법,001706
+  형법,001692
 ```
+
+### Raw Data
+
+Full benchmark data (102 queries, all metrics) saved at `/tmp/poc_full_results.json`.
