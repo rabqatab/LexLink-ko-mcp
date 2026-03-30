@@ -74,6 +74,12 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
 - expc_search/service: Legal interpretations
 - decc_search/service: Administrative appeals
 
+**⚠️ Response Size — sections parameter:**
+For case law full text (prec_service, detc_service, expc_service, decc_service),
+use `sections="summary"` to get key sections only (판시사항, 판결요지, etc.)
+without the verbose full text (판례내용/전문/이유). This keeps responses under 20KB.
+Use `sections="full"` only when the complete judgment text is specifically needed.
+
 **Knowledge Base (AI-powered search):**
 - aiSearch: Semantic search for law articles - returns FULL article text
 - aiRltLs_search: Find semantically related laws
