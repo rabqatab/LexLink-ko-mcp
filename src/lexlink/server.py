@@ -2026,6 +2026,277 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         }
         return run_service(get_client=_get_client, target="trty",
                           snake_params=snake_params, response_type=type)
+
+    # ==================== TOOL 32: lstrm_ai_search ====================
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
+    def lstrm_ai_search(
+        query: str = "*",
+        display: int = 20,
+        page: int = 1,
+        oc: Optional[str] = None,
+        type: str = "XML",
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Search legal terms using AI (법령용어 AI 조회).
+
+        This tool searches Korean legal terminology using AI-powered semantic
+        matching. Returns definitions and explanations of legal terms.
+
+        Args:
+            query: Search keyword (default "*")
+            display: Number of results per page (max 100, default 20)
+            page: Page number (1-based, default 1)
+            oc: Optional OC override (defaults to env var)
+            type: Response format - "HTML" or "XML" (default "XML")
+            ctx: MCP context (injected automatically)
+
+        Returns:
+            Search results or error
+        """
+        resolved_oc = resolve_oc(override_oc=oc)
+        snake_params = {
+            "oc": resolved_oc, "target": "lstrmAI", "type": type,
+            "query": query, "display": display, "page": page,
+        }
+        return run_search(
+            get_client=_get_client, target="lstrmAI", query=query,
+            snake_params=snake_params, response_type=type, display=display,
+        )
+
+    # ==================== TOOL 33: dlytrm_search ====================
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
+    def dlytrm_search(
+        query: str = "*",
+        display: int = 20,
+        page: int = 1,
+        oc: Optional[str] = None,
+        type: str = "XML",
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Search everyday terms (일상용어 조회).
+
+        This tool searches plain-language (everyday) terms and their legal
+        equivalents, helping bridge common language with formal legal terminology.
+
+        Args:
+            query: Search keyword (default "*")
+            display: Number of results per page (max 100, default 20)
+            page: Page number (1-based, default 1)
+            oc: Optional OC override (defaults to env var)
+            type: Response format - "HTML" or "XML" (default "XML")
+            ctx: MCP context (injected automatically)
+
+        Returns:
+            Search results or error
+        """
+        resolved_oc = resolve_oc(override_oc=oc)
+        snake_params = {
+            "oc": resolved_oc, "target": "dlytrm", "type": type,
+            "query": query, "display": display, "page": page,
+        }
+        return run_search(
+            get_client=_get_client, target="dlytrm", query=query,
+            snake_params=snake_params, response_type=type, display=display,
+        )
+
+    # ==================== TOOL 34: lstrm_rlt_search ====================
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
+    def lstrm_rlt_search(
+        query: str = "*",
+        display: int = 20,
+        page: int = 1,
+        oc: Optional[str] = None,
+        type: str = "XML",
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Legal term to everyday term linkage (법령용어→일상용어 연계 조회).
+
+        This tool searches the linkage between formal legal terms and their
+        plain-language (everyday) equivalents. Useful for finding how legal
+        terminology maps to everyday Korean.
+
+        Args:
+            query: Search keyword (default "*")
+            display: Number of results per page (max 100, default 20)
+            page: Page number (1-based, default 1)
+            oc: Optional OC override (defaults to env var)
+            type: Response format - "HTML" or "XML" (default "XML")
+            ctx: MCP context (injected automatically)
+
+        Returns:
+            Search results or error
+        """
+        resolved_oc = resolve_oc(override_oc=oc)
+        snake_params = {
+            "oc": resolved_oc, "target": "lstrmRlt", "type": type,
+            "query": query, "display": display, "page": page,
+        }
+        return run_search(
+            get_client=_get_client, target="lstrmRlt", query=query,
+            snake_params=snake_params, response_type=type, display=display,
+        )
+
+    # ==================== TOOL 35: dlytrm_rlt_search ====================
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
+    def dlytrm_rlt_search(
+        query: str = "*",
+        display: int = 20,
+        page: int = 1,
+        oc: Optional[str] = None,
+        type: str = "XML",
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Everyday term to legal term linkage (일상용어→법령용어 연계 조회).
+
+        This tool searches the linkage from plain-language (everyday) terms
+        back to their formal legal equivalents. Useful for finding the correct
+        legal terminology when starting from common language.
+
+        Args:
+            query: Search keyword (default "*")
+            display: Number of results per page (max 100, default 20)
+            page: Page number (1-based, default 1)
+            oc: Optional OC override (defaults to env var)
+            type: Response format - "HTML" or "XML" (default "XML")
+            ctx: MCP context (injected automatically)
+
+        Returns:
+            Search results or error
+        """
+        resolved_oc = resolve_oc(override_oc=oc)
+        snake_params = {
+            "oc": resolved_oc, "target": "dlytrmRlt", "type": type,
+            "query": query, "display": display, "page": page,
+        }
+        return run_search(
+            get_client=_get_client, target="dlytrmRlt", query=query,
+            snake_params=snake_params, response_type=type, display=display,
+        )
+
+    # ==================== TOOL 36: lstrm_rlt_jo_search ====================
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
+    def lstrm_rlt_jo_search(
+        query: str = "*",
+        display: int = 20,
+        page: int = 1,
+        oc: Optional[str] = None,
+        type: str = "XML",
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Legal term to article linkage (법령용어→조문 연계 조회).
+
+        This tool searches the linkage between legal terms and the specific
+        law articles where those terms are used or defined.
+
+        Args:
+            query: Search keyword (default "*")
+            display: Number of results per page (max 100, default 20)
+            page: Page number (1-based, default 1)
+            oc: Optional OC override (defaults to env var)
+            type: Response format - "HTML" or "XML" (default "XML")
+            ctx: MCP context (injected automatically)
+
+        Returns:
+            Search results or error
+        """
+        resolved_oc = resolve_oc(override_oc=oc)
+        snake_params = {
+            "oc": resolved_oc, "target": "lstrmRltJo", "type": type,
+            "query": query, "display": display, "page": page,
+        }
+        return run_search(
+            get_client=_get_client, target="lstrmRltJo", query=query,
+            snake_params=snake_params, response_type=type, display=display,
+        )
+
+    # ==================== TOOL 37: jo_rlt_lstrm_search ====================
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
+    def jo_rlt_lstrm_search(
+        query: str = "*",
+        display: int = 20,
+        page: int = 1,
+        oc: Optional[str] = None,
+        type: str = "XML",
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Article to legal term linkage (조문→법령용어 연계 조회).
+
+        This tool searches the linkage from specific law articles to the
+        legal terms defined or used within those articles. Useful for finding
+        all technical terms in a given article.
+
+        Args:
+            query: Search keyword (default "*")
+            display: Number of results per page (max 100, default 20)
+            page: Page number (1-based, default 1)
+            oc: Optional OC override (defaults to env var)
+            type: Response format - "HTML" or "XML" (default "XML")
+            ctx: MCP context (injected automatically)
+
+        Returns:
+            Search results or error
+        """
+        resolved_oc = resolve_oc(override_oc=oc)
+        snake_params = {
+            "oc": resolved_oc, "target": "joRltLstrm", "type": type,
+            "query": query, "display": display, "page": page,
+        }
+        return run_search(
+            get_client=_get_client, target="joRltLstrm", query=query,
+            snake_params=snake_params, response_type=type, display=display,
+        )
+
+    # ==================== TOOL 38: ls_rlt_search ====================
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
+    def ls_rlt_search(
+        query: str = "*",
+        display: int = 20,
+        page: int = 1,
+        oc: Optional[str] = None,
+        type: str = "XML",
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Related law search (관련법령 조회).
+
+        This tool searches for laws related to a given query term. Part of the
+        법령정보 지식베이스, it identifies associations between laws based on
+        shared subject matter or cross-references.
+
+        Args:
+            query: Search keyword (default "*")
+            display: Number of results per page (max 100, default 20)
+            page: Page number (1-based, default 1)
+            oc: Optional OC override (defaults to env var)
+            type: Response format - "HTML" or "XML" (default "XML")
+            ctx: MCP context (injected automatically)
+
+        Returns:
+            Search results or error
+        """
+        resolved_oc = resolve_oc(override_oc=oc)
+        snake_params = {
+            "oc": resolved_oc, "target": "lsRlt", "type": type,
+            "query": query, "display": display, "page": page,
+        }
+        return run_search(
+            get_client=_get_client, target="lsRlt", query=query,
+            snake_params=snake_params, response_type=type, display=display,
+        )
+
     # ==================== PROMPTS ====================
 
     @server.prompt(
