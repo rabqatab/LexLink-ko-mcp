@@ -14,7 +14,7 @@ LexLink는 대한민국 국가법령정보 API ([open.law.go.kr](https://open.la
 
 ## 주요 기능
 
-- **26개의 MCP 도구 + 2개의 MCP 리소스**로 포괄적인 한국 법령 정보 접근
+- **44개의 MCP 도구 + 2개의 MCP 리소스**로 포괄적인 한국 법령 정보 접근
   - 한국 법령 검색 및 조회 (시행일 & 공포일 기준)
   - 영문 번역 법령 검색 및 조회
   - 행정규칙 검색 및 조회 (훈령, 예규, 고시, 공고, 지침)
@@ -35,10 +35,10 @@ LexLink는 대한민국 국가법령정보 API ([open.law.go.kr](https://open.la
     - 자주 사용되는 ~20개 법령명과 안정적인 법령ID 매핑 캐시
     - 한글 법령명 또는 약칭으로 조회 (`lexlink://law/{name}`)
     - 동적 캐싱: 검색 결과가 자동으로 캐시에 추가
-- **100% 의미론적 검증** - 26개 도구 모두 실제 법령 데이터 반환 확인
+- **100% 의미론적 검증** - 44개 도구 모두 실제 법령 데이터 반환 확인
 - **오류 처리** - 해결 방법이 포함된 실행 가능한 오류 메시지
 - **한글 텍스트 지원** - UTF-8 인코딩으로 한글 문자 정확히 처리
-- **응답 형식** - HTML, XML 지원 (다양한 형식 지원)
+- **응답 형식** - JSON (기본), HTML, XML 지원 (다양한 형식 지원)
 
 ## 프로젝트 상태
 
@@ -46,16 +46,16 @@ LexLink는 대한민국 국가법령정보 API ([open.law.go.kr](https://open.la
 
 | 지표 | 상태 |
 |--------|--------|
-| **구현된 도구** | 26/26 (100%) ✅ |
-| **의미론적 검증** | 26/26 (100%) ✅ |
+| **구현된 도구** | 44/44 (100%) ✅ |
+| **의미론적 검증** | 26/26 (Phase 1-5 도구) ✅ |
 | **MCP 프롬프트** | 6/6 (100%) ✅ |
 | **MCP 리소스** | 2개 (정적 1 + 템플릿 1) ✅ |
 | **API 커버리지** | 150개 이상 엔드포인트 중 ~17% 커버 |
 | **LLM 통합** | ✅ 검증 완료 (Gemini) |
 | **코드 품질** | 깔끔하고 문서화되고 테스트됨 |
-| **버전** | v1.5.0 |
+| **버전** | v2.0.0 |
 
-**최근:** Smithery 의존성 제거. 2단계 OC 해석 (도구 인자 > 환경변수), 의존성 9개 감소.
+**최근:** v2.0.0 — 44개 도구 (Phase 7 추가), JSON 기본 응답 형식, 판례 서비스 도구에 `sections` 파라미터, `_helpers.py` 리팩토링.
 
 ## 사전 요구사항
 
@@ -279,6 +279,8 @@ lsDelegated_service(
 
 ### Phase 3: 판례 및 법령연구 (8개 도구 - 신규!)
 
+> **팁:** Phase 3의 모든 `*_service` 도구는 `sections="summary"` 파라미터를 지원합니다. 전체 본문 대신 요약만 반환받을 수 있습니다.
+
 #### 16. `prec_search` - 법원 판례 검색
 대법원 및 하급법원의 판례를 검색합니다.
 
@@ -420,7 +422,7 @@ aiSearch(
     search=0,                      # 0: 법령조문, 1: 별표서식, 2: 행정규칙조문, 3: 행정규칙별표서식
     display=20,                    # 페이지당 결과 수
     page=1,                        # 페이지 번호
-    type="XML"                     # 응답 형식 (XML만 지원)
+    type="JSON"                    # 응답 형식 (JSON 기본)
 )
 ```
 
@@ -435,11 +437,22 @@ aiSearch(
 aiRltLs_search(
     query="민법",                  # 법령명 또는 키워드
     search=0,                      # 0: 법령조문, 1: 행정규칙조문
-    type="XML"                     # 응답 형식 (XML만 지원)
+    type="JSON"                    # 응답 형식 (JSON 기본)
 )
 ```
 
 **최적 용도:** "민법" → 상법, 의료법, 소송촉진법 등 연관 법령 찾기
+
+### Phase 7: 확장 법령정보 (18개 도구)
+
+| 카테고리 | 도구 |
+|----------|------|
+| 자치법규 (지방자치법규) | `ordin_search`, `ordin_service`, `ordinLsCon_search` |
+| 조약 (조약) | `trty_search`, `trty_service` |
+| 법령정보 지식베이스 | `lstrm_ai_search`, `dlytrm_search`, `lstrm_rlt_search`, `dlytrm_rlt_search`, `lstrm_rlt_jo_search`, `jo_rlt_lstrm_search`, `ls_rlt_search` |
+| 위원회 결정문 | `committee_search`, `committee_service` |
+| 중앙부처 1차 해석 | `cgm_expc_search`, `cgm_expc_service` |
+| 특별행정심판 | `special_decc_search`, `special_decc_service` |
 
 ### 도구 선택 가이드
 
@@ -638,7 +651,7 @@ result = eflaw_search(query="test")
 2. **검색 후 조회**: 서비스 도구 호출 전에 항상 검색으로 ID를 먼저 찾기
 3. **법령 검색 시 display=50-100 사용**: 관련성 순위로 정확한 일치 항목이 확실히 표시됨
 4. **단계별 결합**: Phase 1(법령), Phase 2(행정규칙), Phase 3(판례), Phase 5(AI 검색)를 혼합하여 완전한 조사
-5. **type 매개변수**: 일관되고 파싱 가능한 결과를 위해 항상 `type="XML"` 지정
+5. **type 매개변수**: 기본값은 `type="JSON"`; XML이 필요한 경우 `type="XML"` 지정
 6. **조문 번호**: 특정 조문 조회 시 6자리 형식 사용 (예: 제20조는 "002000")
 
 ## 개발
@@ -648,7 +661,7 @@ result = eflaw_search(query="test")
 ```
 lexlink-ko-mcp/
 ├── src/lexlink/
-│   ├── server.py        # 26개 도구가 포함된 메인 MCP 서버
+│   ├── server.py        # 44개 도구가 포함된 메인 MCP 서버
 │   ├── http_server.py   # Kakao PlayMCP용 HTTP/SSE 서버
 │   ├── stdio_server.py  # Stdio 전송 진입점
 │   ├── params.py        # 매개변수 확인 및 매핑
@@ -685,7 +698,7 @@ uv run pytest -m e2e
 
 ### 새로운 도구 추가
 
-**현재 상태:** 26/26 도구 구현 및 검증 완료 (Phase 1-5 완료)
+**현재 상태:** 44/44 도구 구현 완료 (Phase 1-7 완료), Phase 1-5 도구 검증 완료
 
 124개 이상의 남은 API에서 추가 도구를 구현하려면:
 1. `src/lexlink/server.py`에 확립된 패턴 따르기
@@ -827,6 +840,15 @@ uv sync --reinstall
 
 ## 변경 로그
 
+### v2.0.0 - 2026-03-30
+**주요 릴리스: Phase 7 도구, JSON 기본 형식, sections 파라미터**
+
+- 18개의 Phase 7 도구 추가 (자치법규, 조약, 법령정보 지식베이스, 위원회 결정문, 중앙부처 해석, 특별행정심판)
+- JSON이 기본 응답 형식으로 변경 (기존: XML)
+- 판례 서비스 도구에 `sections="summary"` 파라미터 추가
+- 공통 로직을 `_helpers.py`로 리팩토링
+- 자세한 내용은 [CHANGELOG.md](CHANGELOG.md) 참조
+
 ### v1.5.0 - 2026-02-28
 **리팩토링: Smithery 의존성 제거**
 
@@ -835,7 +857,7 @@ uv sync --reinstall
 - stdio 전송을 위한 `stdio_server.py` 진입점 추가
 - 자세한 내용은 [CHANGELOG.md](CHANGELOG.md) 참조
 
-전체 변경 로그(v1.0.0 – v1.5.0)는 [CHANGELOG.md](CHANGELOG.md)를 참조하세요.
+전체 변경 로그(v1.0.0 – v2.0.0)는 [CHANGELOG.md](CHANGELOG.md)를 참조하세요.
 
 ---
 

@@ -38,7 +38,7 @@ LexLink is an MCP (Model Context Protocol) server that exposes the Korean Nation
 - **100% Semantic Validation** - All Phase 1-5 tools confirmed returning real law data
 - **Error Handling** - Actionable error messages with resolution hints
 - **Korean Text Support** - Proper UTF-8 encoding for Korean characters
-- **Response Formats** - HTML or XML (multiple formats supported)
+- **Response Formats** - JSON (default), HTML, or XML (multiple formats supported)
 
 ## Project Status
 
@@ -53,9 +53,9 @@ LexLink is an MCP (Model Context Protocol) server that exposes the Korean Nation
 | **API Coverage** | ~17% of 150+ endpoints |
 | **LLM Integration** | ✅ Validated (Gemini) |
 | **Code Quality** | Clean, documented, tested |
-| **Version** | v1.5.0 |
+| **Version** | v2.0.0 |
 
-**Latest:** Smithery dependency removed. Clean 2-tier OC resolution (tool arg > env var), 9 fewer dependencies.
+**Latest:** v2.0.0 — 44 tools (Phase 7 added), JSON default response format, `sections` parameter for case law service tools, `_helpers.py` refactoring.
 
 ## Prerequisites
 
@@ -278,6 +278,8 @@ lsDelegated_service(
 
 ### Phase 3: Case Law & Legal Research (8 tools - NEW!)
 
+> **Tip:** All `*_service` tools in Phase 3 support a `sections="summary"` parameter to return only a brief summary instead of the full document text.
+
 #### 16. `prec_search` - Search Court Precedents
 Search Korean court precedents from Supreme Court and lower courts.
 
@@ -419,7 +421,7 @@ aiSearch(
     search=0,                      # 0: law articles, 1: appendix, 2: admin rules, 3: admin appendix
     display=20,                    # Results per page
     page=1,                        # Page number
-    type="XML"                     # Response format (XML only)
+    type="JSON"                    # Response format (JSON default)
 )
 ```
 
@@ -434,7 +436,7 @@ Finds laws semantically related to a given law name or keyword.
 aiRltLs_search(
     query="민법",                  # Law name or keyword
     search=0,                      # 0: law articles, 1: admin rule articles
-    type="XML"                     # Response format (XML only)
+    type="JSON"                    # Response format (JSON default)
 )
 ```
 
@@ -648,7 +650,7 @@ These examples demonstrate real-world conversation flows showing how LLMs intera
 2. **Search First, Then Retrieve**: Always search to find IDs before calling service tools
 3. **Use display=50-100 for Law Searches**: Ensures exact matches are found due to relevance ranking
 4. **Combine Phases**: Mix Phase 1 (laws), Phase 2 (administrative rules), Phase 3 (precedents), and Phase 5 (AI search) for complete research
-5. **Type Parameter**: Always specify `type="XML"` for consistent, parseable results
+5. **Type Parameter**: Default is `type="JSON"`; specify `type="XML"` if your pipeline requires XML
 6. **Article Numbers**: Use 6-digit format (e.g., "002000" for Article 20) when querying specific articles
 
 ## Development
@@ -837,6 +839,15 @@ This project is open source. See LICENSE file for details.
 
 ## Changelog
 
+### v2.0.0 - 2026-03-30
+**Major Release: Phase 7 Tools, JSON Default, sections Parameter**
+
+- Added 18 new Phase 7 tools (자치법규, 조약, 법령정보 지식베이스, 위원회 결정문, 중앙부처 해석, 특별행정심판)
+- JSON is now the default response format (was XML)
+- Added `sections="summary"` parameter for case law service tools
+- Refactored shared logic into `_helpers.py`
+- See [CHANGELOG.md](CHANGELOG.md) for full details
+
 ### v1.5.0 - 2026-02-28
 **Refactor: Remove Smithery Dependency**
 
@@ -845,7 +856,7 @@ This project is open source. See LICENSE file for details.
 - Added `stdio_server.py` entry point for stdio transport
 - See [CHANGELOG.md](CHANGELOG.md) for full details
 
-For the full changelog (v1.0.0 – v1.5.0), see [CHANGELOG.md](CHANGELOG.md).
+For the full changelog (v1.0.0 – v2.0.0), see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
