@@ -20,7 +20,7 @@ from .client import LawAPIClient
 from .errors import ErrorCode, create_error_response
 from .params import map_params_to_upstream, resolve_oc
 from .validation import validate_date_range
-from .parser import parse_xml_response
+from .parser import parse_xml_response, extract_law_list, update_law_list
 from .ranking import detect_query_language
 from ._helpers import (
     TOOL_ANNOTATIONS, stringify_id, handle_tool_error,
@@ -575,13 +575,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                           snake_params=snake_params, response_type=type)
 
     # ==================== TOOL 7: elaw_search ====================
-    @server.tool(
-        annotations=ToolAnnotations(
-            readOnlyHint=True,
-            destructiveHint=False,
-            idempotentHint=True
-        )
-    )
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
     def elaw_search(
         query: str = "*",
         display: int = 20,
@@ -622,102 +617,83 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             Search for "가정폭력방지":
             >>> elaw_search(query="가정폭력방지", type="XML")
         """
-        try:
-            resolved_oc = resolve_oc(override_oc=oc)
+        resolved_oc = resolve_oc(override_oc=oc)
 
-            # Validate date range if provided
-            if ef_yd:
-                validate_date_range(ef_yd, "ef_yd")
+        # Validate date range if provided
+        if ef_yd:
+            validate_date_range(ef_yd, "ef_yd")
 
-            # Build parameters
-            params = {
-                "oc": resolved_oc,
-                "target": "elaw",
-                "query": query,
-                "display": display,
-                "page": page,
-            }
+        # Build parameters
+        params = {
+            "oc": resolved_oc,
+            "target": "elaw",
+            "query": query,
+            "display": display,
+            "page": page,
+        }
 
-            # Add optional parameters
-            if sort:
-                params["sort"] = sort
-            if ef_yd:
-                params["ef_yd"] = ef_yd
-            if org:
-                params["org"] = org
-            if knd:
-                params["knd"] = knd
+        # Add optional parameters
+        if sort:
+            params["sort"] = sort
+        if ef_yd:
+            params["ef_yd"] = ef_yd
+        if org:
+            params["org"] = org
+        if knd:
+            params["knd"] = knd
 
-            # Map to upstream format
-            upstream_params = map_params_to_upstream(params)
+        # Map to upstream format
+        upstream_params = map_params_to_upstream(params)
 
-            # Determine if we need to fetch more results for ranking
-            original_display = display
-            ranking_enabled = (type == "XML" and should_apply_ranking(query))
+        # Determine if we need to fetch more results for ranking
+        original_display = display
+        ranking_enabled = (type == "XML" and should_apply_ranking(query))
 
-            if ranking_enabled and original_display < 100:
-                # Fetch more results to rank (up to 100, API max) for better relevance
-                upstream_params["numOfRows"] = "100"
-                logger.debug(f"Ranking enabled: fetching 100 results instead of {original_display}")
+        if ranking_enabled and original_display < 100:
+            # Fetch more results to rank (up to 100, API max) for better relevance
+            upstream_params["numOfRows"] = "100"
+            logger.debug(f"Ranking enabled: fetching 100 results instead of {original_display}")
 
-            # Call API
-            client = _get_client()
-            response = client.get("/DRF/lawSearch.do", upstream_params, response_type=type)
+        # Call API
+        client = _get_client()
+        response = client.get("/DRF/lawSearch.do", upstream_params, response_type=type)
 
-            # Apply relevance ranking for English-translated laws
-            # elaw target accepts both Korean and English queries, so detect language
-            if response.get("status") == "ok" and ranking_enabled:
-                raw_content = response.get("raw_content", "")
-                if raw_content:
-                    parsed_data = parse_xml_response(raw_content)
-                    if parsed_data:
-                        laws = extract_law_list(parsed_data)
-                        if laws:
-                            # Detect query language and rank by matching field
-                            # Korean query "가정폭력방지" → rank by 법령명한글
-                            # English query "insurance" → rank by 법령명영문
-                            query_lang = detect_query_language(query)
-                            name_field = "법령명영문" if query_lang == "english" else "법령명한글"
+        # Apply relevance ranking for English-translated laws
+        # elaw target accepts both Korean and English queries, so detect language
+        if response.get("status") == "ok" and ranking_enabled:
+            raw_content = response.get("raw_content", "")
+            if raw_content:
+                parsed_data = parse_xml_response(raw_content)
+                if parsed_data:
+                    laws = extract_law_list(parsed_data)
+                    if laws:
+                        # Detect query language and rank by matching field
+                        # Korean query "가정폭력방지" → rank by 법령명한글
+                        # English query "insurance" → rank by 법령명영문
+                        query_lang = detect_query_language(query)
+                        name_field = "법령명영문" if query_lang == "english" else "법령명한글"
 
-                            # Verify the field exists in results, fall back if needed
-                            if laws and name_field not in laws[0]:
-                                name_field = "법령명한글" if name_field == "법령명영문" else "법령명영문"
+                        # Verify the field exists in results, fall back if needed
+                        if laws and name_field not in laws[0]:
+                            name_field = "법령명한글" if name_field == "법령명영문" else "법령명영문"
 
-                            ranked_laws = rank_search_results(laws, query, name_field)
+                        ranked_laws = rank_search_results(laws, query, name_field)
 
-                            # Trim to original requested display amount
-                            if len(ranked_laws) > original_display:
-                                ranked_laws = ranked_laws[:original_display]
-                                logger.debug(f"Trimmed results from {len(laws)} to {original_display}")
+                        # Trim to original requested display amount
+                        if len(ranked_laws) > original_display:
+                            ranked_laws = ranked_laws[:original_display]
+                            logger.debug(f"Trimmed results from {len(laws)} to {original_display}")
 
-                            parsed_data = update_law_list(parsed_data, ranked_laws)
-                            # Update numOfRows to reflect trimmed results
-                            parsed_data["numOfRows"] = str(original_display)
-                            response["ranked_data"] = parsed_data
+                        parsed_data = update_law_list(parsed_data, ranked_laws)
+                        # Update numOfRows to reflect trimmed results
+                        parsed_data["numOfRows"] = str(original_display)
+                        response["ranked_data"] = parsed_data
 
-            return slim_response(response)
-
-        except ValueError as e:
-            logger.error(f"Validation error in elaw_search: {e}")
-            return create_error_response(
-                error_code=ErrorCode.VALIDATION_ERROR,
-                message=str(e)
-            )
-        except Exception as e:
-            logger.exception(f"Unexpected error in elaw_search: {e}")
-            return create_error_response(
-                error_code=ErrorCode.INTERNAL_ERROR,
-                message=f"Unexpected error: {str(e)}"
-            )
+        return slim_response(response)
 
     # ==================== TOOL 8: elaw_service ====================
-    @server.tool(
-        annotations=ToolAnnotations(
-            readOnlyHint=True,
-            destructiveHint=False,
-            idempotentHint=True
-        )
-    )
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
     def elaw_service(
         id: Optional[Union[str, int]] = None,
         mst: Optional[Union[str, int]] = None,
@@ -754,75 +730,22 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             Retrieve by MST:
             >>> elaw_service(mst="127280", type="XML")
         """
-        try:
-            # Convert id/mst to strings if they're integers (LLMs may extract numbers as ints)
-            if id is not None:
-                id = str(id)
-            if mst is not None:
-                mst = str(mst)
-
-            # Require either id or mst
-            if not id and not mst:
-                return create_error_response(
-                    error_code=ErrorCode.VALIDATION_ERROR,
-                    message="Either 'id' or 'mst' parameter is required",
-                    hints=[
-                        "Provide 'id' (law ID) or 'mst' (law master number)",
-                        "Get these from elaw_search results",
-                        "Example: id='000744' or mst='127280'"
-                    ]
-                )
-
-            resolved_oc = resolve_oc(override_oc=oc)
-
-            # Build parameters
-            params = {
-                "oc": resolved_oc,
-                "target": "elaw",
-            }
-
-            # Add id or mst
-            if id:
-                params["id"] = id
-            if mst:
-                params["mst"] = mst
-
-            # Add optional parameters
-            if lm:
-                params["lm"] = lm
-            if ld:
-                params["ld"] = ld
-            if ln:
-                params["ln"] = ln
-
-            # Map to upstream format
-            upstream_params = map_params_to_upstream(params)
-
-            # Call API
-            client = _get_client()
-            return client.get("/DRF/lawService.do", upstream_params, response_type=type)
-
-        except ValueError as e:
-            logger.error(f"Validation error in elaw_service: {e}")
-            return create_error_response(
-                error_code=ErrorCode.VALIDATION_ERROR,
-                message=str(e)
-            )
-        except Exception as e:
-            logger.exception(f"Unexpected error in elaw_service: {e}")
-            return create_error_response(
-                error_code=ErrorCode.INTERNAL_ERROR,
-                message=f"Unexpected error: {str(e)}"
-            )
+        (id, mst) = stringify_id(id, mst)
+        if not id and not mst:
+            raise ValueError("Either 'id' or 'mst' parameter is required")
+        resolved_oc = resolve_oc(override_oc=oc)
+        snake_params = {"oc": resolved_oc, "target": "elaw"}
+        if id: snake_params["id"] = id
+        if mst: snake_params["mst"] = mst
+        if lm: snake_params["lm"] = lm
+        if ld: snake_params["ld"] = ld
+        if ln: snake_params["ln"] = ln
+        return run_service(get_client=_get_client, target="elaw",
+                          snake_params=snake_params, response_type=type)
 
     # ==================== TOOL 9: admrul_search ====================
-    @server.tool(
-        annotations=ToolAnnotations(
-            readOnlyHint=True,
-            destructiveHint=False,
-            idempotentHint=True
-        )
-    )
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
     def admrul_search(
         query: str = "*",
         display: int = 20,
@@ -871,103 +794,31 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             Search by date:
             >>> admrul_search(date=20250501, type="XML")
         """
-        try:
-            resolved_oc = resolve_oc(override_oc=oc)
-
-            # Validate date ranges if provided
-            if prml_yd:
-                validate_date_range(prml_yd, "prml_yd")
-            if mod_yd:
-                validate_date_range(mod_yd, "mod_yd")
-
-            # Build parameters
-            params = {
-                "oc": resolved_oc,
-                "target": "admrul",
-                "query": query,
-                "display": display,
-                "page": page,
-                "nw": nw,
-                "search": search,
-            }
-
-            # Add optional parameters
-            if org:
-                params["org"] = org
-            if knd:
-                params["knd"] = knd
-            if date:
-                params["date"] = date
-            if prml_yd:
-                params["prml_yd"] = prml_yd
-            if mod_yd:
-                params["mod_yd"] = mod_yd
-            if sort:
-                params["sort"] = sort
-
-            # Map to upstream format
-            upstream_params = map_params_to_upstream(params)
-
-            # Determine if we need to fetch more results for ranking
-            original_display = display
-            ranking_enabled = (type == "XML" and should_apply_ranking(query))
-
-            if ranking_enabled and original_display < 100:
-                # Fetch more results to rank (up to 100, API max) for better relevance
-                upstream_params["numOfRows"] = "100"
-                logger.debug(f"Ranking enabled: fetching 100 results instead of {original_display}")
-
-            # Call API
-            client = _get_client()
-            response = client.get("/DRF/lawSearch.do", upstream_params, response_type=type)
-
-            # Apply relevance ranking for administrative rules
-            if response.get("status") == "ok" and ranking_enabled:
-                raw_content = response.get("raw_content", "")
-                if raw_content:
-                    parsed_data = parse_xml_response(raw_content)
-                    if parsed_data:
-                        # Extract administrative rules list (key might be "admrul" instead of "law")
-                        rules = parsed_data.get("admrul", [])
-                        if not isinstance(rules, list):
-                            rules = [rules] if rules else []
-                        if rules:
-                            # Administrative rules use "행정규칙명" field
-                            ranked_rules = rank_search_results(rules, query, "행정규칙명")
-
-                            # Trim to original requested display amount
-                            if len(ranked_rules) > original_display:
-                                ranked_rules = ranked_rules[:original_display]
-                                logger.debug(f"Trimmed results from {len(rules)} to {original_display}")
-
-                            parsed_data["admrul"] = ranked_rules
-                            # Update numOfRows to reflect trimmed results
-                            parsed_data["numOfRows"] = str(original_display)
-                            response["ranked_data"] = parsed_data
-
-            return slim_response(response)
-
-        except ValueError as e:
-            logger.error(f"Validation error in admrul_search: {e}")
-            return create_error_response(
-                error_code=ErrorCode.VALIDATION_ERROR,
-                message=str(e)
-            )
-        except Exception as e:
-            logger.exception(f"Unexpected error in admrul_search: {e}")
-            return create_error_response(
-                error_code=ErrorCode.INTERNAL_ERROR,
-                message=f"Unexpected error: {str(e)}"
-            )
+        resolved_oc = resolve_oc(override_oc=oc)
+        if prml_yd:
+            validate_date_range(prml_yd, "prml_yd")
+        if mod_yd:
+            validate_date_range(mod_yd, "mod_yd")
+        snake_params = {
+            "oc": resolved_oc, "target": "admrul", "query": query,
+            "display": display, "page": page, "nw": nw, "search": search,
+        }
+        if org: snake_params["org"] = org
+        if knd: snake_params["knd"] = knd
+        if date: snake_params["date"] = date
+        if prml_yd: snake_params["prml_yd"] = prml_yd
+        if mod_yd: snake_params["mod_yd"] = mod_yd
+        if sort: snake_params["sort"] = sort
+        return run_search(
+            get_client=_get_client, target="admrul", query=query,
+            snake_params=snake_params, response_type=type, display=display,
+            ranking_field="행정규칙명", list_type="admrul",
+            over_fetch_key="numOfRows",
+        )
 
     # ==================== TOOL 10: admrul_service ====================
-    @server.tool(
-        annotations=ToolAnnotations(
-            readOnlyHint=True,
-            destructiveHint=False,
-            idempotentHint=True
-        )
-    )
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
     def admrul_service(
         id: Optional[Union[str, int]] = None,
         lid: Optional[Union[str, int]] = None,
@@ -1000,69 +851,20 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             Retrieve by LID:
             >>> admrul_service(lid="10000005747", type="XML")
         """
-        try:
-            # Convert id/lid to strings if they're integers (LLMs may extract numbers as ints)
-            if id is not None:
-                id = str(id)
-            if lid is not None:
-                lid = str(lid)
-
-            # Require at least one identifier
-            if not id and not lid and not lm:
-                return create_error_response(
-                    error_code=ErrorCode.VALIDATION_ERROR,
-                    message="At least one of 'id', 'lid', or 'lm' is required",
-                    hints=[
-                        "Provide 'id' (rule sequence number), 'lid' (rule ID), or 'lm' (rule name)",
-                        "Get these from admrul_search results",
-                        "Example: id='62505' or lid='10000005747'"
-                    ]
-                )
-
-            resolved_oc = resolve_oc(override_oc=oc)
-
-            # Build parameters
-            params = {
-                "oc": resolved_oc,
-                "target": "admrul",
-            }
-
-            # Add identifiers
-            if id:
-                params["id"] = id
-            if lid:
-                params["lid"] = lid
-            if lm:
-                params["lm"] = lm
-
-            # Map to upstream format
-            upstream_params = map_params_to_upstream(params)
-
-            # Call API
-            client = _get_client()
-            return client.get("/DRF/lawService.do", upstream_params, response_type=type)
-
-        except ValueError as e:
-            logger.error(f"Validation error in admrul_service: {e}")
-            return create_error_response(
-                error_code=ErrorCode.VALIDATION_ERROR,
-                message=str(e)
-            )
-        except Exception as e:
-            logger.exception(f"Unexpected error in admrul_service: {e}")
-            return create_error_response(
-                error_code=ErrorCode.INTERNAL_ERROR,
-                message=f"Unexpected error: {str(e)}"
-            )
+        (id, lid) = stringify_id(id, lid)
+        if not id and not lid and not lm:
+            raise ValueError("At least one of 'id', 'lid', or 'lm' is required")
+        resolved_oc = resolve_oc(override_oc=oc)
+        snake_params = {"oc": resolved_oc, "target": "admrul"}
+        if id: snake_params["id"] = id
+        if lid: snake_params["lid"] = lid
+        if lm: snake_params["lm"] = lm
+        return run_service(get_client=_get_client, target="admrul",
+                          snake_params=snake_params, response_type=type)
 
     # ==================== TOOL 11: lnkLs_search ====================
-    @server.tool(
-        annotations=ToolAnnotations(
-            readOnlyHint=True,
-            destructiveHint=False,
-            idempotentHint=True
-        )
-    )
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
     def lnkLs_search(
         query: str = "*",
         display: int = 20,
@@ -1094,65 +896,22 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             Search for "자동차관리법":
             >>> lnkLs_search(query="자동차관리법", type="XML")
         """
-        try:
-            resolved_oc = resolve_oc(override_oc=oc)
-
-            # Build parameters
-            params = {
-                "oc": resolved_oc,
-                "target": "lnkLs",
-                "query": query,
-                "display": display,
-                "page": page,
-            }
-
-            # Add optional parameters
-            if sort:
-                params["sort"] = sort
-
-            # Map to upstream format
-            upstream_params = map_params_to_upstream(params)
-
-            # Call API
-            client = _get_client()
-            response = client.get("/DRF/lawSearch.do", upstream_params, response_type=type)
-
-            # Parse XML and add ranked_data for LLM consumption
-            if response.get("status") == "ok" and type == "XML":
-                raw_content = response.get("raw_content", "")
-                if raw_content:
-                    parsed_data = parse_xml_response(raw_content)
-                    if parsed_data:
-                        # Extract and rank law list
-                        laws = extract_law_list(parsed_data)
-                        if laws:
-                            ranked_laws = rank_search_results(laws, query, "법령명한글")
-                            parsed_data = update_law_list(parsed_data, ranked_laws)
-                        response["ranked_data"] = parsed_data
-
-            return slim_response(response)
-
-        except ValueError as e:
-            logger.error(f"Validation error in lnkLs_search: {e}")
-            return create_error_response(
-                error_code=ErrorCode.VALIDATION_ERROR,
-                message=str(e)
-            )
-        except Exception as e:
-            logger.exception(f"Unexpected error in lnkLs_search: {e}")
-            return create_error_response(
-                error_code=ErrorCode.INTERNAL_ERROR,
-                message=f"Unexpected error: {str(e)}"
-            )
+        resolved_oc = resolve_oc(override_oc=oc)
+        snake_params = {
+            "oc": resolved_oc, "target": "lnkLs", "query": query,
+            "display": display, "page": page,
+        }
+        if sort: snake_params["sort"] = sort
+        return run_search(
+            get_client=_get_client, target="lnkLs", query=query,
+            snake_params=snake_params, response_type=type, display=display,
+            ranking_field="법령명한글", list_type="law",
+            over_fetch_key="numOfRows", over_fetch=False,
+        )
 
     # ==================== TOOL 12: lnkLsOrdJo_search ====================
-    @server.tool(
-        annotations=ToolAnnotations(
-            readOnlyHint=True,
-            destructiveHint=False,
-            idempotentHint=True
-        )
-    )
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
     def lnkLsOrdJo_search(
         query: str = "*",
         display: int = 20,
@@ -1194,67 +953,25 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             Search specific article (제20조):
             >>> lnkLsOrdJo_search(knd="002118", jo=20, type="XML")
         """
-        try:
-            resolved_oc = resolve_oc(override_oc=oc)
-
-            # Build parameters
-            params = {
-                "oc": resolved_oc,
-                "target": "lnkLsOrdJo",
-                "query": query,
-                "display": display,
-                "page": page,
-            }
-
-            # Add optional parameters
-            if knd:
-                params["knd"] = knd
-            if jo is not None:
-                # Convert to 4-digit format if needed
-                params["jo"] = jo if jo >= 1000 else jo
-            if jobr is not None:
-                params["jobr"] = jobr
-            if sort:
-                params["sort"] = sort
-
-            # Map to upstream format
-            upstream_params = map_params_to_upstream(params)
-
-            # Call API
-            client = _get_client()
-            response = client.get("/DRF/lawSearch.do", upstream_params, response_type=type)
-
-            # Parse XML and add ranked_data for LLM consumption
-            if response.get("status") == "ok" and type == "XML":
-                raw_content = response.get("raw_content", "")
-                if raw_content:
-                    parsed_data = parse_xml_response(raw_content)
-                    if parsed_data:
-                        response["ranked_data"] = parsed_data
-
-            return slim_response(response)
-
-        except ValueError as e:
-            logger.error(f"Validation error in lnkLsOrdJo_search: {e}")
-            return create_error_response(
-                error_code=ErrorCode.VALIDATION_ERROR,
-                message=str(e)
-            )
-        except Exception as e:
-            logger.exception(f"Unexpected error in lnkLsOrdJo_search: {e}")
-            return create_error_response(
-                error_code=ErrorCode.INTERNAL_ERROR,
-                message=f"Unexpected error: {str(e)}"
-            )
+        resolved_oc = resolve_oc(override_oc=oc)
+        snake_params = {
+            "oc": resolved_oc, "target": "lnkLsOrdJo", "query": query,
+            "display": display, "page": page,
+        }
+        if knd: snake_params["knd"] = knd
+        if jo is not None:
+            # Convert to 4-digit format if needed
+            snake_params["jo"] = jo if jo >= 1000 else jo
+        if jobr is not None: snake_params["jobr"] = jobr
+        if sort: snake_params["sort"] = sort
+        return run_search(
+            get_client=_get_client, target="lnkLsOrdJo", query=query,
+            snake_params=snake_params, response_type=type, display=display,
+        )
 
     # ==================== TOOL 13: lnkDep_search ====================
-    @server.tool(
-        annotations=ToolAnnotations(
-            readOnlyHint=True,
-            destructiveHint=False,
-            idempotentHint=True
-        )
-    )
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
     def lnkDep_search(
         org: str,
         display: int = 20,
@@ -1286,60 +1003,20 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             Search ordinances linked to ministry 1400000:
             >>> lnkDep_search(org="1400000", type="XML")
         """
-        try:
-            resolved_oc = resolve_oc(override_oc=oc)
-
-            # Build parameters
-            params = {
-                "oc": resolved_oc,
-                "target": "lnkDep",
-                "org": org,
-                "display": display,
-                "page": page,
-            }
-
-            # Add optional parameters
-            if sort:
-                params["sort"] = sort
-
-            # Map to upstream format
-            upstream_params = map_params_to_upstream(params)
-
-            # Call API
-            client = _get_client()
-            response = client.get("/DRF/lawSearch.do", upstream_params, response_type=type)
-
-            # Parse XML and add ranked_data for LLM consumption
-            if response.get("status") == "ok" and type == "XML":
-                raw_content = response.get("raw_content", "")
-                if raw_content:
-                    parsed_data = parse_xml_response(raw_content)
-                    if parsed_data:
-                        response["ranked_data"] = parsed_data
-
-            return slim_response(response)
-
-        except ValueError as e:
-            logger.error(f"Validation error in lnkDep_search: {e}")
-            return create_error_response(
-                error_code=ErrorCode.VALIDATION_ERROR,
-                message=str(e)
-            )
-        except Exception as e:
-            logger.exception(f"Unexpected error in lnkDep_search: {e}")
-            return create_error_response(
-                error_code=ErrorCode.INTERNAL_ERROR,
-                message=f"Unexpected error: {str(e)}"
-            )
+        resolved_oc = resolve_oc(override_oc=oc)
+        snake_params = {
+            "oc": resolved_oc, "target": "lnkDep", "org": org,
+            "display": display, "page": page,
+        }
+        if sort: snake_params["sort"] = sort
+        return run_search(
+            get_client=_get_client, target="lnkDep", query=org,
+            snake_params=snake_params, response_type=type, display=display,
+        )
 
     # ==================== TOOL 14: drlaw_search ====================
-    @server.tool(
-        annotations=ToolAnnotations(
-            readOnlyHint=True,
-            destructiveHint=False,
-            idempotentHint=True
-        )
-    )
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
     def drlaw_search(
         oc: Optional[str] = None,
         ctx: Context = None,
@@ -1364,43 +1041,15 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             Get linkage statistics:
             >>> drlaw_search()
         """
-        try:
-            resolved_oc = resolve_oc(override_oc=oc)
-
-            # Build parameters (HTML only)
-            params = {
-                "oc": resolved_oc,
-                "target": "drlaw",
-            }
-
-            # Map to upstream format
-            upstream_params = map_params_to_upstream(params)
-
-            # Call API (force HTML as only supported format)
-            client = _get_client()
-            return client.get("/DRF/lawSearch.do", upstream_params, response_type="HTML")
-
-        except ValueError as e:
-            logger.error(f"Validation error in drlaw_search: {e}")
-            return create_error_response(
-                error_code=ErrorCode.VALIDATION_ERROR,
-                message=str(e)
-            )
-        except Exception as e:
-            logger.exception(f"Unexpected error in drlaw_search: {e}")
-            return create_error_response(
-                error_code=ErrorCode.INTERNAL_ERROR,
-                message=f"Unexpected error: {str(e)}"
-            )
+        resolved_oc = resolve_oc(override_oc=oc)
+        params = {"oc": resolved_oc, "target": "drlaw"}
+        upstream_params = map_params_to_upstream(params)
+        client = _get_client()
+        return client.get("/DRF/lawSearch.do", upstream_params, response_type="HTML")
 
     # ==================== TOOL 15: lsDelegated_service ====================
-    @server.tool(
-        annotations=ToolAnnotations(
-            readOnlyHint=True,
-            destructiveHint=False,
-            idempotentHint=True
-        )
-    )
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
     def lsDelegated_service(
         id: Optional[Union[str, int]] = None,
         mst: Optional[Union[str, int]] = None,
@@ -1431,63 +1080,18 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             Retrieve delegations for 초·중등교육법:
             >>> lsDelegated_service(id="000900", type="XML")
         """
-        try:
-            # Convert id/mst to strings if they're integers (LLMs may extract numbers as ints)
-            if id is not None:
-                id = str(id)
-            if mst is not None:
-                mst = str(mst)
-
-            # Require either id or mst
-            if not id and not mst:
-                return create_error_response(
-                    error_code=ErrorCode.VALIDATION_ERROR,
-                    message="Either 'id' or 'mst' parameter is required",
-                    hints=[
-                        "Provide 'id' (law ID) or 'mst' (law master number)",
-                        "Get these from law search results",
-                        "Example: id='000900' (초·중등교육법)"
-                    ]
-                )
-
-            # Warn if HTML requested
-            if type.upper() == "HTML":
-                logger.warning("lsDelegated_service does not support HTML format, using XML")
-                type = "XML"
-
-            resolved_oc = resolve_oc(override_oc=oc)
-
-            # Build parameters
-            params = {
-                "oc": resolved_oc,
-                "target": "lsDelegated",
-            }
-
-            # Add id or mst
-            if id:
-                params["id"] = id
-            if mst:
-                params["mst"] = mst
-
-            # Map to upstream format
-            upstream_params = map_params_to_upstream(params)
-
-            # Call API
-            client = _get_client()
-            return client.get("/DRF/lawService.do", upstream_params, response_type=type)
-
-        except ValueError as e:
-            logger.error(f"Validation error in lsDelegated_service: {e}")
-            return create_error_response(
-                error_code=ErrorCode.VALIDATION_ERROR,
-                message=str(e)
-            )
-        except Exception as e:
-            logger.exception(f"Unexpected error in lsDelegated_service: {e}")
-            return create_error_response(
-                error_code=ErrorCode.INTERNAL_ERROR,
-                message=f"Unexpected error: {str(e)}"
-            )
+        (id, mst) = stringify_id(id, mst)
+        if not id and not mst:
+            raise ValueError("Either 'id' or 'mst' parameter is required")
+        if type.upper() == "HTML":
+            logger.warning("lsDelegated_service does not support HTML format, using XML")
+            type = "XML"
+        resolved_oc = resolve_oc(override_oc=oc)
+        snake_params = {"oc": resolved_oc, "target": "lsDelegated"}
+        if id: snake_params["id"] = id
+        if mst: snake_params["mst"] = mst
+        return run_service(get_client=_get_client, target="lsDelegated",
+                          snake_params=snake_params, response_type=type)
 
     # ==================== PHASE 3: CASE LAW & LEGAL RESEARCH ====================
 
