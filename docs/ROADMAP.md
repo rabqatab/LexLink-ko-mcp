@@ -1,7 +1,7 @@
 # LexLink API Implementation Roadmap
 
-**Last Updated:** 2026-02-28
-**Status:** All 26 tools + 2 resources implemented (v1.5.0)
+**Last Updated:** 2026-03-30
+**Status:** All 44 tools + 2 resources implemented (v2.0.0)
 
 ---
 
@@ -90,32 +90,45 @@ For detailed parameter specs, see `API_REFERENCE.md`.
 
 ---
 
-## Phase 6: Code Refactoring - PLANNED
+## Phase 6: Code Refactoring - COMPLETE
+
+**Completed:** 2026-03-30 | **Version:** v2.0.0
 
 **Objective:** Reduce `server.py` from ~3,300 to ~1,100 lines (65% reduction) via shared helpers.
 
-**Approach:** Create `src/lexlink/_helpers.py` (~250 lines) extracting 6 repeated patterns:
-- Shared `ToolAnnotations` constant (120 lines saved)
-- OC resolution helper (72 lines saved)
-- Error handling decorator (288 lines saved)
-- ID stringification (48 lines saved)
-- Common search logic (320 lines saved)
-- Common service logic (300 lines saved)
+**Approach:** Created `src/lexlink/_helpers.py` (~211 lines) extracting repeated patterns:
+- Shared `TOOL_ANNOTATIONS` constant
+- `handle_tool_error` helper
+- `run_search` and `run_service` helpers
+- All 26 existing tools refactored as thin wrappers
 
 Explicit `@server.tool()` decorators and `ctx: Context = None` signatures remain on each tool for MCP compatibility.
 
 ---
 
+## Phase 7: Extended Legal Information - COMPLETE
+
+**Completed:** 2026-03-30 | **Tools:** 18/18 | **Version:** v2.0.0
+
+| Category | Tools | Description |
+|----------|-------|-------------|
+| 자치법규 (Local Ordinances) | `ordin_search`, `ordin_service`, `ordinLsCon_search` | Local ordinance search, retrieval & law linkage |
+| 조약 (Treaties) | `trty_search`, `trty_service` | International treaty search & retrieval |
+| 법령정보 지식베이스 (Knowledge Base) | `lstrm_ai_search`, `dlytrm_search`, `lstrm_rlt_search`, `dlytrm_rlt_search`, `lstrm_rlt_jo_search`, `jo_rlt_lstrm_search`, `ls_rlt_search` | Legal term AI search, everyday terms, cross-references & linkage |
+| 위원회 결정문 (Committee Decisions) | `committee_search`, `committee_service` | Decisions from 12 government committees (parametric) |
+| 중앙부처 1차 해석 (Ministry Interpretations) | `cgm_expc_search`, `cgm_expc_service` | First-instance interpretations from 39 ministries (parametric) |
+| 특별행정심판 (Special Appeals) | `special_decc_search`, `special_decc_service` | Decisions from 4 special tribunals (parametric) |
+
+---
+
 ## Future Expansion
 
-**Additional APIs available (165+ remaining):**
-- 자치법규 (Local Ordinances) - 2 tools
-- 조약 (Treaties) - 2 tools
-- 위원회 결정문 (Committee Decisions) - 24 tools
-- 모바일 APIs - 14 tools
+**Additional APIs available (remaining):**
+- 모바일 APIs - 14 tools (duplicate of existing, low priority)
 - 맞춤형 APIs - 6 tools
-- 법령정보 지식베이스 - 6 tools
-- 중앙부처 1차 해석 - 15 tools
-- 특별행정심판 - 4 tools
+- 별표·서식 (Tables & Forms) - 3 tools
+- 학칙·공단·공공기관 - 2 tools
+
+**Note:** Local ordinances, treaties, committee decisions, ministry interpretations, special appeals, and knowledge base tools are now implemented in Phase 7.
 
 See `API_REFERENCE.md` for the full 191-API catalog.

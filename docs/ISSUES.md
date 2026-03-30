@@ -1,22 +1,10 @@
 # LexLink - Bugs and Issues Tracker
 
-**Last Updated:** 2026-03-01
+**Last Updated:** 2026-03-30
 
 ---
 
 ## Open Issues
-
-### Issue #10: MCP Protocol Version 2025-06-18 Incompatibility
-
-**Status:** KNOWN ISSUE | **Severity:** MEDIUM | **Discovered:** 2025-12-11
-
-Newer MCP clients send `protocolVersion: "2025-06-18"` which may cause intermittent errors. This is an ecosystem-wide transitional problem, not a LexLink bug.
-
-**Workaround:** Downgraded to `mcp 1.20.0` (from 1.23.3 which caused 502 errors).
-
-**Fix:** Wait for `mcp` package to support protocol `2025-06-18` properly, then upgrade.
-
----
 
 ### Issue #7: Service Tools Exceed PlayMCP 24KB Limit
 
@@ -41,6 +29,16 @@ Other service tools (prec_service, detc_service, expc_service, decc_service) var
 ---
 
 ## Resolved Issues
+
+### Issue #10: MCP Protocol Version 2025-06-18 Incompatibility - FIXED v2.0.0
+
+**Status:** FIXED | **Severity:** MEDIUM | **Discovered:** 2025-12-11
+
+Newer MCP clients send `protocolVersion: "2025-06-18"` which may cause intermittent errors. This is an ecosystem-wide transitional problem, not a LexLink bug.
+
+**Fix:** FIXED v2.0.0 — upgraded to mcp>=1.26.0
+
+---
 
 ### Issue #12: law.go.kr Anti-Bot JS Redirects Block API Responses - FIXED v1.5.1
 
@@ -126,9 +124,9 @@ Users must register at [open.law.go.kr](https://open.law.go.kr) and enable speci
 |----------|-------|-------|------|
 | Critical | 6 | 5 | 1 |
 | High | 3 | 3 | 0 |
-| Medium | 2 | 1 | 1 |
+| Medium | 2 | 2 | 0 |
 | Low | 1 | 1 | 0 |
-| **Total** | **12** | **10** | **2** |
+| **Total** | **12** | **11** | **1** |
 
 ---
 

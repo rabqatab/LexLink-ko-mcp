@@ -1,12 +1,13 @@
 # AGENTS.md
 
-LexLink is a Model Context Protocol (MCP) server providing structured access to 191+ Korean law APIs from the National Law Information Center (law.go.kr). It exposes 26 tools, 6 prompts, and 2 resources for AI-powered legal research.
+LexLink is a Model Context Protocol (MCP) server providing structured access to 191+ Korean law APIs from the National Law Information Center (law.go.kr). It exposes 44 tools, 6 prompts, and 2 resources for AI-powered legal research.
 
 ## Architecture
 
 ```
 src/lexlink/
-├── server.py        # MCP server: 26 tools + 6 prompts + 2 resources (~3,400 lines)
+├── server.py        # MCP server: 44 tools + 6 prompts + 2 resources
+├── _helpers.py      # Shared helpers: TOOL_ANNOTATIONS, handle_tool_error, run_search, run_service
 ├── client.py        # HTTP client for law.go.kr API (with anti-bot bypass)
 ├── stdio_server.py  # Stdio transport entry point
 ├── params.py        # Parameter mapping (snake_case → upstream camelCase)
@@ -20,7 +21,7 @@ src/lexlink/
 └── log_processor.py # Log analysis for dashboard
 ```
 
-## Tools (26 total)
+## Tools (44 total)
 
 | Phase | Tools | Purpose |
 |-------|-------|---------|
@@ -29,6 +30,7 @@ src/lexlink/
 | Phase 3 (8) | `prec_search`, `prec_service`, `detc_search`, `detc_service`, `expc_search`, `expc_service`, `decc_search`, `decc_service` | Case law, constitutional court, legal interpretations, admin appeals |
 | Phase 4 (1) | `article_citation` | HTML-based citation extraction (zero API cost, 100% accuracy) |
 | Phase 5 (2) | `aiSearch`, `aiRltLs_search` | AI-powered semantic search |
+| Phase 7 (18) | `ordin_search`, `ordin_service`, `ordinLsCon_search`, `trty_search`, `trty_service`, `lstrm_ai_search`, `dlytrm_search`, `lstrm_rlt_search`, `dlytrm_rlt_search`, `lstrm_rlt_jo_search`, `jo_rlt_lstrm_search`, `ls_rlt_search`, `committee_search`, `committee_service`, `cgm_expc_search`, `cgm_expc_service`, `special_decc_search`, `special_decc_service` | Local ordinances, treaties, legal terms KB, committee decisions, ministry interpretations, special appeals |
 
 ## MCP Prompts (6 total)
 
@@ -64,7 +66,7 @@ src/lexlink/
 Run tests with `uv run pytest`. Test suites cover:
 - E2E with Gemini LLM
 - Citation unit tests (25) and integration tests (15)
-- Semantic data quality validation across all 26 tools
+- Semantic data quality validation across Phase 1-5 tools (26 tools)
 
 ## Coding Conventions
 

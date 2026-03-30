@@ -14,7 +14,7 @@ LexLink is an MCP (Model Context Protocol) server that exposes the Korean Nation
 
 ## Features
 
-- **26 MCP Tools + 2 MCP Resources** for comprehensive Korean law information access
+- **44 MCP Tools + 2 MCP Resources** for comprehensive Korean law information access
   - Search and retrieve Korean laws (effective date & announcement date)
   - Search and retrieve English-translated laws
   - Search and retrieve administrative rules (행정규칙)
@@ -35,7 +35,7 @@ LexLink is an MCP (Model Context Protocol) server that exposes the Korean Nation
     - Cached mapping of ~20 frequently-used law names to stable 법령ID codes
     - Template lookup by Korean name or abbreviation (`lexlink://law/{name}`)
     - Dynamic caching: search results automatically populate the cache
-- **100% Semantic Validation** - All 26 tools confirmed returning real law data
+- **100% Semantic Validation** - All Phase 1-5 tools confirmed returning real law data
 - **Error Handling** - Actionable error messages with resolution hints
 - **Korean Text Support** - Proper UTF-8 encoding for Korean characters
 - **Response Formats** - HTML or XML (multiple formats supported)
@@ -46,8 +46,8 @@ LexLink is an MCP (Model Context Protocol) server that exposes the Korean Nation
 
 | Metric | Status |
 |--------|--------|
-| **Tools Implemented** | 26/26 (100%) ✅ |
-| **Semantic Validation** | 26/26 (100%) ✅ |
+| **Tools Implemented** | 44/44 (100%) ✅ |
+| **Semantic Validation** | 26/26 (Phase 1-5 tools) ✅ |
 | **MCP Prompts** | 6/6 (100%) ✅ |
 | **MCP Resources** | 2 (1 static + 1 template) ✅ |
 | **API Coverage** | ~17% of 150+ endpoints |
@@ -440,6 +440,17 @@ aiRltLs_search(
 
 **Best for:** Finding related laws like "민법" → 상법, 의료법, 소송촉진법
 
+### Phase 7: Extended Legal Information (18 tools)
+
+| Category | Tools |
+|----------|-------|
+| 자치법규 (Local Ordinances) | `ordin_search`, `ordin_service`, `ordinLsCon_search` |
+| 조약 (Treaties) | `trty_search`, `trty_service` |
+| 법령정보 지식베이스 (Knowledge Base) | `lstrm_ai_search`, `dlytrm_search`, `lstrm_rlt_search`, `dlytrm_rlt_search`, `lstrm_rlt_jo_search`, `jo_rlt_lstrm_search`, `ls_rlt_search` |
+| 위원회 결정문 (Committee Decisions) | `committee_search`, `committee_service` |
+| 중앙부처 1차 해석 (Ministry Interpretations) | `cgm_expc_search`, `cgm_expc_service` |
+| 특별행정심판 (Special Appeals) | `special_decc_search`, `special_decc_service` |
+
 ### Tool Selection Guide
 
 When searching Korean law, select tools based on query clarity:
@@ -647,7 +658,7 @@ These examples demonstrate real-world conversation flows showing how LLMs intera
 ```
 lexlink-ko-mcp/
 ├── src/lexlink/
-│   ├── server.py        # Main MCP server with 26 tools
+│   ├── server.py        # Main MCP server with 44 tools
 │   ├── http_server.py   # HTTP/SSE server for Kakao PlayMCP
 │   ├── stdio_server.py  # Stdio transport entry point
 │   ├── params.py        # Parameter resolution & mapping
@@ -684,7 +695,7 @@ uv run pytest -m e2e
 
 ### Adding New Tools
 
-**Current Status:** 26/26 tools implemented and validated (Phase 1-5 complete)
+**Current Status:** 44/44 tools implemented (Phase 1-7 complete). Phase 1-5 tools validated.
 
 For implementing additional tools from the 124+ remaining APIs:
 1. Follow the pattern established in `src/lexlink/server.py`

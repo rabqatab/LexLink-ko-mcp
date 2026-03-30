@@ -2,9 +2,9 @@
 # 국가법령정보 공동활용 Open API — 완전한 API 사양서
 
 > **목적:** LLM/에이전트가 그대로 ingest / parse / convert 할 수 있도록 통일된 포맷의 스펙 제공
-> **범위:** All 191 APIs available from law.go.kr Open API (26 implemented in LexLink)
+> **범위:** All 191 APIs available from law.go.kr Open API (44 implemented in LexLink)
 > **Source:** https://open.law.go.kr/LSO/openApi/guideList.do
-> **Last Updated:** 2026-02-28
+> **Last Updated:** 2026-03-30
 
 ---
 
@@ -14,20 +14,20 @@
 |----------|-----------|-------------|----------------------|
 | **법령 (Law)** | 26 | 12 | ✅ Core APIs implemented |
 | **행정규칙 (Administrative Rules)** | 4 | 2 | ✅ Core APIs implemented |
-| **자치법규 (Local Ordinances)** | 3 | 0 | Not implemented |
+| **자치법규 (Local Ordinances)** | 3 | 3 | ✅ ordin_search, ordin_service, ordinLsCon_search |
 | **판례·결정례·해석례 (Case Law)** | 8 | 8 | ✅ Fully implemented |
-| **위원회 결정문 (Committee Decisions)** | 24 | 0 | Not implemented |
-| **조약 (Treaties)** | 2 | 0 | Not implemented |
+| **위원회 결정문 (Committee Decisions)** | 24 | 2 | ✅ committee_search, committee_service (12 committees, parametric) |
+| **조약 (Treaties)** | 2 | 2 | ✅ trty_search, trty_service |
 | **별표·서식 (Tables & Forms)** | 3 | 0 | Not implemented |
 | **학칙·공단·공공기관** | 2 | 0 | Not implemented |
 | **법령용어 (Legal Terms)** | 2 | 0 | Not implemented |
 | **모바일 (Mobile)** | 22 | 0 | Not implemented (duplicate) |
 | **맞춤형 (Customized)** | 6 | 0 | Not implemented |
-| **법령정보 지식베이스 (Knowledge Base)** | 9 | 2 | ✅ AI search implemented |
-| **중앙부처 1차 해석 (Ministry Interpretations)** | 64 | 0 | Not implemented |
-| **특별행정심판 (Special Appeals)** | 8 | 0 | Not implemented |
+| **법령정보 지식베이스 (Knowledge Base)** | 9 | 9 | ✅ lstrm_ai_search, dlytrm_search, lstrm_rlt_search, dlytrm_rlt_search, lstrm_rlt_jo_search, jo_rlt_lstrm_search, ls_rlt_search + aiSearch, aiRltLs_search |
+| **중앙부처 1차 해석 (Ministry Interpretations)** | 64 | 2 | ✅ cgm_expc_search, cgm_expc_service (39 ministries, parametric) |
+| **특별행정심판 (Special Appeals)** | 8 | 2 | ✅ special_decc_search, special_decc_service (4 tribunals, parametric) |
 | **Custom (article_citation)** | 1 | 1 | ✅ HTML parsing tool |
-| **Total** | **191** | **26** | **~13.6% coverage** |
+| **Total** | **191** | **44** | **~23% coverage** |
 
 ---
 

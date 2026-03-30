@@ -6,6 +6,30 @@ All notable changes to LexLink are documented here in both English and Korean.
 
 ## English
 
+### v2.0.0 - 2026-03-30
+
+#### Added
+- **Phase 7: Extended Legal Information (18 new tools)**
+  - 자치법규 (Local Ordinances): ordin_search, ordin_service, ordinLsCon_search
+  - 조약 (Treaties): trty_search, trty_service
+  - 법령정보 지식베이스 (Knowledge Base): 7 legal term search and linkage tools (lstrm_ai_search, dlytrm_search, lstrm_rlt_search, dlytrm_rlt_search, lstrm_rlt_jo_search, jo_rlt_lstrm_search, ls_rlt_search)
+  - 위원회 결정문 (Committee Decisions): committee_search/service (12 committees)
+  - 중앙부처 1차 해석 (Ministry Interpretations): cgm_expc_search/service (39 ministries)
+  - 특별행정심판 (Special Appeals): special_decc_search/service (4 tribunals)
+
+#### Changed
+- **Phase 6: Code Refactoring** — extracted shared helpers to `_helpers.py`, reducing server.py by ~38%
+  - TOOL_ANNOTATIONS, handle_tool_error, run_search, run_service helpers
+  - All 26 existing tools refactored as thin wrappers
+- **Issue #10 resolved**: Upgraded mcp dependency to >=1.26.0
+
+#### Infrastructure
+- New module: `src/lexlink/_helpers.py` (~211 lines)
+- New parameter mappings: eft_yd, conc_yd, nat_cd, sborg, ordin_fd
+- Total tools: 44 (was 26)
+
+---
+
 ### v1.5.2 - 2026-03-02
 **Fix: slim_response() redesign — safety guard + no field stripping**
 
