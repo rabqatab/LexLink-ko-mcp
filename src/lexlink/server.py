@@ -4,8 +4,7 @@ LexLink MCP Server - Korean National Law Information API.
 This server exposes the law.go.kr Open API through MCP tools,
 enabling AI agents to search and retrieve Korean legal information.
 
-⚠️ IMPORTANT: The law.go.kr API does NOT support JSON format despite
-documentation. All tools default to XML format. Use XML or HTML only.
+All tools default to JSON format. XML and HTML are also supported.
 """
 
 import logging
@@ -243,7 +242,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         display: int = 20,
         page: int = 1,
         oc: Optional[str] = None,
-        type: str = "XML",
+        type: str = "JSON",
         sort: Optional[str] = None,
         ef_yd: Optional[str] = None,
         org: Optional[str] = None,
@@ -261,7 +260,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             display: Number of results per page (max 100, default 20). **Recommend 50-100 for law searches (법령 검색) to ensure exact matches are found.**
             page: Page number (1-based, default 1)
             oc: Optional OC override (defaults to env var)
-            type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
+            type: Response format - "JSON" (default), "XML", or "HTML"
             sort: Sort order - "lasc"|"ldes"|"dasc"|"ddes"|"nasc"|"ndes"|"efasc"|"efdes"
             ef_yd: Effective date range (YYYYMMDD~YYYYMMDD, e.g., "20240101~20241231")
             org: Ministry/department code filter
@@ -317,7 +316,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         display: int = 20,
         page: int = 1,
         oc: Optional[str] = None,
-        type: str = "XML",
+        type: str = "JSON",
         sort: Optional[str] = None,
         date: Optional[int] = None,
         org: Optional[str] = None,
@@ -334,7 +333,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             display: Number of results per page (max 100, default 20). **Recommend 50-100 for law searches (법령 검색) to ensure exact matches are found.**
             page: Page number (1-based, default 1)
             oc: Optional OC override (defaults to env var)
-            type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
+            type: Response format - "JSON" (default), "XML", or "HTML"
             sort: Sort order
             date: Announcement date (YYYYMMDD)
             org: Ministry/department code filter
@@ -379,7 +378,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         jo: Optional[Union[str, int]] = None,
         chr_cls_cd: Optional[str] = None,
         oc: Optional[str] = None,
-        type: str = "XML",
+        type: str = "JSON",
         ctx: Context = None,
     ) -> dict:
         """
@@ -400,7 +399,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 Examples: "017400" (제174조), "017200" (제172조), "000300" (제3조), "001502" (제15조의2)
             chr_cls_cd: Language code - "010202" (Korean, default) or "010201" (Original)
             oc: Optional OC override (defaults to env var)
-            type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
+            type: Response format - "JSON" (default), "XML", or "HTML"
 
         Returns:
             Full law content or specific article content
@@ -437,7 +436,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         jo: Optional[Union[str, int]] = None,
         lang: Optional[str] = None,
         oc: Optional[str] = None,
-        type: str = "XML",
+        type: str = "JSON",
         ctx: Context = None,
     ) -> dict:
         """
@@ -460,7 +459,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 Examples: "017400" (제174조), "017200" (제172조), "000300" (제3조), "001502" (제15조의2)
             lang: Language - "KO" (Korean) or "ORI" (Original)
             oc: Optional OC override (defaults to env var)
-            type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
+            type: Response format - "JSON" (default), "XML", or "HTML"
 
         Returns:
             Full law content or specific article content
@@ -499,7 +498,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         ho: Optional[str] = None,
         mok: Optional[str] = None,
         oc: Optional[str] = None,
-        type: str = "XML",
+        type: str = "JSON",
         ctx: Context = None,
     ) -> dict:
         """
@@ -519,7 +518,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             ho: Item number (6 digits, e.g., "000200" for 제2호)
             mok: Subitem (UTF-8 encoded, e.g., "다" for 다목)
             oc: Optional OC override (defaults to env var)
-            type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
+            type: Response format - "JSON" (default), "XML", or "HTML"
 
         Returns:
             Specific law section content
@@ -557,7 +556,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         ho: Optional[str] = None,
         mok: Optional[str] = None,
         oc: Optional[str] = None,
-        type: str = "XML",
+        type: str = "JSON",
         ctx: Context = None,
     ) -> dict:
         """
@@ -576,7 +575,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             ho: Item number (6 digits, e.g., "000200" for 제2호)
             mok: Subitem (UTF-8 encoded, e.g., "다" for 다목)
             oc: Optional OC override (defaults to env var)
-            type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
+            type: Response format - "JSON" (default), "XML", or "HTML"
 
         Returns:
             Specific law section content
@@ -610,7 +609,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         display: int = 20,
         page: int = 1,
         oc: Optional[str] = None,
-        type: str = "XML",
+        type: str = "JSON",
         sort: Optional[str] = None,
         ef_yd: Optional[str] = None,
         org: Optional[str] = None,
@@ -628,7 +627,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             display: Number of results per page (max 100, default 20). **Recommend 50-100 for law searches (법령 검색) to ensure exact matches are found.**
             page: Page number (1-based, default 1)
             oc: Optional OC override (defaults to env var)
-            type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
+            type: Response format - "JSON" (default), "XML", or "HTML"
             sort: Sort order - "lasc"|"ldes"|"dasc"|"ddes"|"nasc"|"ndes"|"efasc"|"efdes"
             ef_yd: Effective date range (YYYYMMDD~YYYYMMDD)
             org: Ministry/department code filter
@@ -675,7 +674,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
 
         # Determine if we need to fetch more results for ranking
         original_display = display
-        ranking_enabled = (type == "XML" and should_apply_ranking(query))
+        ranking_enabled = (type in ("XML", "JSON") and should_apply_ranking(query))
 
         if ranking_enabled and original_display < 100:
             # Fetch more results to rank (up to 100, API max) for better relevance
@@ -691,7 +690,15 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         if response.get("status") == "ok" and ranking_enabled:
             raw_content = response.get("raw_content", "")
             if raw_content:
-                parsed_data = parse_xml_response(raw_content)
+                if type == "JSON":
+                    import json as _json
+                    try:
+                        _jd = _json.loads(raw_content)
+                        parsed_data = list(_jd.values())[0] if _jd else None
+                    except (ValueError, IndexError):
+                        parsed_data = None
+                else:
+                    parsed_data = parse_xml_response(raw_content)
                 if parsed_data:
                     laws = extract_law_list(parsed_data)
                     if laws:
@@ -729,7 +736,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         ld: Optional[int] = None,
         ln: Optional[int] = None,
         oc: Optional[str] = None,
-        type: str = "XML",
+        type: str = "JSON",
         ctx: Context = None,
     ) -> dict:
         """
@@ -745,7 +752,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             ld: Announcement date (YYYYMMDD)
             ln: Announcement number
             oc: Optional OC override (defaults to env var)
-            type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
+            type: Response format - "JSON" (default), "XML", or "HTML"
             ctx: MCP context (injected automatically)
 
         Returns:
@@ -779,7 +786,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         display: int = 20,
         page: int = 1,
         oc: Optional[str] = None,
-        type: str = "XML",
+        type: str = "JSON",
         nw: int = 1,
         search: int = 1,
         org: Optional[str] = None,
@@ -801,7 +808,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             display: Number of results per page (max 100, default 20). **Recommend 50-100 for law searches (법령 검색) to ensure exact matches are found.**
             page: Page number (1-based, default 1)
             oc: Optional OC override (defaults to env var)
-            type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
+            type: Response format - "JSON" (default), "XML", or "HTML"
             nw: 1=현행 (current), 2=연혁 (historical), default 1
             search: 1=규칙명 (rule name), 2=본문검색 (full text), default 1
             org: Ministry/department code filter
@@ -852,7 +859,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         lid: Optional[Union[str, int]] = None,
         lm: Optional[str] = None,
         oc: Optional[str] = None,
-        type: str = "XML",
+        type: str = "JSON",
         ctx: Context = None,
     ) -> dict:
         """
@@ -866,7 +873,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             lid: Rule ID (alternative to id)
             lm: Rule name (exact match search)
             oc: Optional OC override (defaults to env var)
-            type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
+            type: Response format - "JSON" (default), "XML", or "HTML"
             ctx: MCP context (injected automatically)
 
         Returns:
@@ -898,7 +905,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         display: int = 20,
         page: int = 1,
         oc: Optional[str] = None,
-        type: str = "XML",
+        type: str = "JSON",
         sort: Optional[str] = None,
         ctx: Context = None,
     ) -> dict:
@@ -913,7 +920,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             display: Number of results per page (max 100, default 20). **Recommend 50-100 for law searches (법령 검색) to ensure exact matches are found.**
             page: Page number (1-based, default 1)
             oc: Optional OC override (defaults to env var)
-            type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
+            type: Response format - "JSON" (default), "XML", or "HTML"
             sort: Sort order - "lasc"|"ldes"|"dasc"|"ddes"|"nasc"|"ndes"
             ctx: MCP context (injected automatically)
 
@@ -945,7 +952,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         display: int = 20,
         page: int = 1,
         oc: Optional[str] = None,
-        type: str = "XML",
+        type: str = "JSON",
         knd: Optional[str] = None,
         jo: Optional[Union[str, int]] = None,
         jobr: Optional[int] = None,
@@ -964,7 +971,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             display: Number of results per page (max 100, default 20). **Recommend 50-100 for law searches (법령 검색) to ensure exact matches are found.**
             page: Page number (1-based, default 1)
             oc: Optional OC override (defaults to env var)
-            type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
+            type: Response format - "JSON" (default), "XML", or "HTML"
             knd: Law type code (to filter by specific law)
             jo: Article number (4 digits, zero-padded). Examples: "0002" (Article 2), "0020" (Article 20), "0100" (Article 100)
             jobr: Branch article suffix (2 digits, zero-padded). Examples: "00" (main article), "02" (Article X-2)
@@ -1005,7 +1012,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         display: int = 20,
         page: int = 1,
         oc: Optional[str] = None,
-        type: str = "XML",
+        type: str = "JSON",
         sort: Optional[str] = None,
         ctx: Context = None,
     ) -> dict:
@@ -1020,7 +1027,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             display: Number of results per page (max 100, default 20). **Recommend 50-100 for law searches (법령 검색) to ensure exact matches are found.**
             page: Page number (1-based, default 1)
             oc: Optional OC override (defaults to env var)
-            type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
+            type: Response format - "JSON" (default), "XML", or "HTML"
             sort: Sort order
             ctx: MCP context (injected automatically)
 
@@ -1082,7 +1089,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         id: Optional[Union[str, int]] = None,
         mst: Optional[Union[str, int]] = None,
         oc: Optional[str] = None,
-        type: str = "XML",
+        type: str = "JSON",
         ctx: Context = None,
     ) -> dict:
         """
@@ -1098,7 +1105,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             id: Law ID (required if mst not provided)
             mst: Law master number (required if id not provided)
             oc: Optional OC override (defaults to env var)
-            type: Response format - "XML" only (JSON not supported by API, HTML not available)
+            type: Response format - "JSON" (default) or "XML" (HTML not available for this endpoint)
             ctx: MCP context (injected automatically)
 
         Returns:
@@ -1131,7 +1138,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         display: int = 20,
         page: int = 1,
         oc: Optional[str] = None,
-        type: str = "XML",
+        type: str = "JSON",
         search: Optional[int] = None,
         sort: Optional[str] = None,
         org: Optional[str] = None,
@@ -1155,7 +1162,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             display: Number of results per page (max 100, default 20)
             page: Page number (1-based, default 1)
             oc: Optional OC override (defaults to env var)
-            type: Response format - "HTML" or "XML" (default "XML")
+            type: Response format - "JSON" (default), "XML", or "HTML"
             search: Search type (1=case name, 2=full text, default 1)
             sort: Sort order - "lasc"|"ldes"|"dasc"|"ddes"|"nasc"|"ndes"
             org: Court type code (400201=Supreme Court, 400202=lower courts)
@@ -1211,7 +1218,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         lm: Optional[str] = None,
         sections: Optional[str] = None,
         oc: Optional[str] = None,
-        type: str = "XML",
+        type: str = "JSON",
         ctx: Context = None,
     ) -> dict:
         """
@@ -1226,7 +1233,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                   **Recommended for PlayMCP** to stay under 20KB limit.
                 - "full" or None: Returns everything including 판례내용 (default).
             oc: Optional OC override
-            type: Response format - "HTML" or "XML" (default "XML")
+            type: Response format - "JSON" (default), "XML", or "HTML"
 
         Returns:
             Full precedent text with details or error
@@ -1254,7 +1261,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         display: int = 20,
         page: int = 1,
         oc: Optional[str] = None,
-        type: str = "XML",
+        type: str = "JSON",
         search: Optional[int] = None,
         gana: Optional[str] = None,
         sort: Optional[str] = None,
@@ -1274,7 +1281,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             display: Number of results per page (max 100, default 20)
             page: Page number (1-based, default 1)
             oc: Optional OC override (defaults to env var)
-            type: Response format - "HTML" or "XML" (default "XML")
+            type: Response format - "JSON" (default), "XML", or "HTML"
             search: Search type (1=decision name, 2=full text, default 1)
             gana: Dictionary search (ga, na, da, ...)
             sort: Sort order - "lasc"|"ldes"|"dasc"|"ddes"|"nasc"|"ndes"|"efasc"|"efdes"
@@ -1322,7 +1329,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         lm: Optional[str] = None,
         sections: Optional[str] = None,
         oc: Optional[str] = None,
-        type: str = "XML",
+        type: str = "JSON",
         ctx: Context = None,
     ) -> dict:
         """
@@ -1334,7 +1341,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             sections: "summary" to exclude 전문 (full text), or "full"/None for everything.
                 **Recommended: "summary" for PlayMCP** to stay under 20KB.
             oc: Optional OC override
-            type: Response format - "HTML" or "XML" (default "XML")
+            type: Response format - "JSON" (default), "XML", or "HTML"
 
         Returns:
             Full Constitutional Court decision text or error
@@ -1362,7 +1369,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         display: int = 20,
         page: int = 1,
         oc: Optional[str] = None,
-        type: str = "XML",
+        type: str = "JSON",
         search: int = 1,
         inq: Optional[str] = None,
         rpl: Optional[int] = None,
@@ -1385,7 +1392,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             display: Number of results per page (max 100, default 20). **Recommend 50-100 for searches to ensure exact matches are found.**
             page: Page number (1-based, default 1)
             oc: Optional OC override (defaults to env var)
-            type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
+            type: Response format - "JSON" (default), "XML", or "HTML"
             search: 1=법령해석례명 (interpretation name, default), 2=본문검색 (full text)
             inq: Inquiry organization name
             rpl: Reply organization code
@@ -1440,7 +1447,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         lm: Optional[str] = None,
         sections: Optional[str] = None,
         oc: Optional[str] = None,
-        type: str = "XML",
+        type: str = "JSON",
         ctx: Context = None,
     ) -> dict:
         """
@@ -1455,7 +1462,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             sections: "summary" to exclude 이유 (detailed reasoning), or "full"/None for everything.
                 Returns 안건명, 질의요지, 회답 in summary mode (~2KB vs ~5KB full).
             oc: Optional OC override (defaults to env var)
-            type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
+            type: Response format - "JSON" (default), "XML", or "HTML"
             ctx: MCP context (injected automatically)
 
         Returns:
@@ -1487,7 +1494,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         display: int = 20,
         page: int = 1,
         oc: Optional[str] = None,
-        type: str = "XML",
+        type: str = "JSON",
         search: int = 1,
         cls: Optional[str] = None,
         gana: Optional[str] = None,
@@ -1510,7 +1517,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             display: Number of results per page (max 100, default 20)
             page: Page number (1-based, default 1)
             oc: Optional OC override (defaults to env var)
-            type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
+            type: Response format - "JSON" (default), "XML", or "HTML"
             search: 1=사건명 (case name, default), 2=본문검색 (full text)
             cls: Decision type filter (재결구분코드)
             gana: Dictionary search (ga, na, da, ...)
@@ -1566,7 +1573,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         lm: Optional[str] = None,
         sections: Optional[str] = None,
         oc: Optional[str] = None,
-        type: str = "XML",
+        type: str = "JSON",
         ctx: Context = None,
     ) -> dict:
         """
@@ -1581,7 +1588,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             sections: "summary" to exclude 이유 (detailed reasoning), or "full"/None for everything.
                 Returns 사건명, 청구취지, 재결요지, 주문 in summary mode.
             oc: Optional OC override (defaults to env var)
-            type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
+            type: Response format - "JSON" (default), "XML", or "HTML"
             ctx: MCP context (injected automatically)
 
         Returns:
@@ -1708,7 +1715,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         display: int = 7,
         page: int = 1,
         oc: Optional[str] = None,
-        type: str = "XML",
+        type: str = "JSON",
         ctx: Context = None,
     ) -> dict:
         """
@@ -1732,7 +1739,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             display: Results per page (default 20)
             page: Page number (default 1)
             oc: Optional OC override
-            type: Response format - XML only (JSON not supported)
+            type: Response format - "JSON" (default), "XML", or "HTML"
 
         Returns:
             AI search results with full article text (법령조문 items with 조문내용)
@@ -1758,7 +1765,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         query: str,
         search: int = 0,
         oc: Optional[str] = None,
-        type: str = "XML",
+        type: str = "JSON",
         ctx: Context = None,
     ) -> dict:
         """
@@ -1777,7 +1784,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 - 0: 법령조문 (law articles, default)
                 - 1: 행정규칙조문 (administrative rule articles)
             oc: Optional OC override
-            type: Response format - XML only (JSON not supported)
+            type: Response format - "JSON" (default), "XML", or "HTML"
 
         Returns:
             List of semantically related law articles (법령조문 items)
@@ -1806,7 +1813,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         display: int = 20,
         page: int = 1,
         oc: Optional[str] = None,
-        type: str = "XML",
+        type: str = "JSON",
         nw: int = 1,
         search: int = 1,
         sort: Optional[str] = None,
@@ -1833,7 +1840,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             display: Number of results per page (max 100, default 20)
             page: Page number (1-based, default 1)
             oc: Optional OC override (defaults to env var)
-            type: Response format - "HTML" or "XML" (default "XML")
+            type: Response format - "JSON" (default), "XML", or "HTML"
             nw: 1=현행 (current), 2=연혁 (historical), default 1
             search: 1=자치법규명 (ordinance name), 2=본문검색 (full text), default 1
             sort: Sort order - "lasc"|"ldes"|"dasc"|"ddes"|"nasc"|"ndes"
@@ -1894,7 +1901,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         id: Optional[Union[str, int]] = None,
         mst: Optional[Union[str, int]] = None,
         oc: Optional[str] = None,
-        type: str = "XML",
+        type: str = "JSON",
         ctx: Context = None,
     ) -> dict:
         """
@@ -1906,7 +1913,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             id: Ordinance ID (either id or mst is required)
             mst: Ordinance master number (either id or mst is required)
             oc: Optional OC override (defaults to env var)
-            type: Response format - "HTML" or "XML" (default "XML")
+            type: Response format - "JSON" (default), "XML", or "HTML"
             ctx: MCP context (injected automatically)
 
         Returns:
@@ -1937,7 +1944,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         display: int = 20,
         page: int = 1,
         oc: Optional[str] = None,
-        type: str = "XML",
+        type: str = "JSON",
         ctx: Context = None,
     ) -> dict:
         """
@@ -1952,7 +1959,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             display: Number of results per page (max 100, default 20)
             page: Page number (1-based, default 1)
             oc: Optional OC override (defaults to env var)
-            type: Response format - "HTML" or "XML" (default "XML")
+            type: Response format - "JSON" (default), "XML", or "HTML"
             ctx: MCP context (injected automatically)
 
         Returns:
@@ -1980,7 +1987,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         display: int = 20,
         page: int = 1,
         oc: Optional[str] = None,
-        type: str = "XML",
+        type: str = "JSON",
         search: Optional[int] = None,
         sort: Optional[str] = None,
         gana: Optional[str] = None,
@@ -2001,7 +2008,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             display: Number of results per page (max 100, default 20)
             page: Page number (1-based, default 1)
             oc: Optional OC override (defaults to env var)
-            type: Response format - "HTML" or "XML" (default "XML")
+            type: Response format - "JSON" (default), "XML", or "HTML"
             search: Search type (1=조약명, 2=본문검색)
             sort: Sort order - "lasc"|"ldes"|"dasc"|"ddes"|"nasc"|"ndes"
             gana: Dictionary search (ga, na, da, ...)
@@ -2050,7 +2057,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
     def trty_service(
         id: Union[str, int],
         oc: Optional[str] = None,
-        type: str = "XML",
+        type: str = "JSON",
         ctx: Context = None,
     ) -> dict:
         """
@@ -2061,7 +2068,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         Args:
             id: Treaty sequence number (조약일련번호, required)
             oc: Optional OC override (defaults to env var)
-            type: Response format - "HTML" or "XML" (default "XML")
+            type: Response format - "JSON" (default), "XML", or "HTML"
             ctx: MCP context (injected automatically)
 
         Returns:
@@ -2089,7 +2096,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         display: int = 20,
         page: int = 1,
         oc: Optional[str] = None,
-        type: str = "XML",
+        type: str = "JSON",
         ctx: Context = None,
     ) -> dict:
         """
@@ -2103,7 +2110,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             display: Number of results per page (max 100, default 20)
             page: Page number (1-based, default 1)
             oc: Optional OC override (defaults to env var)
-            type: Response format - "HTML" or "XML" (default "XML")
+            type: Response format - "JSON" (default), "XML", or "HTML"
             ctx: MCP context (injected automatically)
 
         Returns:
@@ -2127,7 +2134,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         display: int = 20,
         page: int = 1,
         oc: Optional[str] = None,
-        type: str = "XML",
+        type: str = "JSON",
         ctx: Context = None,
     ) -> dict:
         """
@@ -2141,7 +2148,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             display: Number of results per page (max 100, default 20)
             page: Page number (1-based, default 1)
             oc: Optional OC override (defaults to env var)
-            type: Response format - "HTML" or "XML" (default "XML")
+            type: Response format - "JSON" (default), "XML", or "HTML"
             ctx: MCP context (injected automatically)
 
         Returns:
@@ -2165,7 +2172,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         display: int = 20,
         page: int = 1,
         oc: Optional[str] = None,
-        type: str = "XML",
+        type: str = "JSON",
         ctx: Context = None,
     ) -> dict:
         """
@@ -2180,7 +2187,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             display: Number of results per page (max 100, default 20)
             page: Page number (1-based, default 1)
             oc: Optional OC override (defaults to env var)
-            type: Response format - "HTML" or "XML" (default "XML")
+            type: Response format - "JSON" (default), "XML", or "HTML"
             ctx: MCP context (injected automatically)
 
         Returns:
@@ -2204,7 +2211,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         display: int = 20,
         page: int = 1,
         oc: Optional[str] = None,
-        type: str = "XML",
+        type: str = "JSON",
         ctx: Context = None,
     ) -> dict:
         """
@@ -2219,7 +2226,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             display: Number of results per page (max 100, default 20)
             page: Page number (1-based, default 1)
             oc: Optional OC override (defaults to env var)
-            type: Response format - "HTML" or "XML" (default "XML")
+            type: Response format - "JSON" (default), "XML", or "HTML"
             ctx: MCP context (injected automatically)
 
         Returns:
@@ -2243,7 +2250,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         display: int = 20,
         page: int = 1,
         oc: Optional[str] = None,
-        type: str = "XML",
+        type: str = "JSON",
         ctx: Context = None,
     ) -> dict:
         """
@@ -2257,7 +2264,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             display: Number of results per page (max 100, default 20)
             page: Page number (1-based, default 1)
             oc: Optional OC override (defaults to env var)
-            type: Response format - "HTML" or "XML" (default "XML")
+            type: Response format - "JSON" (default), "XML", or "HTML"
             ctx: MCP context (injected automatically)
 
         Returns:
@@ -2281,7 +2288,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         display: int = 20,
         page: int = 1,
         oc: Optional[str] = None,
-        type: str = "XML",
+        type: str = "JSON",
         ctx: Context = None,
     ) -> dict:
         """
@@ -2296,7 +2303,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             display: Number of results per page (max 100, default 20)
             page: Page number (1-based, default 1)
             oc: Optional OC override (defaults to env var)
-            type: Response format - "HTML" or "XML" (default "XML")
+            type: Response format - "JSON" (default), "XML", or "HTML"
             ctx: MCP context (injected automatically)
 
         Returns:
@@ -2320,7 +2327,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         display: int = 20,
         page: int = 1,
         oc: Optional[str] = None,
-        type: str = "XML",
+        type: str = "JSON",
         ctx: Context = None,
     ) -> dict:
         """
@@ -2335,7 +2342,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             display: Number of results per page (max 100, default 20)
             page: Page number (1-based, default 1)
             oc: Optional OC override (defaults to env var)
-            type: Response format - "HTML" or "XML" (default "XML")
+            type: Response format - "JSON" (default), "XML", or "HTML"
             ctx: MCP context (injected automatically)
 
         Returns:
@@ -2378,7 +2385,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         display: int = 20,
         page: int = 1,
         oc: Optional[str] = None,
-        type: str = "XML",
+        type: str = "JSON",
         search: Optional[int] = None,
         sort: Optional[str] = None,
         gana: Optional[str] = None,
@@ -2399,7 +2406,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             display: Number of results per page (max 100, default 20)
             page: Page number (1-based, default 1)
             oc: Optional OC override (defaults to env var)
-            type: Response format - "HTML" or "XML" (default "XML")
+            type: Response format - "JSON" (default), "XML", or "HTML"
             search: 1=안건명 (case name), 2=본문검색 (full text)
             sort: Sort order
             gana: Dictionary search
@@ -2440,7 +2447,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         committee: str,
         id: Union[str, int],
         oc: Optional[str] = None,
-        type: str = "XML",
+        type: str = "JSON",
         ctx: Context = None,
     ) -> dict:
         """
@@ -2450,7 +2457,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             committee: Committee name (same values as committee_search)
             id: Decision serial number (결정문일련번호)
             oc: Optional OC override
-            type: Response format - "HTML" or "XML" (default "XML")
+            type: Response format - "JSON" (default), "XML", or "HTML"
             ctx: MCP context (injected automatically)
 
         Returns:
@@ -2498,7 +2505,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         display: int = 20,
         page: int = 1,
         oc: Optional[str] = None,
-        type: str = "XML",
+        type: str = "JSON",
         search: Optional[int] = None,
         sort: Optional[str] = None,
         gana: Optional[str] = None,
@@ -2523,7 +2530,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             display: Number of results per page (max 100, default 20)
             page: Page number (1-based, default 1)
             oc: Optional OC override (defaults to env var)
-            type: Response format - "HTML" or "XML" (default "XML")
+            type: Response format - "JSON" (default), "XML", or "HTML"
             search: 1=사건명 (case name), 2=본문검색 (full text)
             sort: Sort order
             gana: Dictionary search
@@ -2565,7 +2572,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         ministry: str,
         id: Union[str, int],
         oc: Optional[str] = None,
-        type: str = "XML",
+        type: str = "JSON",
         ctx: Context = None,
     ) -> dict:
         """
@@ -2575,7 +2582,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             ministry: Ministry name (same values as cgm_expc_search)
             id: Interpretation serial number (해석례일련번호)
             oc: Optional OC override
-            type: Response format - "HTML" or "XML" (default "XML")
+            type: Response format - "JSON" (default), "XML", or "HTML"
             ctx: MCP context (injected automatically)
 
         Returns:
@@ -2614,7 +2621,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         display: int = 20,
         page: int = 1,
         oc: Optional[str] = None,
-        type: str = "XML",
+        type: str = "JSON",
         search: Optional[int] = None,
         sort: Optional[str] = None,
         gana: Optional[str] = None,
@@ -2637,7 +2644,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             display: Number of results per page (max 100, default 20)
             page: Page number (1-based, default 1)
             oc: Optional OC override (defaults to env var)
-            type: Response format - "HTML" or "XML" (default "XML")
+            type: Response format - "JSON" (default), "XML", or "HTML"
             search: 1=사건명 (case name), 2=본문검색 (full text)
             sort: Sort order
             gana: Dictionary search
@@ -2691,7 +2698,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         tribunal: str,
         id: Union[str, int],
         oc: Optional[str] = None,
-        type: str = "XML",
+        type: str = "JSON",
         ctx: Context = None,
     ) -> dict:
         """
@@ -2701,7 +2708,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             tribunal: Tribunal name (same values as special_decc_search)
             id: Decision serial number (재결례일련번호)
             oc: Optional OC override
-            type: Response format - "HTML" or "XML" (default "XML")
+            type: Response format - "JSON" (default), "XML", or "HTML"
             ctx: MCP context (injected automatically)
 
         Returns:

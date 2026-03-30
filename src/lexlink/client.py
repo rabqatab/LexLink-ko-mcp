@@ -60,7 +60,7 @@ class LawAPIClient:
         self,
         endpoint: str,
         params: dict,
-        response_type: Literal["HTML", "XML", "JSON"] = "XML"
+        response_type: Literal["HTML", "XML", "JSON"] = "JSON"
     ) -> dict:
         """
         Execute GET request to law.go.kr API with comprehensive error handling.
@@ -127,8 +127,7 @@ class LawAPIClient:
                 }
             )
 
-            # Return response (XML or HTML)
-            # Note: JSON format is not supported by law.go.kr API despite documentation
+            # Return response
             return self._passthrough_response(response, request_id, response_type)
 
         except httpx.TimeoutException:
@@ -251,8 +250,7 @@ class LawAPIClient:
         """
         Return response content as-is for client-side parsing.
 
-        Note: law.go.kr API does not support JSON format despite documentation.
-        JSON requests return HTML error pages, which are passed through.
+        Return response content as-is for client-side parsing.
 
         Args:
             response: HTTP response from law.go.kr

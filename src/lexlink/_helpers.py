@@ -144,7 +144,7 @@ def run_search(
 
     original_display = display
     ranking_enabled = (
-        response_type == "XML"
+        response_type in ("XML", "JSON")
         and ranking_field is not None
         and list_type is not None
         and should_apply_ranking(query)
@@ -157,10 +157,21 @@ def run_search(
     client = get_client()
     response = client.get("/DRF/lawSearch.do", upstream_params, response_type)
 
-    if response.get("status") == "ok" and response_type == "XML":
+    if response.get("status") == "ok" and response_type in ("XML", "JSON"):
         raw_content = response.get("raw_content", "")
         if raw_content:
-            parsed_data = parse_xml_response(raw_content)
+            # Parse response based on format
+            if response_type == "JSON":
+                import json as _json
+                try:
+                    json_data = _json.loads(raw_content)
+                    # JSON responses have a root key (e.g., "LawSearch", "PrecSearch")
+                    # Extract the inner object as parsed_data
+                    parsed_data = list(json_data.values())[0] if json_data else None
+                except (ValueError, IndexError):
+                    parsed_data = None
+            else:
+                parsed_data = parse_xml_response(raw_content)
             if parsed_data:
                 if ranking_enabled:
                     if list_type == "law":
