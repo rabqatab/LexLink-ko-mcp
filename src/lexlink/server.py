@@ -78,6 +78,29 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
 - aiSearch: Semantic search for law articles - returns FULL article text
 - aiRltLs_search: Find semantically related laws
 
+**Local Ordinances (자치법규):**
+- ordin_search/service: Local ordinance search & retrieval
+- ordinLsCon_search: Ordinance-to-law linkage
+
+**Treaties (조약):**
+- trty_search/service: International treaty search & retrieval
+
+**Legal Knowledge Base (법령정보 지식베이스):**
+- lstrm_ai_search: Legal term AI search
+- dlytrm_search: Everyday term search
+- lstrm_rlt_search, dlytrm_rlt_search: Term cross-references
+- lstrm_rlt_jo_search, jo_rlt_lstrm_search: Term-article linkage
+- ls_rlt_search: Related law search
+
+**Committee Decisions (위원회 결정문):**
+- committee_search/service: Decisions from 12 government committees
+
+**Ministry Interpretations (중앙부처 해석):**
+- cgm_expc_search/service: First-instance interpretations from 39 ministries
+
+**Special Administrative Appeals (특별행정심판):**
+- special_decc_search/service: Decisions from 4 special tribunals
+
 ## Common Law 법령IDs (verified, stable across amendments)
 Use these IDs directly with eflaw_service(id=...), law_service(id=...), etc. to SKIP the search step.
 | Law | 법령ID |
@@ -2909,12 +2932,29 @@ Use display=10 to get a good sample of results."""
 Tool selection priority for unclear queries:
 1. aiSearch (semantic article search) - for finding specific provisions
 2. aiRltLs_search (related laws) - for exploring law landscape
-3. eflaw_search/law_search (keyword) - fallback for precise matches"""
+3. eflaw_search/law_search (keyword) - fallback for precise matches
+
+📚 LEGAL TERMS & DEFINITIONS → Use knowledge base tools
+   lstrm_ai_search, dlytrm_search, lstrm_rlt_search, dlytrm_rlt_search
+   Examples: "뺑소니 정의", "법률 용어 정리"
+
+🏛️ COMMITTEE/TRIBUNAL DECISIONS → Use committee or special appeal tools
+   committee_search, special_decc_search
+   Examples: "공정거래위원회 담합 결정", "조세심판원 재결례"
+
+🏢 MINISTRY INTERPRETATIONS → Use cgm_expc_search
+   Examples: "고용노동부 근로시간 해석", "국토교통부 건축법 해석"
+
+🌍 TREATIES → Use trty_search
+   Examples: "한미 FTA", "기후변화 조약"
+
+📋 LOCAL ORDINANCES → Use ordin_search
+   Examples: "서울시 주차 조례", "청소년 보호 조례\""""
                 }
             }
         ]
 
-    logger.info("LexLink server initialized with 26 tools, 6 prompts, and 2 resources")
+    logger.info("LexLink server initialized with 44 tools, 6 prompts, and 2 resources")
     logger.info("Phase 1 & 2 Tools (15):")
     logger.info("  - eflaw_search, law_search, eflaw_service, law_service, eflaw_josub, law_josub")
     logger.info("  - elaw_search, elaw_service, admrul_search, admrul_service")
@@ -2926,6 +2966,14 @@ Tool selection priority for unclear queries:
     logger.info("  - article_citation")
     logger.info("Phase 5 Tools (2):")
     logger.info("  - aiSearch, aiRltLs_search (Knowledge Base AI-powered search)")
+    logger.info("Phase 7 Tools (18):")
+    logger.info("  - ordin_search, ordin_service, ordinLsCon_search")
+    logger.info("  - trty_search, trty_service")
+    logger.info("  - lstrm_ai_search, dlytrm_search, lstrm_rlt_search, dlytrm_rlt_search")
+    logger.info("  - lstrm_rlt_jo_search, jo_rlt_lstrm_search, ls_rlt_search")
+    logger.info("  - committee_search, committee_service")
+    logger.info("  - cgm_expc_search, cgm_expc_service")
+    logger.info("  - special_decc_search, special_decc_service")
     logger.info("Prompts (6): search-korean-law, get-law-article, get-article-with-citations, analyze-law-citations, search-admin-rules, tool-selection-guide")
     logger.info("Resources (2): frequently-used-laws (static), law-code-lookup (template)")
     return server
