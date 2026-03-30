@@ -112,6 +112,8 @@ def slim_response(response: dict) -> dict:
 
 from .params import map_params_to_upstream
 from .parser import parse_xml_response, extract_law_list, update_law_list, extract_items_list, update_items_list
+from .cache import get_cache
+from .resolver import get_resolver
 from .ranking import rank_search_results, should_apply_ranking
 
 
@@ -131,15 +133,16 @@ def run_search(
     post_rank_hook=None,
 ) -> dict:
     """Common search tool logic.
-    Handles: param mapping, API call, XML parsing, relevance ranking (3 pipelines),
-    trimming, slim_response.
-
-    Ranking pipelines based on list_type:
-    - "law": extract_law_list/update_law_list, over_fetch via numOfRows
-    - "items": extract_items_list/update_items_list, over_fetch via display
-    - other string (e.g. "admrul"): inline key access on parsed_data
-    - None: parse-only mode (no ranking)
+    Handles: law name resolution, caching, param mapping, API call, XML/JSON parsing,
+    relevance ranking (3 pipelines), alias learning, trimming, slim_response.
     """
+    # Resolve law name aliases (e.g., "자통법" → "자본시장과 금융투자업에 관한 법률")
+    resolver = get_resolver()
+    resolved_query = resolver.resolve(query)
+    if resolved_query != query:
+        snake_params["query"] = resolved_query
+        logger.info(f"Resolved query: '{query}' → '{resolved_query}'")
+
     upstream_params = map_params_to_upstream(snake_params)
 
     original_display = display
@@ -147,7 +150,7 @@ def run_search(
         response_type in ("XML", "JSON")
         and ranking_field is not None
         and list_type is not None
-        and should_apply_ranking(query)
+        and should_apply_ranking(resolved_query)
     )
 
     if ranking_enabled and over_fetch and original_display < 100:
@@ -157,8 +160,16 @@ def run_search(
             upstream_params["display"] = "100"
         logger.debug(f"Ranking enabled: fetching 100 results instead of {original_display}")
 
-    client = get_client()
-    response = client.get("/DRF/lawSearch.do", upstream_params, response_type)
+    # Check cache before making API call
+    cache = get_cache()
+    cached = cache.get(target, upstream_params)
+    if cached is not None:
+        response = cached
+    else:
+        client = get_client()
+        response = client.get("/DRF/lawSearch.do", upstream_params, response_type)
+        # Cache the raw response
+        cache.put(target, upstream_params, response)
 
     if response.get("status") == "ok" and response_type in ("XML", "JSON"):
         raw_content = response.get("raw_content", "")
@@ -205,6 +216,10 @@ def run_search(
 
                         response["ranked_data"] = parsed_data
 
+                        # Learn aliases from law search results
+                        if list_type == "law" and ranked_items:
+                            resolver.learn_from_results(ranked_items)
+
                         if post_rank_hook:
                             post_rank_hook(ranked_items)
                 else:
@@ -231,8 +246,19 @@ def run_service(
                          These are the verbose prose fields (판례내용, 전문, 이유, etc.)
     """
     upstream_params = map_params_to_upstream(snake_params)
+
+    # Check cache (only for full responses — summary mode always fetches fresh then strips)
+    cache = get_cache()
+    if sections != "summary":
+        cached = cache.get(target, upstream_params)
+        if cached is not None:
+            return cached
+
     client = get_client()
     response = client.get("/DRF/lawService.do", upstream_params, response_type)
+
+    # Cache the full response before section filtering
+    cache.put(target, upstream_params, response)
 
     # Section filtering: strip full-text fields when sections="summary"
     if sections == "summary" and full_text_fields and response.get("status") == "ok":
