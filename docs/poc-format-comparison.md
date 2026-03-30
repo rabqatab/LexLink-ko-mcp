@@ -113,17 +113,51 @@ XML is consistently faster — law.go.kr natively serves XML and converts to JSO
 
 Of 102 queries, only **1 query** (`prec_service(228541)` — full precedent text, 30KB) exceeds 24KB. This is true in all 3 formats. Format choice does not affect fit rate for the tested scenarios.
 
-### 3.6 LLM Parseability (gemini-2.0-flash)
+### 3.6 LLM Parseability (10 models × 3 formats × 5 queries = 150 calls per model)
 
-**Task:** Extract 3 fields (법령명한글, 법령ID, 공포일자) from 5 law search results.
+**Task:** Extract 3 fields from 5 search results across 5 different query types (law, precedent, treaty, admin rule, ordinance). Each model tested on all 3 formats.
 
-| Format | Accuracy | Latency |
-|--------|----------|---------|
-| XML | **5/5 (100%)** | 2,069ms |
-| JSON | **5/5 (100%)** | 1,901ms |
-| TOON | **5/5 (100%)** | 1,976ms |
+**Models tested (10):**
+- **Google:** gemini-2.0-flash, gemini-2.5-flash, gemini-2.5-pro, gemini-3-flash-preview, gemini-3.1-pro-preview
+- **OpenAI:** gpt-4.1-mini, gpt-4.1, o4-mini
+- **Anthropic:** claude-haiku-4-5, claude-sonnet-4-6
 
-All three formats parsed perfectly. Note: this is a simple extraction task. TOON's unfamiliar tabular format may cause issues with more complex parsing tasks.
+#### Accuracy by Model × Format
+
+| Model | Provider | XML | JSON | TOON | XML avg ms | JSON avg ms | TOON avg ms |
+|-------|----------|-----|------|------|-----------|------------|------------|
+| gemini-2.0-flash | Google | 25/25 (100%) | 25/25 (100%) | 21/25 **(84%)** | 2,305 | 2,255 | 2,363 |
+| gemini-2.5-flash | Google | 25/25 (100%) | 25/25 (100%) | 25/25 (100%) | 2,567 | 2,734 | 5,232 |
+| gemini-2.5-pro | Google | 25/25 (100%) | 25/25 (100%) | 25/25 (100%) | 9,927 | 9,578 | 11,377 |
+| gemini-3-flash-preview | Google | 25/25 (100%) | 25/25 (100%) | 25/25 (100%) | 6,731 | 5,651 | 7,990 |
+| gemini-3.1-pro-preview | Google | 25/25 (100%) | 25/25 (100%) | 25/25 (100%) | 12,522 | 11,942 | 13,983 |
+| gpt-4.1-mini | OpenAI | 25/25 (100%) | 25/25 (100%) | 25/25 (100%) | 3,960 | 4,042 | 3,817 |
+| gpt-4.1 | OpenAI | 25/25 (100%) | 25/25 (100%) | 25/25 (100%) | 4,020 | 3,025 | 3,164 |
+| o4-mini | OpenAI | 25/25 (100%) | 25/25 (100%) | 20/25 **(80%)** | 7,651 | 5,423 | 11,392 |
+| claude-haiku-4-5 | Anthropic | 25/25 (100%) | 25/25 (100%) | 25/25 (100%) | 2,153 | 2,414 | 1,734 |
+| claude-sonnet-4-6 | Anthropic | 25/25 (100%) | 25/25 (100%) | 25/25 (100%) | 4,187 | 3,882 | 3,991 |
+
+#### Format-Level Totals (across all models)
+
+| Format | Total Correct | Accuracy |
+|--------|--------------|----------|
+| XML | 250/250 | **100.0%** |
+| JSON | 250/250 | **100.0%** |
+| TOON | 241/250 | **96.4%** |
+
+#### Key Findings
+
+1. **XML and JSON: 100% accuracy across all 10 models.** No model failed to parse either format.
+
+2. **TOON: 96.4% accuracy.** Two models had issues:
+   - **gemini-2.0-flash** missed 4/25 on TOON (84%) — the oldest/fastest Gemini model struggled with the tabular CSV-like format
+   - **o4-mini** missed 5/25 on TOON (80%) — the reasoning model misinterpreted some TOON rows on one query type (ordinance data)
+
+3. **TOON is slower for reasoning models.** o4-mini took 11.4s avg on TOON vs 5.4s on JSON — the model spent more reasoning tokens parsing the unfamiliar format. gemini-2.5-flash also doubled its TOON latency (5.2s vs 2.7s for JSON).
+
+4. **Claude models handled TOON perfectly.** Both haiku-4-5 and sonnet-4-6 scored 100% on all 3 formats, and haiku was actually fastest on TOON (1.7s avg).
+
+5. **GPT-4.1 family handled TOON perfectly.** Both gpt-4.1-mini and gpt-4.1 scored 100% with no latency penalty.
 
 ---
 
@@ -292,7 +326,7 @@ XML is consistently 7-17% faster than JSON across all categories. This is becaus
 | Token efficiency (search) | Baseline | **-15.1%** | **-48.8%** |
 | Token efficiency (prose) | Baseline | ~-5% | ~-5% |
 | API latency | **Fastest** | +7-17% slower | +7-17% slower (JSON backend + ~1ms) |
-| LLM parseability | Proven | Proven | Proven (simple tasks) |
+| LLM parseability (10 models) | **100%** (250/250) | **100%** (250/250) | **96.4%** (241/250) |
 | PlayMCP fit rate | 99% | 99% | 99% |
 | SDK maturity | N/A | stdlib `json` | **In development** |
 | law.go.kr native | **Yes** | Server-side conversion | Client-side conversion from JSON |
@@ -310,8 +344,8 @@ XML is consistently 7-17% faster than JSON across all categories. This is becaus
 ### Option B: JSON + TOON conversion (Aggressive)
 - **Token savings:** 48.8% overall (up to 67% on search tools)
 - **Pros:** Massive token reduction for search-heavy workloads
-- **Cons:** Must maintain custom TOON converter until Python SDK stabilizes, LLM parseability unproven at scale for complex tasks, TOON spec is v3.0 working draft
-- **Risk:** Medium-high
+- **Cons:** Must maintain custom TOON converter until Python SDK stabilizes, 2 of 10 tested models (gemini-2.0-flash, o4-mini) had 16-20% error rates on TOON, TOON spec is v3.0 working draft
+- **Risk:** Medium-high (96.4% parseability vs 100% for XML/JSON)
 
 ### Option C: Stay on XML (Status quo)
 - **Token savings:** None
@@ -325,8 +359,8 @@ XML is consistently 7-17% faster than JSON across all categories. This is becaus
 
 TOON should be revisited when:
 1. Python SDK reaches stable release
-2. LLMs are trained on TOON data (improving parseability for complex tasks)
-3. PlayMCP raises or keeps the 24KB limit (TOON's byte savings become more impactful)
+2. LLM parseability improves (currently 96.4% vs 100% for JSON — gemini-2.0-flash and o4-mini fail on some TOON tabular data)
+3. The format becomes more widely adopted in training data
 
 ---
 
