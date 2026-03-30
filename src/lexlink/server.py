@@ -14,7 +14,6 @@ import re
 from typing import Optional, Union
 
 from mcp.server.fastmcp import FastMCP, Context
-from mcp.types import ToolAnnotations
 
 from .client import LawAPIClient
 from .errors import ErrorCode, create_error_response
@@ -1555,13 +1554,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
     # ==================== PHASE 4: ARTICLE CITATION ====================
 
     # ==================== TOOL 24: article_citation ====================
-    @server.tool(
-        annotations=ToolAnnotations(
-            readOnlyHint=True,
-            destructiveHint=False,
-            idempotentHint=True
-        )
-    )
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
     async def article_citation(
         mst: str,
         law_name: str,
@@ -1621,69 +1615,39 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             2. Then use article_citation(mst=..., law_name=..., article=...) to get citations
             3. Optionally use eflaw_service to get the full article text
         """
+        # Import citation extractor
+        from .citation import extract_article_citations
+
+        # OC is not strictly required for citation extraction (uses HTML scraping)
+        # but we validate it for consistency with other tools
         try:
-            # Import citation extractor
-            from .citation import extract_article_citations
+            resolved_oc = resolve_oc(override_oc=oc)
+            logger.debug(f"article_citation called with OC: {resolved_oc[:4]}...")
+        except ValueError:
+            # OC not required for citation extraction
+            logger.debug("article_citation called without OC (not required)")
 
-            # OC is not strictly required for citation extraction (uses HTML scraping)
-            # but we validate it for consistency with other tools
-            try:
-                resolved_oc = resolve_oc(override_oc=oc)
-                logger.debug(f"article_citation called with OC: {resolved_oc[:4]}...")
-            except ValueError:
-                # OC not required for citation extraction
-                logger.debug("article_citation called without OC (not required)")
+        # Validate required parameters
+        if not mst:
+            raise ValueError("mst (법령일련번호) is required")
+        if not law_name:
+            raise ValueError("law_name (법령명) is required")
+        if article <= 0:
+            raise ValueError("article must be a positive integer")
 
-            # Validate required parameters
-            if not mst:
-                raise ValueError("mst (법령일련번호) is required")
-            if not law_name:
-                raise ValueError("law_name (법령명) is required")
-            if article <= 0:
-                raise ValueError("article must be a positive integer")
+        # Extract citations
+        result = await extract_article_citations(
+            mst=str(mst),
+            law_name=law_name,
+            article=article,
+            article_branch=article_branch
+        )
 
-            # Extract citations
-            result = await extract_article_citations(
-                mst=str(mst),
-                law_name=law_name,
-                article=article,
-                article_branch=article_branch
-            )
-
-            return result
-
-        except ValueError as e:
-            logger.warning(f"Validation error in article_citation: {e}")
-            return create_error_response(
-                error_code=ErrorCode.VALIDATION_ERROR,
-                message=str(e),
-                hints=[
-                    "mst: Get from eflaw_search or law_search results (법령일련번호)",
-                    "law_name: Full Korean law name",
-                    "article: Positive integer (e.g., 3 for 제3조)",
-                    "article_branch: For 가지조문 like 제37조의2, use article=37, article_branch=2"
-                ]
-            )
-        except Exception as e:
-            logger.exception(f"Unexpected error in article_citation: {e}")
-            return create_error_response(
-                error_code=ErrorCode.INTERNAL_ERROR,
-                message=f"Unexpected error: {str(e)}",
-                hints=[
-                    "Check that the law name is correct",
-                    "Verify the article number exists in the law",
-                    "Try with a different law to isolate the issue"
-                ]
-            )
+        return result
 
     # ==================== TOOL 25: aiSearch ====================
-    @server.tool(
-        annotations=ToolAnnotations(
-            readOnlyHint=True,
-            destructiveHint=False,
-            idempotentHint=True
-        )
-    )
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
     def aiSearch(
         query: str,
         search: int = 0,
@@ -1723,47 +1687,19 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             >>> aiSearch(query="뺑소니 처벌", search=0)
             # Returns: 특정범죄 가중처벌 등에 관한 법률 제5조의3 (도주차량 운전자의 가중처벌)
         """
-        try:
-            resolved_oc = resolve_oc(override_oc=oc)
-
-            snake_params = {
-                "oc": resolved_oc,
-                "target": "aiSearch",
-                "type": type,
-                "query": query,
-                "search": search,
-                "display": display,
-                "page": page,
-            }
-
-            upstream_params = map_params_to_upstream(snake_params)
-
-            client = _get_client()
-            response = client.get("/DRF/lawSearch.do", upstream_params, type)
-
-            # Parse XML response if successful
-            if response.get("status") == "ok" and type == "XML":
-                raw_content = response.get("raw_content", "")
-                if raw_content:
-                    parsed_data = parse_xml_response(raw_content)
-                    if parsed_data:
-                        response["ranked_data"] = parsed_data
-
-            return slim_response(response)
-
-        except ValueError as e:
-            return create_error_response(ErrorCode.VALIDATION_ERROR, str(e))
-        except Exception as e:
-            return create_error_response(ErrorCode.INTERNAL_ERROR, str(e))
+        resolved_oc = resolve_oc(override_oc=oc)
+        snake_params = {
+            "oc": resolved_oc, "target": "aiSearch", "type": type,
+            "query": query, "search": search, "display": display, "page": page,
+        }
+        return run_search(
+            get_client=_get_client, target="aiSearch", query=query,
+            snake_params=snake_params, response_type=type, display=display,
+        )
 
     # ==================== TOOL 26: aiRltLs_search ====================
-    @server.tool(
-        annotations=ToolAnnotations(
-            readOnlyHint=True,
-            destructiveHint=False,
-            idempotentHint=True
-        )
-    )
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
     def aiRltLs_search(
         query: str,
         search: int = 0,
@@ -1796,36 +1732,15 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             >>> aiRltLs_search(query="민법")
             # Returns: 상법 제54조 (상사법정이율), 의료법 제50조 (「민법」의 준용), etc.
         """
-        try:
-            resolved_oc = resolve_oc(override_oc=oc)
-
-            snake_params = {
-                "oc": resolved_oc,
-                "target": "aiRltLs",
-                "type": type,
-                "query": query,
-                "search": search,
-            }
-
-            upstream_params = map_params_to_upstream(snake_params)
-
-            client = _get_client()
-            response = client.get("/DRF/lawSearch.do", upstream_params, type)
-
-            # Parse XML response if successful
-            if response.get("status") == "ok" and type == "XML":
-                raw_content = response.get("raw_content", "")
-                if raw_content:
-                    parsed_data = parse_xml_response(raw_content)
-                    if parsed_data:
-                        response["ranked_data"] = parsed_data
-
-            return slim_response(response)
-
-        except ValueError as e:
-            return create_error_response(ErrorCode.VALIDATION_ERROR, str(e))
-        except Exception as e:
-            return create_error_response(ErrorCode.INTERNAL_ERROR, str(e))
+        resolved_oc = resolve_oc(override_oc=oc)
+        snake_params = {
+            "oc": resolved_oc, "target": "aiRltLs", "type": type,
+            "query": query, "search": search,
+        }
+        return run_search(
+            get_client=_get_client, target="aiRltLs", query=query,
+            snake_params=snake_params, response_type=type, display=20,
+        )
 
     # ==================== PROMPTS ====================
 
