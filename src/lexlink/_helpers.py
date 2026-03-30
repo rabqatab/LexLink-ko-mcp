@@ -9,6 +9,7 @@ import functools
 import inspect
 import logging
 import os
+import re
 from typing import Optional, Union
 
 from mcp.types import ToolAnnotations
@@ -204,8 +205,55 @@ def run_service(
     target: str,
     snake_params: dict,
     response_type: str = "XML",
+    sections: Optional[str] = None,
+    full_text_fields: Optional[list[str]] = None,
 ) -> dict:
-    """Common service tool logic. Handles: param mapping, API call, return response."""
+    """Common service tool logic. Handles: param mapping, API call, section filtering.
+
+    Args:
+        sections: "summary" to exclude full-text fields (reduces response size for
+                  PlayMCP 20KB limit), "full" or None for complete response.
+        full_text_fields: List of field names to strip when sections="summary".
+                         These are the verbose prose fields (판례내용, 전문, 이유, etc.)
+    """
     upstream_params = map_params_to_upstream(snake_params)
     client = get_client()
-    return client.get("/DRF/lawService.do", upstream_params, response_type)
+    response = client.get("/DRF/lawService.do", upstream_params, response_type)
+
+    # Section filtering: strip full-text fields when sections="summary"
+    if sections == "summary" and full_text_fields and response.get("status") == "ok":
+        raw = response.get("raw_content", "")
+        if raw and response_type == "XML":
+            # Strip XML tags for full-text fields
+            for field in full_text_fields:
+                raw = re.sub(
+                    rf'<{re.escape(field)}>.*?</{re.escape(field)}>',
+                    f'<{field}>[sections=summary: excluded for size — use sections="full" to retrieve]</{field}>',
+                    raw, flags=re.DOTALL,
+                )
+            response["raw_content"] = raw
+            response["sections"] = "summary"
+            response["excluded_fields"] = full_text_fields
+        elif raw and response_type == "JSON":
+            try:
+                import json as _json
+                data = _json.loads(raw)
+                # Walk the JSON tree and null out full-text fields
+                def _strip(obj):
+                    if isinstance(obj, dict):
+                        for field in full_text_fields:
+                            if field in obj:
+                                obj[field] = f'[sections=summary: excluded for size — use sections="full" to retrieve]'
+                        for v in obj.values():
+                            _strip(v)
+                    elif isinstance(obj, list):
+                        for item in obj:
+                            _strip(item)
+                _strip(data)
+                response["raw_content"] = _json.dumps(data, ensure_ascii=False)
+                response["sections"] = "summary"
+                response["excluded_fields"] = full_text_fields
+            except:
+                pass  # If JSON parsing fails, return unmodified
+
+    return response

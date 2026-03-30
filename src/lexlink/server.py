@@ -1203,6 +1203,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
     def prec_service(
         id: Union[str, int],
         lm: Optional[str] = None,
+        sections: Optional[str] = None,
         oc: Optional[str] = None,
         type: str = "XML",
         ctx: Context = None,
@@ -1213,6 +1214,11 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         Args:
             id: Precedent sequence number (판례일련번호)
             lm: Precedent name (optional)
+            sections: Response detail level:
+                - "summary": Returns 판시사항, 판결요지, 참조조문, 참조판례 only (~5KB).
+                  Excludes 판례내용 (full judgment text, often 15-25KB).
+                  **Recommended for PlayMCP** to stay under 20KB limit.
+                - "full" or None: Returns everything including 판례내용 (default).
             oc: Optional OC override
             type: Response format - "HTML" or "XML" (default "XML")
 
@@ -1221,6 +1227,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
 
         Examples:
             >>> prec_service(id="228541")
+            >>> prec_service(id="228541", sections="summary")  # PlayMCP-safe
         """
         resolved_oc = resolve_oc(override_oc=oc)
         snake_params = {
@@ -1229,7 +1236,9 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         }
         if lm: snake_params["lm"] = lm
         return run_service(get_client=_get_client, target="prec",
-                          snake_params=snake_params, response_type=type)
+                          snake_params=snake_params, response_type=type,
+                          sections=sections,
+                          full_text_fields=["판례내용"])
 
     # ==================== TOOL 18: detc_search ====================
     @server.tool(annotations=TOOL_ANNOTATIONS)
@@ -1305,6 +1314,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
     def detc_service(
         id: Union[str, int],
         lm: Optional[str] = None,
+        sections: Optional[str] = None,
         oc: Optional[str] = None,
         type: str = "XML",
         ctx: Context = None,
@@ -1315,6 +1325,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         Args:
             id: Constitutional Court decision sequence number (헌재결정례일련번호)
             lm: Decision name (optional)
+            sections: "summary" to exclude 전문 (full text), or "full"/None for everything.
+                **Recommended: "summary" for PlayMCP** to stay under 20KB.
             oc: Optional OC override
             type: Response format - "HTML" or "XML" (default "XML")
 
@@ -1323,6 +1335,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
 
         Examples:
             >>> detc_service(id="58386")
+            >>> detc_service(id="58386", sections="summary")
         """
         resolved_oc = resolve_oc(override_oc=oc)
         snake_params = {
@@ -1331,7 +1344,9 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         }
         if lm: snake_params["lm"] = lm
         return run_service(get_client=_get_client, target="detc",
-                          snake_params=snake_params, response_type=type)
+                          snake_params=snake_params, response_type=type,
+                          sections=sections,
+                          full_text_fields=["전문"])
 
     # ==================== TOOL 20: expc_search ====================
     @server.tool(annotations=TOOL_ANNOTATIONS)
@@ -1417,6 +1432,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
     def expc_service(
         id: Union[str, int],
         lm: Optional[str] = None,
+        sections: Optional[str] = None,
         oc: Optional[str] = None,
         type: str = "XML",
         ctx: Context = None,
@@ -1430,6 +1446,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         Args:
             id: Legal interpretation sequence number (required)
             lm: Legal interpretation name (optional)
+            sections: "summary" to exclude 이유 (detailed reasoning), or "full"/None for everything.
+                Returns 안건명, 질의요지, 회답 in summary mode (~2KB vs ~5KB full).
             oc: Optional OC override (defaults to env var)
             type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
             ctx: MCP context (injected automatically)
@@ -1451,7 +1469,9 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         }
         if lm: snake_params["lm"] = lm
         return run_service(get_client=_get_client, target="expc",
-                          snake_params=snake_params, response_type=type)
+                          snake_params=snake_params, response_type=type,
+                          sections=sections,
+                          full_text_fields=["이유"])
 
     # ==================== TOOL 18: decc_search ====================
     @server.tool(annotations=TOOL_ANNOTATIONS)
@@ -1538,6 +1558,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
     def decc_service(
         id: Union[str, int],
         lm: Optional[str] = None,
+        sections: Optional[str] = None,
         oc: Optional[str] = None,
         type: str = "XML",
         ctx: Context = None,
@@ -1551,6 +1572,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         Args:
             id: Decision sequence number (required)
             lm: Decision name (optional)
+            sections: "summary" to exclude 이유 (detailed reasoning), or "full"/None for everything.
+                Returns 사건명, 청구취지, 재결요지, 주문 in summary mode.
             oc: Optional OC override (defaults to env var)
             type: Response format - "HTML" or "XML" (default "XML", JSON not supported by API)
             ctx: MCP context (injected automatically)
@@ -1572,7 +1595,9 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         }
         if lm: snake_params["lm"] = lm
         return run_service(get_client=_get_client, target="decc",
-                          snake_params=snake_params, response_type=type)
+                          snake_params=snake_params, response_type=type,
+                          sections=sections,
+                          full_text_fields=["이유"])
 
     # ==================== PHASE 4: ARTICLE CITATION ====================
 
