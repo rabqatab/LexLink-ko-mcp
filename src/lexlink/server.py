@@ -1917,6 +1917,115 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             get_client=_get_client, target="ordinLsCon", query=query,
             snake_params=snake_params, response_type=type, display=display,
         )
+
+    # ==================== TOOL 30: trty_search ====================
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
+    def trty_search(
+        query: str = "*",
+        display: int = 20,
+        page: int = 1,
+        oc: Optional[str] = None,
+        type: str = "XML",
+        search: Optional[int] = None,
+        sort: Optional[str] = None,
+        gana: Optional[str] = None,
+        eft_yd: Optional[str] = None,
+        conc_yd: Optional[str] = None,
+        cls: Optional[int] = None,
+        nat_cd: Optional[int] = None,
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Search international treaties (조약 목록 조회).
+
+        This tool searches Korean international treaties concluded and
+        in effect with foreign countries and international organizations.
+
+        Args:
+            query: Search keyword (default "*")
+            display: Number of results per page (max 100, default 20)
+            page: Page number (1-based, default 1)
+            oc: Optional OC override (defaults to env var)
+            type: Response format - "HTML" or "XML" (default "XML")
+            search: Search type (1=조약명, 2=본문검색)
+            sort: Sort order - "lasc"|"ldes"|"dasc"|"ddes"|"nasc"|"ndes"
+            gana: Dictionary search (ga, na, da, ...)
+            eft_yd: Effective date range (YYYYMMDD~YYYYMMDD)
+            conc_yd: Conclusion date range (YYYYMMDD~YYYYMMDD)
+            cls: Treaty type - 1=양자 (bilateral), 2=다자 (multilateral)
+            nat_cd: Country code filter
+            ctx: MCP context (injected automatically)
+
+        Returns:
+            Search results with treaty list or error
+
+        Examples:
+            Search bilateral treaties with the US:
+            >>> trty_search(query="미합중국", cls=1)
+
+            Search multilateral treaties:
+            >>> trty_search(cls=2, display=20)
+        """
+        resolved_oc = resolve_oc(override_oc=oc)
+        if eft_yd:
+            validate_date_range(eft_yd, "eft_yd")
+        if conc_yd:
+            validate_date_range(conc_yd, "conc_yd")
+        snake_params = {
+            "oc": resolved_oc, "target": "trty", "type": type,
+            "query": query, "display": display, "page": page,
+        }
+        if search is not None: snake_params["search"] = search
+        if sort: snake_params["sort"] = sort
+        if gana: snake_params["gana"] = gana
+        if eft_yd: snake_params["eft_yd"] = eft_yd
+        if conc_yd: snake_params["conc_yd"] = conc_yd
+        if cls is not None: snake_params["cls"] = cls
+        if nat_cd is not None: snake_params["nat_cd"] = nat_cd
+        return run_search(
+            get_client=_get_client, target="trty", query=query,
+            snake_params=snake_params, response_type=type, display=display,
+            ranking_field="조약명", list_type="items", item_category="trty",
+            over_fetch_key="display",
+        )
+
+    # ==================== TOOL 31: trty_service ====================
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
+    def trty_service(
+        id: Union[str, int],
+        oc: Optional[str] = None,
+        type: str = "XML",
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Retrieve treaty full text (조약 본문 조회).
+
+        This tool retrieves the complete text of a Korean international treaty.
+
+        Args:
+            id: Treaty sequence number (조약일련번호, required)
+            oc: Optional OC override (defaults to env var)
+            type: Response format - "HTML" or "XML" (default "XML")
+            ctx: MCP context (injected automatically)
+
+        Returns:
+            Full treaty text with details or error
+
+        Examples:
+            Retrieve a treaty by ID:
+            >>> trty_service(id="123")
+        """
+        if not id:
+            raise ValueError("'id' parameter is required")
+        resolved_oc = resolve_oc(override_oc=oc)
+        snake_params = {
+            "oc": resolved_oc, "target": "trty", "type": type,
+            "id": str(id),
+        }
+        return run_service(get_client=_get_client, target="trty",
+                          snake_params=snake_params, response_type=type)
     # ==================== PROMPTS ====================
 
     @server.prompt(
