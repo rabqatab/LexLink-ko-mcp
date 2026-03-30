@@ -248,9 +248,11 @@ class LawAPIClient:
         format_type: str
     ) -> dict:
         """
-        Return response content as-is for client-side parsing.
+        Return response content, detecting upstream errors in the body.
 
-        Return response content as-is for client-side parsing.
+        law.go.kr returns HTTP 200 even for auth failures and empty results,
+        embedding the error inside XML/JSON body. This method detects known
+        error patterns and returns proper error status.
 
         Args:
             response: HTTP response from law.go.kr
@@ -258,11 +260,38 @@ class LawAPIClient:
             format_type: Response format ("HTML", "XML", or "JSON")
 
         Returns:
-            Response with raw content
+            Response with raw content, or error if upstream body contains error
         """
+        body = response.text
+
+        # Detect auth failure (HTTP 200 but body says auth failed)
+        if "사용자 정보 검증에 실패하였습니다" in body:
+            logger.warning(f"Upstream auth failure detected in response body")
+            return create_error_response(
+                error_code=ErrorCode.UPSTREAM_ERROR,
+                message="법제처 API 인증 실패: 사용자 정보 검증에 실패하였습니다",
+                request_id=request_id,
+                hints=[
+                    "서버 IP가 open.law.go.kr에 등록되어 있는지 확인하세요",
+                    "OC 값이 올바른지 확인하세요 (이메일 ID 부분만 사용)",
+                    "Register your server IP at open.law.go.kr",
+                ]
+            )
+
+        # Detect "no matching law" (HTTP 200 but body says no match)
+        if "일치하는 법령이 없습니다" in body:
+            return {
+                "status": "ok",
+                "request_id": request_id,
+                "upstream_type": format_type,
+                "raw_content": body,
+                "warning": "no_match",
+                "message": "일치하는 법령이 없습니다. MST(법령일련번호)가 최신인지 확인하세요. 법령 개정 시 MST가 변경됩니다.",
+            }
+
         return {
             "status": "ok",
             "request_id": request_id,
             "upstream_type": format_type,
-            "raw_content": response.text,
+            "raw_content": body,
         }
