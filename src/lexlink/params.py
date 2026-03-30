@@ -112,6 +112,15 @@ def map_params_to_upstream(snake_params: dict) -> dict:
         "dpa_yd": "dpaYd",    # 처분일자 기간 (appeal disposition date range)
         "rsl_yd": "rslYd",    # 의결일자 기간 (appeal resolution date range)
 
+        # Phase 7: Treaties (camelCase)
+        "eft_yd": "eftYd",    # 발효일자 범위 (treaty effective date range)
+        "conc_yd": "concYd",  # 체결일자 범위 (treaty conclusion date range)
+        "nat_cd": "natCd",    # 국가코드 (country code)
+
+        # Phase 7: Local Ordinances
+        "sborg": "sborg",     # 지자체 시/군/구 (pass-through)
+        "ordin_fd": "ordinFd",  # 분류코드 (ordinance classification)
+
         # Service params (ID/MST uppercase per API convention)
         "id": "ID",
         "mst": "MST",
