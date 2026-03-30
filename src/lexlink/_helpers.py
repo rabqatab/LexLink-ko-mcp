@@ -268,3 +268,113 @@ def run_service(
                 pass  # If JSON parsing fails, return unmodified
 
     return response
+
+
+# ============================================================
+# Public Legal Assistance Helpers
+# ============================================================
+
+# Outcome keywords for Korean court decisions
+OUTCOME_KEYWORDS = {
+    "인용": "accepted",
+    "기각": "rejected",
+    "파기환송": "overturned_remanded",
+    "파기자판": "overturned_self_decided",
+    "파기": "overturned",
+    "각하": "dismissed",
+    "취소": "cancelled",
+    "일부인용": "partially_accepted",
+    "일부기각": "partially_rejected",
+}
+
+# Legal term suffix patterns (Korean legal jargon indicators)
+LEGAL_TERM_SUFFIXES = re.compile(
+    r'[\uAC00-\uD7A3]{2,}(?:자|인|권|의무|행위|사항|절차|요건|책임|위반|처분|규정|조항|법률|계약|소송|재판|판결|채권|채무|손해|배상|이행|해제|해지|취소|무효|유효)'
+)
+
+
+def extract_outcome(text: str) -> str:
+    """Extract court decision outcome from 판결요지 text using keyword matching."""
+    if not text:
+        return "불명"
+    for keyword in OUTCOME_KEYWORDS:
+        if keyword in text:
+            return keyword
+    return "불명"
+
+
+def extract_key_factors(text: str) -> list[str]:
+    """Extract key judgment factors from 판시사항 text."""
+    if not text:
+        return []
+    factors = []
+    sentences = re.split(r'[.。\n]', text)
+    for sent in sentences:
+        sent = sent.strip()
+        if not sent or len(sent) < 10:
+            continue
+        if re.search(r'여부|인지\s|을\s고려|를\s고려|에\s비추어|이\s있는지|수\s있는지|해당하는지|성립하는지', sent):
+            factor = sent.strip()[:100]
+            if factor and factor not in factors:
+                factors.append(factor)
+    return factors[:10]
+
+
+def extract_legal_terms(text: str) -> list[str]:
+    """Extract candidate legal terms from Korean legal text for simplification."""
+    if not text:
+        return []
+    matches = LEGAL_TERM_SUFFIXES.findall(text)
+    seen = set()
+    terms = []
+    for m in matches:
+        if m not in seen and len(m) >= 2:
+            seen.add(m)
+            terms.append(m)
+    return terms[:20]
+
+
+def compute_text_diff(old_text: str, new_text: str) -> tuple[list, str, str]:
+    """Compute line-level diff between two text versions.
+    Returns: (changes_list, unified_diff_string, summary_string)
+    """
+    import difflib
+
+    old_lines = old_text.strip().splitlines()
+    new_lines = new_text.strip().splitlines()
+
+    changes = []
+    added = deleted = modified = 0
+
+    matcher = difflib.SequenceMatcher(None, old_lines, new_lines)
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            continue
+        elif tag == "replace":
+            for k in range(max(i2 - i1, j2 - j1)):
+                ol = old_lines[i1 + k] if i1 + k < i2 else None
+                nl = new_lines[j1 + k] if j1 + k < j2 else None
+                if ol and nl:
+                    changes.append({"type": "modified", "old_line": ol, "new_line": nl})
+                    modified += 1
+                elif nl:
+                    changes.append({"type": "added", "old_line": None, "new_line": nl})
+                    added += 1
+                else:
+                    changes.append({"type": "deleted", "old_line": ol, "new_line": None})
+                    deleted += 1
+        elif tag == "insert":
+            for k in range(j1, j2):
+                changes.append({"type": "added", "old_line": None, "new_line": new_lines[k]})
+                added += 1
+        elif tag == "delete":
+            for k in range(i1, i2):
+                changes.append({"type": "deleted", "old_line": old_lines[k], "new_line": None})
+                deleted += 1
+
+    unified = "\n".join(difflib.unified_diff(
+        old_lines, new_lines, lineterm="", fromfile="old", tofile="new",
+    ))
+
+    summary = f"{modified} lines modified, {added} lines added, {deleted} lines deleted"
+    return changes, unified, summary
