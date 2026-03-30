@@ -2297,6 +2297,376 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             snake_params=snake_params, response_type=type, display=display,
         )
 
+    # ==================== TASK 12: 위원회 결정문 ====================
+
+    # Committee target code mapping
+    COMMITTEE_CODES = {
+        "개인정보보호위원회": "ppc",
+        "고용보험심사위원회": "eiac",
+        "공정거래위원회": "ftc",
+        "국민권익위원회": "acr",
+        "금융위원회": "fsc",
+        "노동위원회": "nlrc",
+        "방송미디어통신위원회": "kcc",
+        "산업재해보상보험재심사위원회": "iaciac",
+        "중앙토지수용위원회": "oclt",
+        "중앙환경분쟁조정위원회": "ecc",
+        "증권선물위원회": "sfc",
+        "국가인권위원회": "nhrck",
+    }
+
+    # ==================== TOOL 39: committee_search ====================
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
+    def committee_search(
+        committee: str,
+        query: str = "*",
+        display: int = 20,
+        page: int = 1,
+        oc: Optional[str] = None,
+        type: str = "XML",
+        search: Optional[int] = None,
+        sort: Optional[str] = None,
+        gana: Optional[str] = None,
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Search committee decisions (위원회 결정문 목록 조회).
+
+        Search decisions from Korean government committees.
+
+        Args:
+            committee: Committee name in Korean. Valid values:
+                개인정보보호위원회, 고용보험심사위원회, 공정거래위원회,
+                국민권익위원회, 금융위원회, 노동위원회, 방송미디어통신위원회,
+                산업재해보상보험재심사위원회, 중앙토지수용위원회,
+                중앙환경분쟁조정위원회, 증권선물위원회, 국가인권위원회
+            query: Search keyword (default "*")
+            display: Number of results per page (max 100, default 20)
+            page: Page number (1-based, default 1)
+            oc: Optional OC override (defaults to env var)
+            type: Response format - "HTML" or "XML" (default "XML")
+            search: 1=안건명 (case name), 2=본문검색 (full text)
+            sort: Sort order
+            gana: Dictionary search
+            ctx: MCP context (injected automatically)
+
+        Returns:
+            Committee decision list or error
+
+        Examples:
+            Search 공정거래위원회 decisions:
+            >>> committee_search(committee="공정거래위원회", query="담합")
+        """
+        target = COMMITTEE_CODES.get(committee)
+        if not target:
+            valid = ", ".join(COMMITTEE_CODES.keys())
+            raise ValueError(f"Invalid committee: '{committee}'. Valid values: {valid}")
+
+        resolved_oc = resolve_oc(override_oc=oc)
+        snake_params = {
+            "oc": resolved_oc, "target": target, "type": type,
+            "query": query, "display": display, "page": page,
+        }
+        if search: snake_params["search"] = search
+        if sort: snake_params["sort"] = sort
+        if gana: snake_params["gana"] = gana
+
+        return run_search(
+            get_client=_get_client, target=target, query=query,
+            snake_params=snake_params, response_type=type, display=display,
+            ranking_field="안건명", list_type="items", item_category=target,
+            over_fetch_key="display",
+        )
+
+    # ==================== TOOL 40: committee_service ====================
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
+    def committee_service(
+        committee: str,
+        id: Union[str, int],
+        oc: Optional[str] = None,
+        type: str = "XML",
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Retrieve committee decision full text (위원회 결정문 본문 조회).
+
+        Args:
+            committee: Committee name (same values as committee_search)
+            id: Decision serial number (결정문일련번호)
+            oc: Optional OC override
+            type: Response format - "HTML" or "XML" (default "XML")
+            ctx: MCP context (injected automatically)
+
+        Returns:
+            Full decision text or error
+        """
+        target = COMMITTEE_CODES.get(committee)
+        if not target:
+            valid = ", ".join(COMMITTEE_CODES.keys())
+            raise ValueError(f"Invalid committee: '{committee}'. Valid values: {valid}")
+
+        resolved_oc = resolve_oc(override_oc=oc)
+        snake_params = {
+            "oc": resolved_oc, "target": target,
+            "id": str(id), "type": type,
+        }
+        return run_service(get_client=_get_client, target=target,
+                          snake_params=snake_params, response_type=type)
+
+    # ==================== TASK 13: 중앙부처 1차 해석 ====================
+
+    # Ministry target code mapping (for cgmExpc{Code} pattern)
+    MINISTRY_CODES = {
+        "고용노동부": "Moel", "국토교통부": "Molit", "기획재정부": "Moef",
+        "해양수산부": "Mof", "행정안전부": "Mois", "기후에너지환경부": "Me",
+        "관세청": "Kcs", "국세청": "Nts", "교육부": "Moe",
+        "과학기술정보통신부": "Msit", "국가보훈부": "Mpva", "국방부": "Mnd",
+        "농림축산식품부": "Mafra", "문화체육관광부": "Mcst", "법무부": "Moj",
+        "보건복지부": "Mohw", "산업통상부": "Motie", "성평등가족부": "Mogef",
+        "외교부": "Mofa", "중소벤처기업부": "Mss", "통일부": "Mou",
+        "법제처": "Moleg", "식품의약품안전처": "Mfds", "인사혁신처": "Mpm",
+        "기상청": "Kma", "국가유산청": "Khs", "농촌진흥청": "Rda",
+        "경찰청": "Npa", "방위사업청": "Dapa", "병무청": "Mma",
+        "산림청": "Kfs", "소방청": "Nfa", "재외동포청": "Oka",
+        "조달청": "Pps", "질병관리청": "Kdca", "국가데이터처": "Kostat",
+        "지식재산처": "Kipo", "해양경찰청": "Kcg",
+        "행정중심복합도시건설청": "Naacc",
+    }
+
+    # ==================== TOOL 41: cgm_expc_search ====================
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
+    def cgm_expc_search(
+        ministry: str,
+        query: str = "*",
+        display: int = 20,
+        page: int = 1,
+        oc: Optional[str] = None,
+        type: str = "XML",
+        search: Optional[int] = None,
+        sort: Optional[str] = None,
+        gana: Optional[str] = None,
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Search ministry law interpretations (중앙부처 1차 해석 목록 조회).
+
+        Search law interpretation opinions from Korean central government ministries.
+
+        Args:
+            ministry: Ministry name in Korean. Valid values:
+                고용노동부, 국토교통부, 기획재정부, 해양수산부, 행정안전부,
+                기후에너지환경부, 관세청, 국세청, 교육부, 과학기술정보통신부,
+                국가보훈부, 국방부, 농림축산식품부, 문화체육관광부, 법무부,
+                보건복지부, 산업통상부, 성평등가족부, 외교부, 중소벤처기업부,
+                통일부, 법제처, 식품의약품안전처, 인사혁신처, 기상청,
+                국가유산청, 농촌진흥청, 경찰청, 방위사업청, 병무청, 산림청,
+                소방청, 재외동포청, 조달청, 질병관리청, 국가데이터처,
+                지식재산처, 해양경찰청, 행정중심복합도시건설청
+            query: Search keyword (default "*")
+            display: Number of results per page (max 100, default 20)
+            page: Page number (1-based, default 1)
+            oc: Optional OC override (defaults to env var)
+            type: Response format - "HTML" or "XML" (default "XML")
+            search: 1=사건명 (case name), 2=본문검색 (full text)
+            sort: Sort order
+            gana: Dictionary search
+            ctx: MCP context (injected automatically)
+
+        Returns:
+            Ministry interpretation list or error
+
+        Examples:
+            Search 고용노동부 interpretations:
+            >>> cgm_expc_search(ministry="고용노동부", query="퇴직금")
+        """
+        code = MINISTRY_CODES.get(ministry)
+        if not code:
+            valid = ", ".join(MINISTRY_CODES.keys())
+            raise ValueError(f"Invalid ministry: '{ministry}'. Valid values: {valid}")
+
+        target = f"cgmExpc{code}"
+        resolved_oc = resolve_oc(override_oc=oc)
+        snake_params = {
+            "oc": resolved_oc, "target": target, "type": type,
+            "query": query, "display": display, "page": page,
+        }
+        if search: snake_params["search"] = search
+        if sort: snake_params["sort"] = sort
+        if gana: snake_params["gana"] = gana
+
+        return run_search(
+            get_client=_get_client, target=target, query=query,
+            snake_params=snake_params, response_type=type, display=display,
+            ranking_field="사건명", list_type="items", item_category=target,
+            over_fetch_key="display",
+        )
+
+    # ==================== TOOL 42: cgm_expc_service ====================
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
+    def cgm_expc_service(
+        ministry: str,
+        id: Union[str, int],
+        oc: Optional[str] = None,
+        type: str = "XML",
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Retrieve ministry interpretation full text (중앙부처 1차 해석 본문 조회).
+
+        Args:
+            ministry: Ministry name (same values as cgm_expc_search)
+            id: Interpretation serial number (해석례일련번호)
+            oc: Optional OC override
+            type: Response format - "HTML" or "XML" (default "XML")
+            ctx: MCP context (injected automatically)
+
+        Returns:
+            Full interpretation text or error
+        """
+        code = MINISTRY_CODES.get(ministry)
+        if not code:
+            valid = ", ".join(MINISTRY_CODES.keys())
+            raise ValueError(f"Invalid ministry: '{ministry}'. Valid values: {valid}")
+
+        target = f"cgmExpc{code}"
+        resolved_oc = resolve_oc(override_oc=oc)
+        snake_params = {
+            "oc": resolved_oc, "target": target,
+            "id": str(id), "type": type,
+        }
+        return run_service(get_client=_get_client, target=target,
+                          snake_params=snake_params, response_type=type)
+
+    # ==================== TASK 14: 특별행정심판 ====================
+
+    # Special tribunal target code mapping (for {Code}SpecialDecc pattern)
+    TRIBUNAL_CODES = {
+        "조세심판원": "tt",
+        "해양안전심판원": "kmst",
+        "국민권익위원회": "acr",
+        "인사혁신처 소청심사위원회": "adap",
+    }
+
+    # ==================== TOOL 43: special_decc_search ====================
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
+    def special_decc_search(
+        tribunal: str,
+        query: str = "*",
+        display: int = 20,
+        page: int = 1,
+        oc: Optional[str] = None,
+        type: str = "XML",
+        search: Optional[int] = None,
+        sort: Optional[str] = None,
+        gana: Optional[str] = None,
+        cls: Optional[str] = None,
+        date: Optional[int] = None,
+        dpa_yd: Optional[str] = None,
+        rsl_yd: Optional[str] = None,
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Search special administrative appeal decisions (특별행정심판 목록 조회).
+
+        Search decisions from Korean special administrative appeal tribunals.
+
+        Args:
+            tribunal: Tribunal name in Korean. Valid values:
+                조세심판원, 해양안전심판원, 국민권익위원회,
+                인사혁신처 소청심사위원회
+            query: Search keyword (default "*")
+            display: Number of results per page (max 100, default 20)
+            page: Page number (1-based, default 1)
+            oc: Optional OC override (defaults to env var)
+            type: Response format - "HTML" or "XML" (default "XML")
+            search: 1=사건명 (case name), 2=본문검색 (full text)
+            sort: Sort order
+            gana: Dictionary search
+            cls: 재결례유형 (decision type classification)
+            date: Reference date (YYYYMMDD)
+            dpa_yd: Decision date range (YYYYMMDD~YYYYMMDD)
+            rsl_yd: Resolution date range (YYYYMMDD~YYYYMMDD)
+            ctx: MCP context (injected automatically)
+
+        Returns:
+            Special appeal decision list or error
+
+        Examples:
+            Search 조세심판원 decisions:
+            >>> special_decc_search(tribunal="조세심판원", query="부가가치세")
+        """
+        code = TRIBUNAL_CODES.get(tribunal)
+        if not code:
+            valid = ", ".join(TRIBUNAL_CODES.keys())
+            raise ValueError(f"Invalid tribunal: '{tribunal}'. Valid values: {valid}")
+
+        target = f"{code}SpecialDecc"
+        resolved_oc = resolve_oc(override_oc=oc)
+        snake_params = {
+            "oc": resolved_oc, "target": target, "type": type,
+            "query": query, "display": display, "page": page,
+        }
+        if search: snake_params["search"] = search
+        if sort: snake_params["sort"] = sort
+        if gana: snake_params["gana"] = gana
+        if cls: snake_params["cls"] = cls
+        if date: snake_params["date"] = date
+        if dpa_yd:
+            validate_date_range(dpa_yd, "dpa_yd")
+            snake_params["dpa_yd"] = dpa_yd
+        if rsl_yd:
+            validate_date_range(rsl_yd, "rsl_yd")
+            snake_params["rsl_yd"] = rsl_yd
+
+        return run_search(
+            get_client=_get_client, target=target, query=query,
+            snake_params=snake_params, response_type=type, display=display,
+            ranking_field="사건명", list_type="items", item_category=target,
+            over_fetch_key="display",
+        )
+
+    # ==================== TOOL 44: special_decc_service ====================
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
+    def special_decc_service(
+        tribunal: str,
+        id: Union[str, int],
+        oc: Optional[str] = None,
+        type: str = "XML",
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Retrieve special administrative appeal decision full text (특별행정심판 본문 조회).
+
+        Args:
+            tribunal: Tribunal name (same values as special_decc_search)
+            id: Decision serial number (재결례일련번호)
+            oc: Optional OC override
+            type: Response format - "HTML" or "XML" (default "XML")
+            ctx: MCP context (injected automatically)
+
+        Returns:
+            Full decision text or error
+        """
+        code = TRIBUNAL_CODES.get(tribunal)
+        if not code:
+            valid = ", ".join(TRIBUNAL_CODES.keys())
+            raise ValueError(f"Invalid tribunal: '{tribunal}'. Valid values: {valid}")
+
+        target = f"{code}SpecialDecc"
+        resolved_oc = resolve_oc(override_oc=oc)
+        snake_params = {
+            "oc": resolved_oc, "target": target,
+            "id": str(id), "type": type,
+        }
+        return run_service(get_client=_get_client, target=target,
+                          snake_params=snake_params, response_type=type)
+
     # ==================== PROMPTS ====================
 
     @server.prompt(
