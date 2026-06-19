@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/rabqatab-lexlink-ko-mcp-badge.png)](https://mseep.ai/app/rabqatab-lexlink-ko-mcp)
+
 <div align="center">
   <img src="assets/LexLink_logo.png" alt="LexLink Logo" width="200"/>
   <h1>LexLink - Korean National Law Information MCP Server</h1>
