@@ -74,11 +74,15 @@ def _make_cache_key(target: str, params: dict) -> str:
     # Extract and normalize query
     query = _normalize_query(params.get("query", params.get("QUERY", "")))
 
-    # Build key parts: target + sorted non-empty params
-    key_parts = [f"t={target}", f"q={query}"]
+    # Response format must be part of the key: a JSON body cached for one
+    # request must never be served to a later XML/HTML request (audit 2026-10-25).
+    fmt = str(params.get("type", params.get("TYPE", "JSON")) or "JSON").upper()
+
+    # Build key parts: target + format + sorted non-empty params
+    key_parts = [f"t={target}", f"f={fmt}", f"q={query}"]
     for k in sorted(params.keys()):
         if k.lower() in ("oc", "type", "query"):
-            continue  # Skip auth, format, and already-handled query
+            continue  # Skip auth, already-handled format, and already-handled query
         v = params[k]
         if v is not None and str(v).strip():
             key_parts.append(f"{k}={v}")
@@ -165,8 +169,11 @@ class ResponseCache:
         if category:
             return TTL_CONFIG[category]
 
-        # Check if target starts with known prefix (e.g., cgmExpcMoel → search)
-        if target.startswith("cgmExpc"):
+        # Ministry interpretations: upstream targets are "{code}CgmExpc" (e.g. moelCgmExpc)
+        if target.endswith("CgmExpc") or target.startswith("cgmExpc"):
+            return TTL_CONFIG["search"]
+        # Ordinance linkage family (lnkOrd / lnkLsOrd / lnkOrg) and special tribunals
+        if target.startswith("lnk") or target.endswith("SpecialDecc"):
             return TTL_CONFIG["search"]
 
         # Service endpoints (lawService.do targets)

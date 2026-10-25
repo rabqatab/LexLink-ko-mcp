@@ -29,9 +29,6 @@ venv/
 .obsidian/
 .serena/
 
-# tests
-test/
-tests/
 
 # tmp
 references/
