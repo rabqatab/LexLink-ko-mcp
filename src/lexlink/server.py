@@ -12,17 +12,23 @@ import logging
 import os
 import re
 from typing import Optional, Union
+from urllib.parse import unquote
 
 from mcp.server.fastmcp import FastMCP, Context
 
+from . import __version__
 from .client import LawAPIClient
 from .errors import ErrorCode, create_error_response
 from .params import map_params_to_upstream, resolve_oc
-from .validation import validate_date_range
+from .validation import (
+    validate_date_range, normalize_jo, JoFormatError, describe_jo,
+    response_has_article, extract_law_name,
+)
 from .parser import parse_xml_response, extract_law_list, update_law_list
 from .ranking import detect_query_language, should_apply_ranking, rank_search_results
+from .resolver import get_resolver
 from ._helpers import (
-    TOOL_ANNOTATIONS, stringify_id, handle_tool_error,
+    TOOL_ANNOTATIONS, stringify_id, handle_tool_error, ToolValidationError,
     slim_response, run_search, run_service,
     extract_outcome, extract_key_factors, extract_legal_terms, compute_text_diff,
 )
@@ -181,12 +187,49 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
 """
 
     server = FastMCP("LexLink - Korean Law API", instructions=SERVER_INSTRUCTIONS)
+    # FastMCP has no version argument; set it on the low-level server so that
+    # `initialize` reports LexLink's own version instead of the mcp library's.
+    server._mcp_server.version = __version__
 
     def _get_client() -> LawAPIClient:
         """Create HTTP client from environment variables or defaults."""
         return LawAPIClient(
             base_url=os.getenv("LEXLINK_BASE_URL", "http://www.law.go.kr"),
             timeout=int(os.getenv("LEXLINK_TIMEOUT", "60")),
+        )
+
+    def _normalize_jo_arg(jo: Optional[Union[str, int]]) -> Optional[str]:
+        """Normalize a user-supplied jo (35 / '35의5' / '제35조의5' / '003505') to the
+        6-digit upstream code. Raises ToolValidationError (→ VALIDATION_ERROR + hints)."""
+        try:
+            return normalize_jo(jo)
+        except JoFormatError as e:
+            raise ToolValidationError(str(e), hints=e.hints) from e
+
+    def _check_article_present(response: dict, jo_code: Optional[str], response_type: str) -> dict:
+        """After a lawService call with a jo filter, turn an article-less 'ok' body
+        (law.go.kr returns only 기본정보 or {} for a non-existent JO) into
+        a structured ARTICLE_NOT_FOUND error."""
+        if not jo_code or response.get("status") != "ok":
+            return response
+        raw = response.get("raw_content", "")
+        if response_has_article(raw, response_type):
+            return response
+        law_name = extract_law_name(raw, response_type)
+        return create_error_response(
+            error_code=ErrorCode.ARTICLE_NOT_FOUND,
+            message=f"{describe_jo(jo_code)}(jo={jo_code}) 조문을 찾을 수 없습니다"
+                    + (f" — 법령: {law_name}" if law_name else "")
+                    + f". Article {describe_jo(jo_code)} not found in the upstream response.",
+            hints=[
+                "jo는 6자리 코드(앞 4자리 조번호 + 뒤 2자리 가지번호)입니다. 예: 제35조 → 003500, 제35조의5 → 003505",
+                "해당 조문이 이 법령(또는 이 MST의 시행일 버전)에 존재하지 않을 수 있습니다. 삭제·신설 조문이면 다른 버전(MST)을 확인하세요",
+                "law_service/eflaw_service를 jo 없이 호출하면 전체 조문 목록을 확인할 수 있습니다 (응답이 클 수 있음)",
+                "Check the 6-digit jo format; the article may not exist in this law/version",
+            ],
+            request_id=response.get("request_id"),
+            jo=jo_code,
+            law_name=law_name,
         )
 
     # ==================== MCP Resources: Law ID Cache ====================
@@ -265,14 +308,95 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         mime_type="application/json",
     )
     def get_law_by_name(name: str) -> str:
-        """Look up a law by name or abbreviation."""
+        """Look up a law by name or abbreviation.
+
+        Resolution order:
+          1. URL-decode the template value (clients send percent-encoded Korean)
+          2. Frequently-used cache (full names + abbreviations, plus names learned
+             from eflaw_search/law_search results)
+          3. resolver.py seed/learned aliases (자통법 → 자본시장과 금융투자업에 관한 법률)
+          4. Live law_search lookup (1 upstream call) when OC is configured
+        """
         import json
+        raw_name = name
+        name = unquote(name or "").strip()
+        if not name:
+            return json.dumps(
+                {"error": "invalid_name", "message": "Law name is empty. Use lexlink://law/{한글 법령명 또는 약칭}."},
+                ensure_ascii=False,
+            )
+
+        def _found(entry: dict, resolved_from: Optional[str] = None) -> str:
+            out = dict(entry)
+            out["query"] = name
+            if resolved_from and resolved_from != name:
+                out["resolved_from"] = resolved_from
+            return json.dumps(out, ensure_ascii=False, indent=2)
+
+        # 2) direct cache hit (full name or abbreviation)
         if entry := _law_cache.get(name):
-            return json.dumps(entry, ensure_ascii=False, indent=2)
-        return json.dumps(
-            {"error": "not_found", "message": f"'{name}' not in cache. Use eflaw_search or law_search tool to find it."},
-            ensure_ascii=False,
-        )
+            return _found(entry)
+
+        # 3) alias resolution (seed + learned) → cache / learned IDs
+        resolver = get_resolver()
+        resolved = resolver.resolve(name)
+        if resolved != name and (entry := _law_cache.get(resolved)):
+            return _found(entry, resolved_from=resolved)
+        for candidate in dict.fromkeys((resolved, name)):
+            if law_id := resolver.get_law_id(candidate):
+                _cache_law(candidate, law_id, None, "")
+                return _found(_law_cache[candidate], resolved_from=resolved)
+
+        # 4) live lookup via law_search (공포일 기준 현행법령 목록), exact-name match only
+        lookup_error: Optional[str] = None
+        try:
+            resolved_oc = resolve_oc(override_oc=None)
+            snake_params = {
+                "oc": resolved_oc, "target": "law", "type": "JSON",
+                "query": resolved, "display": 20, "page": 1,
+            }
+            result = run_search(
+                get_client=_get_client, target="law", query=resolved,
+                snake_params=snake_params, response_type="JSON", display=20,
+                ranking_field="법령명한글", list_type="law",
+                over_fetch_key="numOfRows", over_fetch=False,
+            )
+            if result.get("status") == "ok":
+                data = result.get("ranked_data")
+                if data is None and result.get("raw_content"):
+                    try:
+                        parsed = json.loads(result["raw_content"])
+                        data = list(parsed.values())[0] if parsed else None
+                    except (ValueError, IndexError):
+                        data = None
+                laws = extract_law_list(data) if isinstance(data, dict) else []
+                wanted = {resolved.replace(" ", ""), name.replace(" ", "")}
+                for law in laws:
+                    full = (law.get("법령명한글") or "").strip()
+                    abbrev = (law.get("법령약칭명") or "").strip()
+                    if full.replace(" ", "") in wanted or (abbrev and abbrev.replace(" ", "") in wanted):
+                        _cache_law(full, law.get("법령ID", ""), abbrev or None, law.get("법령구분명", ""))
+                        if full in _law_cache:
+                            return _found(_law_cache[full], resolved_from=resolved)
+            else:
+                lookup_error = result.get("message") or result.get("error_code")
+        except Exception as e:  # OC missing, network error, ... → fall through to not_found
+            lookup_error = str(e)
+            logger.info(f"Resource lookup for '{name}' fell back to not_found: {e}")
+
+        payload = {
+            "error": "not_found",
+            "query": name,
+            "message": f"'{name}' not found in cache, aliases, or law_search exact-name match. "
+                       "Use eflaw_search or law_search tool with a broader query.",
+        }
+        if resolved != name:
+            payload["resolved_as"] = resolved
+        if raw_name != name:
+            payload["decoded_from"] = raw_name
+        if lookup_error:
+            payload["lookup_error"] = lookup_error
+        return json.dumps(payload, ensure_ascii=False, indent=2)
 
     # ==================== TOOL 1: eflaw_search ====================
     @server.tool(annotations=TOOL_ANNOTATIONS)
@@ -434,9 +558,11 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             id: Law ID (either id or mst is required)
             mst: Law serial number (MST/lsi_seq)
             ef_yd: Effective date (YYYYMMDD) - required when using mst
-            jo: **REQUIRED for specific articles.** Article number in XXXXXX format.
-                Format: first 4 digits = article number (zero-padded), last 2 digits = branch suffix (00=main).
-                Examples: "017400" (제174조), "017200" (제172조), "000300" (제3조), "001502" (제15조의2)
+            jo: **REQUIRED for specific articles.** Article number. Accepts 35, "35", "35의5",
+                "제35조의5", "35-5" or the 6-digit code "003505" (all normalized to XXXXXX:
+                first 4 digits = article number zero-padded, last 2 digits = branch suffix, 00=main).
+                Examples: "017400" (제174조), "000300" (제3조), "001502" (제15조의2), "15의2" (제15조의2)
+                If the article does not exist, a structured ARTICLE_NOT_FOUND error is returned.
             chr_cls_cd: Language code - "010202" (Korean, default) or "010201" (Original)
             oc: Optional OC override (defaults to env var)
             type: Response format - "JSON" (default), "XML", or "HTML"
@@ -455,14 +581,16 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         resolved_oc = resolve_oc(override_oc=oc)
         if not id and not mst:
             raise ValueError("Either 'id' or 'mst' parameter is required")
+        jo = _normalize_jo_arg(jo)
         snake_params = {"oc": resolved_oc, "target": "eflaw", "type": type}
         if id: snake_params["id"] = id
         if mst: snake_params["mst"] = mst
         if ef_yd: snake_params["ef_yd"] = ef_yd
         if jo: snake_params["jo"] = jo
         if chr_cls_cd: snake_params["chr_cls_cd"] = chr_cls_cd
-        return run_service(get_client=_get_client, target="eflaw",
-                          snake_params=snake_params, response_type=type)
+        response = run_service(get_client=_get_client, target="eflaw",
+                               snake_params=snake_params, response_type=type)
+        return _check_article_present(response, jo, type)
 
     # ==================== TOOL 4: law_service ====================
     @server.tool(annotations=TOOL_ANNOTATIONS)
@@ -494,9 +622,11 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             lm: Law modification parameter
             ld: Law date parameter (YYYYMMDD)
             ln: Law number parameter
-            jo: **REQUIRED for specific articles.** Article number in XXXXXX format.
-                Format: first 4 digits = article number (zero-padded), last 2 digits = branch suffix (00=main).
-                Examples: "017400" (제174조), "017200" (제172조), "000300" (제3조), "001502" (제15조의2)
+            jo: **REQUIRED for specific articles.** Article number. Accepts 35, "35", "35의5",
+                "제35조의5", "35-5" or the 6-digit code "003505" (all normalized to XXXXXX:
+                first 4 digits = article number zero-padded, last 2 digits = branch suffix, 00=main).
+                Examples: "017400" (제174조), "000300" (제3조), "001502" (제15조의2), "15의2" (제15조의2)
+                If the article does not exist, a structured ARTICLE_NOT_FOUND error is returned.
             lang: Language - "KO" (Korean) or "ORI" (Original)
             oc: Optional OC override (defaults to env var)
             type: Response format - "JSON" (default), "XML", or "HTML"
@@ -515,6 +645,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         resolved_oc = resolve_oc(override_oc=oc)
         if not id and not mst:
             raise ValueError("Either 'id' or 'mst' parameter is required")
+        jo = _normalize_jo_arg(jo)
         snake_params = {"oc": resolved_oc, "target": "law", "type": type}
         if id: snake_params["id"] = id
         if mst: snake_params["mst"] = mst
@@ -523,8 +654,9 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         if ln: snake_params["ln"] = ln
         if jo: snake_params["jo"] = jo
         if lang: snake_params["lang"] = lang
-        return run_service(get_client=_get_client, target="law",
-                          snake_params=snake_params, response_type=type)
+        response = run_service(get_client=_get_client, target="law",
+                               snake_params=snake_params, response_type=type)
+        return _check_article_present(response, jo, type)
 
     # ==================== TOOL 5: eflaw_josub ====================
     @server.tool(annotations=TOOL_ANNOTATIONS)
@@ -551,9 +683,11 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             id: Law ID (either id or mst is required)
             mst: Law serial number (MST)
             ef_yd: Effective date (YYYYMMDD) - required when using mst
-            jo: Article number in XXXXXX format.
-                Format: first 4 digits = article number (zero-padded), last 2 digits = branch suffix (00=main).
-                Examples: "017400" (제174조), "017200" (제172조), "000300" (제3조), "001502" (제15조의2)
+            jo: Article number. Accepts 35, "35", "35의5", "제35조의5", "35-5" or the 6-digit
+                code "003505" (all normalized to XXXXXX: first 4 digits = article number zero-padded,
+                last 2 digits = branch suffix, 00=main).
+                Examples: "017400" (제174조), "000300" (제3조), "001502" (제15조의2), "15의2" (제15조의2)
+                If the article does not exist, a structured ARTICLE_NOT_FOUND error is returned.
             hang: Paragraph number (6 digits, e.g., "000100" for 제1항)
             ho: Item number (6 digits, e.g., "000200" for 제2호)
             mok: Subitem (UTF-8 encoded, e.g., "다" for 다목)
@@ -574,6 +708,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         resolved_oc = resolve_oc(override_oc=oc)
         if not id and not mst:
             raise ValueError("Either 'id' or 'mst' parameter is required")
+        jo = _normalize_jo_arg(jo)
         snake_params = {"oc": resolved_oc, "target": "eflawjosub", "type": type}
         if id: snake_params["id"] = id
         if mst: snake_params["mst"] = mst
@@ -582,8 +717,9 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         if hang: snake_params["hang"] = hang
         if ho: snake_params["ho"] = ho
         if mok: snake_params["mok"] = mok
-        return run_service(get_client=_get_client, target="eflawjosub",
-                          snake_params=snake_params, response_type=type)
+        response = run_service(get_client=_get_client, target="eflawjosub",
+                               snake_params=snake_params, response_type=type)
+        return _check_article_present(response, jo, type)
 
     # ==================== TOOL 6: law_josub ====================
     @server.tool(annotations=TOOL_ANNOTATIONS)
@@ -608,9 +744,11 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         Args:
             id: Law ID (either id or mst is required)
             mst: Law serial number (MST)
-            jo: Article number in XXXXXX format.
-                Format: first 4 digits = article number (zero-padded), last 2 digits = branch suffix (00=main).
-                Examples: "017400" (제174조), "017200" (제172조), "000300" (제3조), "001502" (제15조의2)
+            jo: Article number. Accepts 35, "35", "35의5", "제35조의5", "35-5" or the 6-digit
+                code "003505" (all normalized to XXXXXX: first 4 digits = article number zero-padded,
+                last 2 digits = branch suffix, 00=main).
+                Examples: "017400" (제174조), "000300" (제3조), "001502" (제15조의2), "15의2" (제15조의2)
+                If the article does not exist, a structured ARTICLE_NOT_FOUND error is returned.
             hang: Paragraph number (6 digits, e.g., "000100" for 제1항)
             ho: Item number (6 digits, e.g., "000200" for 제2호)
             mok: Subitem (UTF-8 encoded, e.g., "다" for 다목)
@@ -631,6 +769,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         resolved_oc = resolve_oc(override_oc=oc)
         if not id and not mst:
             raise ValueError("Either 'id' or 'mst' parameter is required")
+        jo = _normalize_jo_arg(jo)
         snake_params = {"oc": resolved_oc, "target": "lawjosub", "type": type}
         if id: snake_params["id"] = id
         if mst: snake_params["mst"] = mst
@@ -638,8 +777,9 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         if hang: snake_params["hang"] = hang
         if ho: snake_params["ho"] = ho
         if mok: snake_params["mok"] = mok
-        return run_service(get_client=_get_client, target="lawjosub",
-                          snake_params=snake_params, response_type=type)
+        response = run_service(get_client=_get_client, target="lawjosub",
+                               snake_params=snake_params, response_type=type)
+        return _check_article_present(response, jo, type)
 
     # ==================== TOOL 7: elaw_search ====================
     @server.tool(annotations=TOOL_ANNOTATIONS)
