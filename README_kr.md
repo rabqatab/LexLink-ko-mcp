@@ -33,7 +33,7 @@ LexLink는 대한민국 국가법령정보 API ([open.law.go.kr](https://open.la
     - 연관 법령 탐색 (aiRltLs_search)
   - **MCP 리소스 - 법령 ID 캐시**
     - 자주 사용되는 ~20개 법령명과 안정적인 법령ID 매핑 캐시
-    - 한글 법령명 또는 약칭으로 조회 (`lexlink://law/{name}`)
+    - 한글 법령명 또는 약칭으로 조회 (`lexlink://law/{name}`): 이름을 URL 디코딩하고 해석기 별칭(예: 자통법 → 자본시장과 금융투자업에 관한 법률, 010513)을 참조하며, 없으면 `law_search` 정확 일치 조회를 한 번 시도
     - 동적 캐싱: 검색 결과가 자동으로 캐시에 추가
 - **스마트 기능** ([korean-law-mcp](https://github.com/chrisryugj/korean-law-mcp)에서 영감):
   - **지능형 캐싱** - 도구별 TTL 캐싱 (검색 1시간, 조문 24시간, AI 검색 30분)
@@ -57,9 +57,11 @@ LexLink는 대한민국 국가법령정보 API ([open.law.go.kr](https://open.la
 | **API 커버리지** | 191개 이상 엔드포인트 중 ~28% 커버 |
 | **LLM 통합** | ✅ 검증 완료 (Gemini) |
 | **코드 품질** | 깔끔하고 문서화되고 테스트됨 |
-| **버전** | v2.1.0 |
+| **버전** | v2.2.0 |
 
-**최근:** v2.1.0 — 54개 도구 (Phase 9 추가), 지능형 캐싱 (`cache.py`), 법령약칭 해석 (`resolver.py`), 다단계 조사를 위한 체인 도구.
+**최근:** v2.2.0 — 감사 수정: 지식베이스 연계 도구가 `lawService.do`를 호출, `ordinLsCon_search` 재설계(3가지 모드), 부처 해석 `{code}CgmExpc` target(39개 부처), `jo` 정규화(`35`, `35의5`, `제35조의5`, `003505`), 구조화된 업스트림 오류 코드, 응답 형식을 포함한 캐시 키, 오프라인 테스트 122개. CHANGELOG.md 참조.
+
+**v2.1.0** — 54개 도구 (Phase 9 추가), 지능형 캐싱 (`cache.py`), 법령약칭 해석 (`resolver.py`), 다단계 조사를 위한 체인 도구.
 
 ## 사전 요구사항
 
@@ -170,6 +172,9 @@ eflaw_josub(
 )
 # jo 형식: "XXXXXX" - 앞 4자리 = 조문번호(제로패딩), 뒤 2자리 = 가지번호(00=본조)
 # 예시: "017400" (제174조), "000300" (제3조), "001502" (제15조의2)
+# 다음 입력도 6자리로 정규화됨: 174, "35의5", "제35조의5", "35-5", "003505"
+# 잘못된 jo → VALIDATION_ERROR, 응답에 조문이 없으면 ARTICLE_NOT_FOUND
+# (law_josub, eflaw_service, law_service도 동일)
 ```
 
 #### 6. `law_josub` - 조항/항목 조회 (공포일 기준)
@@ -458,6 +463,13 @@ aiRltLs_search(
 | 중앙부처 1차 해석 | `cgm_expc_search`, `cgm_expc_service` |
 | 특별행정심판 | `special_decc_search`, `special_decc_service` |
 
+**Phase 7 도구 참고 (v2.2.0):**
+
+- **`ordinLsCon_search`**: `query`(→ 업스트림 `lnkOrd`, 자치법규명 검색), `law_id`(→ `lnkLsOrd`, 업스트림 `knd`), `org`(→ `lnkOrg`, 지자체 코드) 중 정확히 하나만 지정. 선택 인자: `sort`, `display`, `page`.
+- **`lstrm_rlt_search`, `dlytrm_rlt_search`, `lstrm_rlt_jo_search`, `jo_rlt_lstrm_search`**: `lawService.do`를 호출. `query` 또는 `mst`(용어 일련번호) 지정, 업스트림이 지원하는 경우 `trm_rlt_cd` 선택(`140301` 동의어, `140302` 반의어, `140303` 상위어, `140304` 하위어, `140305` 연관어; 한글 이름도 가능). `jo_rlt_lstrm_search`는 `jo`(`35`, `35의5`, `제35조의5`, `003505`)가 필수이며 `query`(법령명) 또는 `law_id`를 받음. `display`/`page`는 이 도구들의 업스트림 매개변수가 아님.
+- **`cgm_expc_search` / `cgm_expc_service`**: 39개 부처 지원(업스트림 target `{code}CgmExpc`, 예: `moelCgmExpc`). 기획재정부는 재정경제부(코드 `Moef`)로 개명되었으며 옛 이름과 환경부, 산업통상자원부, 여성가족부, 통계청, 특허청, 문화재청도 별칭으로 인식. 재정경제부와 국세청은 목록 API만 있어 `cgm_expc_service`가 `VALIDATION_ERROR`를 반환.
+- **`special_decc_search`**: 이제 `display`를 준수.
+
 ### Phase 9: 체인 도구 (5개 도구)
 
 [korean-law-mcp](https://github.com/chrisryugj/korean-law-mcp)에서 영감을 받아 개발된 체인 도구는 다단계 조사 워크플로를 한 번의 호출로 실행합니다. LLM이 순차적 도구 호출을 직접 조율할 필요가 없습니다.
@@ -542,7 +554,7 @@ result = eflaw_search(query="test")
 # 유용한 오류 반환:
 {
     "status": "error",
-    "error_code": "MISSING_OC",
+    "error_code": "VALIDATION_ERROR",
     "message": "OC parameter is required but not provided.",
     "hints": [
         "1. Tool argument: oc='your_value'",
@@ -550,6 +562,15 @@ result = eflaw_search(query="test")
     ]
 }
 ```
+
+**오류 코드:** `VALIDATION_ERROR`, `TIMEOUT`, `UPSTREAM_ERROR`, `INTERNAL_ERROR`, 그리고 구조화된 업스트림 감지 코드(v2.2.0):
+
+| 코드 | 의미 |
+|------|------|
+| `EMPTY_RESPONSE` | HTTP 200이지만 본문이 0바이트 (알 수 없는 target/엔드포인트) |
+| `API_NOT_SUBSCRIBED` | "미신청된 목록/본문에 대한 접근입니다" 페이지: open.law.go.kr에서 해당 API 신청 필요 (target `eflaw`는 `law_service`/`eflaw_josub` 시도) |
+| `UPSTREAM_HTML_ERROR` | JSON/XML을 요청했으나 HTML/error500 페이지가 반환됨 |
+| `ARTICLE_NOT_FOUND` | 요청한 `jo` 조문이 업스트림 응답에 없음 |
 
 ## 실전 MCP 도구 활용 예시
 
@@ -684,14 +705,18 @@ lexlink-ko-mcp/
 │   ├── http_server.py   # Kakao PlayMCP용 HTTP/SSE 서버
 │   ├── stdio_server.py  # Stdio 전송 진입점
 │   ├── params.py        # 매개변수 확인 및 매핑
-│   ├── validation.py    # 입력 검증
+│   ├── validation.py    # 입력 검증 (날짜, `jo` 정규화)
+│   ├── agency_codes.py  # 부처/재결기관 코드·별칭, cgm_expc/special_decc target
+│   ├── linkage.py       # 지식베이스/자치법규 연계 로직 (jo, trm_rlt_cd, 연계 모드)
+│   ├── article_text.py  # 조문 본문 추출 (조문내용 + 항/호/목 평탄화)
 │   ├── parser.py        # XML 파싱 유틸리티
 │   ├── ranking.py       # 관련성 순위 지정
 │   ├── citation.py      # 조문 인용 추출 (Phase 4)
-│   ├── client.py        # law.go.kr API용 HTTP 클라이언트
+│   ├── client.py        # law.go.kr API용 HTTP 클라이언트 (+ 업스트림 오류 감지)
 │   ├── errors.py        # 오류 코드 및 응답
 │   ├── raw_logger.py    # PlayMCP 트래픽 로깅
 │   └── log_processor.py # 로그 형식 변환기
+├── tests/                # 오프라인 테스트 122개
 ├── logs/playmcp/         # PlayMCP 트래픽 로그 (일별 JSONL)
 ├── pyproject.toml        # 프로젝트 설정
 └── README.md             # 영문 문서
@@ -703,11 +728,14 @@ lexlink-ko-mcp/
 # 테스트 의존성 설치
 uv sync
 
-# 모든 테스트 실행
-uv run pytest
+# 모든 테스트 실행 (오프라인 테스트 122개; 네트워크/OC 불필요)
+uv run pytest tests/
 
 # 커버리지와 함께 실행
 uv run pytest --cov=src/lexlink --cov-report=html
+
+# 테스트 파일: test_cache, test_cgm_expc, test_client_errors, test_knowledge_base,
+#             test_ordin_link, test_resources, test_special_decc, test_validation_jo
 
 # 특정 테스트 카테고리 실행
 uv run pytest -m unit

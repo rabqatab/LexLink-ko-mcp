@@ -16,8 +16,9 @@
 
 ## 1. 저장소·배포 상태
 
-- [ ] **버전 불일치**: `pyproject.toml` 2.1.0, `src/lexlink/__init__.py` `__version__ = "1.5.2"`. MCP `serverInfo.version`은 `1.26.0`(mcp 라이브러리 버전)으로 노출됨 → LexLink 버전을 명시하도록 수정.
-- [ ] **tests/ 디렉터리 없음**: `pyproject.toml`에 pytest 설정과 README에 테스트 개수가 있지만 저장소에 `tests/`가 없다(별도 repo로 분리된 것인지 확인).
+- [x] **버전 불일치**: `pyproject.toml` 2.1.0, `src/lexlink/__init__.py` `__version__ = "1.5.2"`. MCP `serverInfo.version`은 `1.26.0`(mcp 라이브러리 버전)으로 노출됨 → LexLink 버전을 명시하도록 수정.
+- [x] **tests/ 디렉터리 없음**: `pyproject.toml`에 pytest 설정과 README에 테스트 개수가 있지만 저장소에 `tests/`가 없다(별도 repo로 분리된 것인지 확인).
+- [x] **캐시 키에 type 누락** — 수정됨(v2.2.0)
 - [ ] **문서 드리프트**: `AGENTS.md`는 "XML-only responses, JSON format is broken"이라 하지만 v2.0.0부터 JSON이 기본. `API_REFERENCE.md` 3.1~3.3 자치법규가 "NOT IMPLEMENTED"로 남아 있음(실제 구현됨). 중앙부처 해석 64개 → 현재 76개.
 - [ ] **OC 계정 신청 범위**: `lawService.do?target=eflaw`(현행법령 시행일 **본문**)는 "미신청된 목록/본문에 대한 접근입니다" HTML 반환. 목록(`eflaw` search)·조항호목(`eflawjosub`)·공포일 본문(`law`)은 정상. open.law.go.kr에서 해당 API 신청 추가 필요(코드 문제 아님).
 - [ ] **IP 등록 의존**: 업스트림은 OC에 등록된 IP에서만 응답. 로컬 실행용 `.mcp.json`(상위 폴더)에 `lexlink-local` 등록돼 있음.
@@ -114,25 +115,25 @@
 
 ### P0 — 기능 불능
 
-- [ ] **cgm_expc_search / cgm_expc_service target 수정**: `f"cgmExpc{code}"` → `f"{code.lower()}CgmExpc"` (예 `moelCgmExpc`). 검증: 39개 부처 각 1회 호출해 totalCnt>0 확인. 재정경제부·국세청은 업스트림에 **본문(Info) API가 없음** → service 호출 시 안내 오류.
-- [ ] **지식베이스 연계 4종 엔드포인트 변경**: `lstrm_rlt_search`, `dlytrm_rlt_search`, `lstrm_rlt_jo_search`, `jo_rlt_lstrm_search`를 `run_service`(lawService.do)로 전환. 인자: `query` 또는 `MST`(용어 일련번호), `trmRltCd`(140301~140305). `jo_rlt_lstrm_search`는 `query`/`ID` + 필수 `JO`(6자리). 응답 루트 `*Service`.
-- [ ] **ordinLsCon_search 재설계**: target을 `lnkOrd`(조례명 검색), `lnkLsOrd`(knd=법령ID), `lnkOrg`(org=지자체코드)로 분리하거나 모드 인자 추가. 응답 루트 `OrdinSearch`, 리스트 키 `law`.
-- [ ] **law_amendment_summary 데이터 소스 교체**: `law_search` 대신 ①`eflaw_search`(연혁·시행예정 포함, 법령ID로 필터) 또는 ②`lsHstInf`(regDt별 변경이력, JSON 정상) 또는 ③`lsJoHstInf`(조문별 변경 이력, `lawService.do?target=lsJoHstInf&ID=&JO=`, JSON 정상) 사용. 동일 법령ID로 한정해 시행령·시행규칙 혼입 제거.
-- [ ] **조문 텍스트 추출 공통화**: `simplify_article`, `article_amendment_diff`, `chain_amendment_track`이 쓰는 `_find_text`를 `조문내용` + `항`(`항내용`) + `호`(`호내용`) + `목`을 순서대로 이어 붙이는 함수로 교체. 현행(`현행연혁코드 == "현행"`) MST를 우선 선택.
-- [ ] **chain_amendment_track**: 위 두 항목 수정 후 같은 법령ID의 인접 두 버전만 비교하도록 재검증.
+- [x] **cgm_expc_search / cgm_expc_service target 수정**: `f"cgmExpc{code}"` → `f"{code.lower()}CgmExpc"` (예 `moelCgmExpc`). 검증: 39개 부처 각 1회 호출해 totalCnt>0 확인. 재정경제부·국세청은 업스트림에 **본문(Info) API가 없음** → service 호출 시 안내 오류.
+- [x] **지식베이스 연계 4종 엔드포인트 변경**: `lstrm_rlt_search`, `dlytrm_rlt_search`, `lstrm_rlt_jo_search`, `jo_rlt_lstrm_search`를 `run_service`(lawService.do)로 전환. 인자: `query` 또는 `MST`(용어 일련번호), `trmRltCd`(140301~140305). `jo_rlt_lstrm_search`는 `query`/`ID` + 필수 `JO`(6자리). 응답 루트 `*Service`.
+- [x] **ordinLsCon_search 재설계**: target을 `lnkOrd`(조례명 검색), `lnkLsOrd`(knd=법령ID), `lnkOrg`(org=지자체코드)로 분리하거나 모드 인자 추가. 응답 루트 `OrdinSearch`, 리스트 키 `law`.
+- [ ] **law_amendment_summary 데이터 소스 교체**: `law_search` 대신 ①`eflaw_search`(연혁·시행예정 포함, 법령ID로 필터) 또는 ②`lsHstInf`(regDt별 변경이력, JSON 정상) 또는 ③`lsJoHstInf`(조문별 변경 이력, `lawService.do?target=lsJoHstInf&ID=&JO=`, JSON 정상) 사용. 동일 법령ID로 한정해 시행령·시행규칙 혼입 제거. (진행 중, 패키지 C)
+- [ ] **조문 텍스트 추출 공통화**: `simplify_article`, `article_amendment_diff`, `chain_amendment_track`이 쓰는 `_find_text`를 `조문내용` + `항`(`항내용`) + `호`(`호내용`) + `목`을 순서대로 이어 붙이는 함수로 교체. 현행(`현행연혁코드 == "현행"`) MST를 우선 선택. (진행 중, 패키지 C)
+- [ ] **chain_amendment_track**: 위 두 항목 수정 후 같은 법령ID의 인접 두 버전만 비교하도록 재검증. (진행 중, 패키지 C)
 
 ### P1 — 품질·안정성
 
-- [ ] **special_decc_search 랭킹 실패**: `extract_items_list`가 루트 `Decc`/키 `decc`를 찾도록 매핑 추가, 실패 시에도 `display` 만큼만 잘라 반환하는 fallback.
-- [ ] **jo 입력 정규화**: `law_josub`/`eflaw_josub`(및 `jo` 받는 모든 도구)에서 `35`, `35의5`, `제35조의5`, `(35,5)`를 `003505`로 변환(`format_article_number` 재사용). 조문이 비어 있으면 힌트 포함 오류 반환.
-- [ ] **업스트림 HTML 오류 감지**: `client.py`에 "미신청된 목록/본문에 대한 접근입니다" 패턴 추가 → 구조화 오류(코드 예: `API_NOT_SUBSCRIBED`)와 신청 안내. 현재는 `status: ok`로 통과.
-- [ ] **판례 계열 도구의 검색 범위**: `check_precedent_odds`, `chain_full_research`, `chain_dispute_prep`가 `search=2`(본문) 또는 사건명→본문 폴백을 쓰도록 변경. 도구 설명에 "기본은 사건명 검색"을 명시.
-- [ ] **resource template 디코딩**: `lexlink://law/{name}`에서 `urllib.parse.unquote` 적용, resolver alias(자통법 등) 조회 후 캐시 미스 시 안내.
-- [ ] **시행예정 MST 선택 로직**: `simplify_article`, `chain_law_system` 등 내부에서 첫 검색 결과(시행예정)를 집는 곳을 현행 우선으로 통일.
-- [ ] **하드코딩 기본값 `date_to="20261231"`**: `law_amendment_summary`, `chain_amendment_track` → 호출 시점 기준 연말/오늘로 계산.
-- [ ] **서버 버전 노출**: `__version__` 2.1.0으로 맞추고 FastMCP `serverInfo.version`에 반영.
+- [x] **special_decc_search 랭킹 실패**: `extract_items_list`가 루트 `Decc`/키 `decc`를 찾도록 매핑 추가, 실패 시에도 `display` 만큼만 잘라 반환하는 fallback.
+- [x] **jo 입력 정규화**: `law_josub`/`eflaw_josub`(및 `jo` 받는 모든 도구)에서 `35`, `35의5`, `제35조의5`, `(35,5)`를 `003505`로 변환(`format_article_number` 재사용). 조문이 비어 있으면 힌트 포함 오류 반환.
+- [x] **업스트림 HTML 오류 감지**: `client.py`에 "미신청된 목록/본문에 대한 접근입니다" 패턴 추가 → 구조화 오류(코드 예: `API_NOT_SUBSCRIBED`)와 신청 안내. 현재는 `status: ok`로 통과.
+- [ ] **판례 계열 도구의 검색 범위**: `check_precedent_odds`, `chain_full_research`, `chain_dispute_prep`가 `search=2`(본문) 또는 사건명→본문 폴백을 쓰도록 변경. 도구 설명에 "기본은 사건명 검색"을 명시. (진행 중, 패키지 C)
+- [x] **resource template 디코딩**: `lexlink://law/{name}`에서 `urllib.parse.unquote` 적용, resolver alias(자통법 등) 조회 후 캐시 미스 시 안내.
+- [ ] **시행예정 MST 선택 로직**: `simplify_article`, `chain_law_system` 등 내부에서 첫 검색 결과(시행예정)를 집는 곳을 현행 우선으로 통일. (진행 중, 패키지 C)
+- [ ] **하드코딩 기본값 `date_to="20261231"`**: `law_amendment_summary`, `chain_amendment_track` → 호출 시점 기준 연말/오늘로 계산. (진행 중, 패키지 C)
+- [x] **서버 버전 노출**: `__version__` 2.1.0으로 맞추고 FastMCP `serverInfo.version`에 반영.
 - [ ] **대용량 응답 정책(Issue #7)**: law_service 267KB, elaw_service 290KB, lsDelegated_service 168KB, ordin_service 72KB, special_decc_search 59KB. SLIM 모드에서의 처리 방침 결정(조건부 등록, 섹션 선택 인자 `sections`를 법령 본문에도 확장 등).
-- [ ] **cgm_expc 부처명 갱신**: `MINISTRY_CODES`·SERVER_INSTRUCTIONS·도구 설명의 "기획재정부" → "재정경제부"(코드 Moef 유지). 가이드 기준 39개 부처명 재대조.
+- [x] **cgm_expc 부처명 갱신**: `MINISTRY_CODES`·SERVER_INSTRUCTIONS·도구 설명의 "기획재정부" → "재정경제부"(코드 Moef 유지). 가이드 기준 39개 부처명 재대조.
 
 ### P2 — 정리
 
@@ -213,3 +214,9 @@ curl -s "https://open.law.go.kr/LSO/openApi/guideList.do" \
 ```
 
 2026-10-25 기준 195개. 신규로 확인된 것은 `baiPvcsListGuide`, `baiPvcsInfoGuide`.
+
+## 6. 진행 상황 (2026-10-25 저녁)
+
+- A/B/D 패키지 병합 완료 (v2.2.0). C 패키지(개정 이력·조문 텍스트 추출·판례 검색 범위·시행예정 MST·`date_to` 기본값)는 진행 중.
+- 미착수: 대용량 응답 정책(결정 필요), 캐시 상한 재검토, P2 전체.
+- 신규 후속 과제: non-SLIM 모드에서 모든 검색 도구가 100건 over-fetch를 `raw_content`에 노출함(display=2에도 약 60KB). `enforce_display`를 `run_search`로 일반화해야 한다.

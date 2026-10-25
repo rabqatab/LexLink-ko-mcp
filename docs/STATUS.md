@@ -1,7 +1,7 @@
 # LexLink Project Status
 
-**Last Updated:** 2026-03-30
-**Version:** v2.1.0
+**Last Updated:** 2026-10-25
+**Version:** v2.2.0
 **Status:** Production-Ready (Phase 9 Complete)
 
 ---
@@ -17,6 +17,7 @@
 | **E2E Tests** | 5/5 (100%) |
 | **LLM Integration** | 26/26 (Phase 1-5 tools) |
 | **Citation Tests** | 25 unit + 15 integration (100%) |
+| **Offline Tests** | 122 (`uv run pytest tests/`, `tests/` now tracked) |
 | **Deployed On** | Kakao PlayMCP (GCP + nginx) |
 
 ---
@@ -43,21 +44,28 @@
 | `src/lexlink/stdio_server.py` | Stdio transport entry point |
 | `src/lexlink/validation.py` | Input validation |
 | `src/lexlink/params.py` | Parameter mapping |
-| `src/lexlink/errors.py` | Error codes and responses |
+| `src/lexlink/errors.py` | Error codes and responses (v2.2.0: `EMPTY_RESPONSE`, `API_NOT_SUBSCRIBED`, `UPSTREAM_HTML_ERROR`, `ARTICLE_NOT_FOUND`) |
+| `src/lexlink/agency_codes.py` | Ministry/agency code tables (v2.2.0; 39 ministries, 재정경제부 alias) |
+| `src/lexlink/linkage.py` | Knowledge-base linkage and ordinance-linkage request builders (v2.2.0) |
+| `src/lexlink/article_text.py` | Full article text extraction (조문+항+호+목) for simplify/diff tools (v2.2.0, in progress) |
 
 ## Documentation
 
 | Document | Purpose |
 |----------|---------|
-| `API_REFERENCE.md` | All 54 tool specs + 191 API catalog |
+| `API_REFERENCE.md` | All 54 tool specs + 195 API catalog |
 | `ROADMAP.md` | Phase-by-phase implementation history |
-| `ISSUES.md` | Bug tracker (11 fixed, 1 open) |
+| `ISSUES.md` | Bug tracker (19 fixed, 4 open) |
+| `AUDIT_CHECKLIST_2026-10-25.md` | Per-tool audit that drove the v2.2.0 fixes |
 | `DEPLOYMENT_GUIDE.md` | EC2/PlayMCP deployment instructions |
-| `../CHANGELOG.md` | Version history (v1.0.0 - v2.1.0) |
+| `../CHANGELOG.md` | Version history (v1.0.0 - v2.2.0) |
 
 ## Open Issues
 
 - **#7:** Service tools exceed PlayMCP 24KB limit (planned: conditional registration)
+- **#21:** Non-SLIM search tools return the 100-row ranking over-fetch in `raw_content` (display=2 still ~60KB); generalize `enforce_display` into `run_search`
+- **#22:** `eflaw` 본문 API not subscribed on the deploy OC (account-level, not a code bug)
+- **#23:** Unknown tool arguments are silently ignored
 
 ## Next Steps
 
@@ -66,3 +74,5 @@
 - **Phase 8:** DONE — Added 5 new tools (check_precedent_odds, legal_resolver, simplify_article, law_amendment_summary, article_amendment_diff) + 3 prompts; JSON is now default format
 - **Phase 9:** DONE — Added 5 chain tools, `cache.py` (intelligent caching), `resolver.py` (law name resolution); inspired by [korean-law-mcp](https://github.com/chrisryugj/korean-law-mcp)
 - **Issue #10:** FIXED v2.0.0 — upgraded to mcp>=1.26.0
+- **v2.2.0 (2026-10-25):** Audit-driven fixes (Issues #13-#20): cgm_expc target, special_decc ranking/display, knowledge-base linkage via `lawService.do`, `ordinLsCon_search` redesign (`lnkOrd`/`lnkLsOrd`/`lnkOrg`), `jo` normalization, structured upstream errors, `lexlink://law/{name}` resolution, cache key includes `type`. Phase 8 tools `law_amendment_summary`/`article_amendment_diff`/`simplify_article`/`chain_amendment_track` are fixed in the same release (data source `eflaw_search` filtered by 법령ID instead of `law_search`; full article text instead of heading only).
+- **Upstream catalog:** guide now lists 195 API IDs (new: 감사원 사전컨설팅 의견서 `baiPvcs`, not implemented)

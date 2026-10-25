@@ -1,6 +1,6 @@
 # LexLink - Bugs and Issues Tracker
 
-**Last Updated:** 2026-03-30
+**Last Updated:** 2026-10-25
 
 ---
 
@@ -28,7 +28,97 @@ Other service tools (prec_service, detc_service, expc_service, decc_service) var
 
 ---
 
+### Issue #21: Non-SLIM Search Tools Return the 100-Row Ranking Over-Fetch
+
+**Status:** OPEN | **Severity:** HIGH | **Discovered:** 2026-10-25
+
+In non-SLIM mode every search tool puts the 100-row ranking over-fetch into `raw_content`, so `display=2` still yields ~60KB (`eflaw_search` 67KB, `prec_search` 58KB). Only `cgm_expc_search` and `special_decc_search` trim it today (via `enforce_display`).
+
+**Planned fix:** Generalize `enforce_display` into `run_search` so all search tools cut `raw_content` to `display` rows.
+
+### Issue #22: `eflaw` Full-Text API Not Subscribed on Deploy OC
+
+**Status:** OPEN (account-level, not a code bug) | **Severity:** MEDIUM | **Discovered:** 2026-10-25
+
+`lawService.do?target=eflaw` returns "미신청된 목록/본문에 대한 접근입니다" for the deployed OC, so `eflaw_service` fails. Since v2.2.0 this surfaces as `API_NOT_SUBSCRIBED` (with `law_service`/`eflaw_josub` hints) instead of `status: ok`.
+
+**Action:** Add the 현행법령(시행일) 본문 API at [open.law.go.kr](https://open.law.go.kr) for the OC.
+
+### Issue #23: Unknown Tool Arguments Are Silently Ignored
+
+**Status:** OPEN | **Severity:** LOW | **Discovered:** 2026-10-25
+
+Passing a non-existent argument (`bogus_param`, `start_date`) raises no error; the tool runs with defaults, so an LLM that misnames an argument silently gets different results. **Decision pending:** strict validation (error) vs. warning in the response.
+
+---
+
 ## Resolved Issues
+
+### Issue #20: Cache Key Ignored Response `type` - FIXED v2.2.0
+
+**Status:** FIXED | **Severity:** HIGH | **Discovered:** 2026-10-25
+
+**Root cause:** The cache key did not include the response format, so a cached JSON body could be served to a later XML request (and vice versa).
+
+**Fix:** The cache key now includes the response `type`.
+
+### Issue #19: Resource `lexlink://law/{name}` Always Not Found - FIXED v2.2.0
+
+**Status:** FIXED | **Severity:** MEDIUM | **Discovered:** 2026-10-25
+
+**Root cause:** The template parameter was not URL-decoded (messages showed `%EC%A0%80…`), and seed aliases (e.g. 자통법) never went through the resolver.
+
+**Fix:** URL-decode the name, apply resolver aliases, then fall back to a live exact-name lookup.
+
+### Issue #18: Upstream HTML/Empty/Unsubscribed Responses Passed as `status: ok` - FIXED v2.2.0
+
+**Status:** FIXED | **Severity:** MEDIUM | **Discovered:** 2026-10-25
+
+**Root cause:** `client.py` treated any HTTP 200 as success, so 0-byte bodies, the "미신청된 목록/본문" page, and HTML error pages reached the caller as OK (`eflaw_service` returned the HTML in `raw_content`).
+
+**Fix:** Added structured errors `EMPTY_RESPONSE`, `API_NOT_SUBSCRIBED`, `UPSTREAM_HTML_ERROR` (see API_REFERENCE Appendix C).
+
+### Issue #17: Article Number (`jo`) Not Normalized - FIXED v2.2.0
+
+**Status:** FIXED | **Severity:** MEDIUM | **Discovered:** 2026-10-25
+
+**Root cause:** `law_josub`/`eflaw_josub` accepted only the 6-digit code; `35` or `35의5` returned `기본정보` only or `{}` without error (`validation.format_article_number` existed but was unused).
+
+**Fix:** `eflaw_josub`, `law_josub`, `eflaw_service`, `law_service` accept `35`, `35의5`, `제35조의5`, `35-5`, `003505`. Invalid input → `VALIDATION_ERROR`; article absent from the response → `ARTICLE_NOT_FOUND`.
+
+### Issue #16: `ordinLsCon_search` Calls a Non-Existent Target - FIXED v2.2.0
+
+**Status:** FIXED | **Severity:** CRITICAL | **Discovered:** 2026-10-25
+
+**Root cause:** Target `ordinLsCon` never existed upstream, so the tool always returned an empty body. The real APIs are `lnkOrd`, `lnkLsOrd`, `lnkOrg`.
+
+**Fix:** One tool, exactly one of: `query` → `lnkOrd` (조례명), `law_id` → `lnkLsOrd` (upstream `knd`=법령ID), `org` → `lnkOrg` (지자체 코드). Response root `OrdinSearch`, list `law`.
+
+### Issue #15: Knowledge-Base Linkage Tools Return 0-Byte Body - FIXED v2.2.0
+
+**Status:** FIXED | **Severity:** CRITICAL | **Discovered:** 2026-10-25
+
+**Root cause:** `lstrm_rlt_search`, `dlytrm_rlt_search`, `lstrm_rlt_jo_search`, `jo_rlt_lstrm_search` called `lawSearch.do`, but upstream serves them from `lawService.do` (query or MST). `jo_rlt_lstrm_search` also lacked the required `JO`.
+
+**Fix:** Switched to `lawService.do` (roots `lstrmRltService`, `dlytrmRltService`, `lstrmRltJoService`, `joRltLstrmService`). Params: `query` or `mst`; optional `trm_rlt_cd` (140301 동의어 … 140305 연관어); `jo_rlt_lstrm_search` requires `jo` (normalized to 6 digits) plus `query` or `law_id`. No `display`/`page` upstream.
+
+### Issue #14: `special_decc_search` Ignores `display` (100 Rows / 59KB) - FIXED v2.2.0
+
+**Status:** FIXED | **Severity:** MEDIUM | **Discovered:** 2026-10-25
+
+**Root cause:** Ranking looked for `item_category="ttSpecialDecc"`, but the response root is `Decc` with list key `decc`, so `ranked_data` was never built and the 100-row over-fetch was returned.
+
+**Fix:** Ranking finds root `Decc`/list `decc`; `display` is enforced.
+
+### Issue #13: `cgm_expc_search`/`cgm_expc_service` Wrong Target - FIXED v2.2.0
+
+**Status:** FIXED | **Severity:** CRITICAL | **Discovered:** 2026-10-25
+
+**Root cause:** Code built `cgmExpc{Code}` (e.g. `cgmExpcMoel`); upstream is `{code}CgmExpc` (e.g. `moelCgmExpc`), so every ministry returned an empty body.
+
+**Fix:** Target `{code}CgmExpc` (`lawSearch.do` / `lawService.do?...&ID=`), response root `CgmExpc`, list key `cgmExpc`, title field `안건명`. 39 ministries (76 APIs: 37 with list+info; 재정경제부 and 국세청 list-only → `cgm_expc_service` returns `VALIDATION_ERROR`). 기획재정부 renamed 재정경제부 (code `Moef`, old name kept as alias).
+
+---
 
 ### Issue #10: MCP Protocol Version 2025-06-18 Incompatibility - FIXED v2.0.0
 
@@ -126,11 +216,11 @@ Users must register at [open.law.go.kr](https://open.law.go.kr) and enable speci
 
 | Category | Total | Fixed | Open |
 |----------|-------|-------|------|
-| Critical | 6 | 5 | 1 |
-| High | 3 | 3 | 0 |
-| Medium | 2 | 2 | 0 |
-| Low | 1 | 1 | 0 |
-| **Total** | **12** | **11** | **1** |
+| Critical | 9 | 8 | 1 |
+| High | 5 | 4 | 1 |
+| Medium | 7 | 6 | 1 |
+| Low | 2 | 1 | 1 |
+| **Total** | **23** | **19** | **4** |
 
 ---
 

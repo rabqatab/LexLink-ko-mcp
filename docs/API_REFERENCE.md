@@ -2,9 +2,9 @@
 # 국가법령정보 공동활용 Open API — 완전한 API 사양서
 
 > **목적:** LLM/에이전트가 그대로 ingest / parse / convert 할 수 있도록 통일된 포맷의 스펙 제공
-> **범위:** All 191 APIs available from law.go.kr Open API (54 implemented in LexLink)
+> **범위:** All 195 APIs available from law.go.kr Open API guide (54 implemented in LexLink; 2026-10-25 re-audit, was 191)
 > **Source:** https://open.law.go.kr/LSO/openApi/guideList.do
-> **Last Updated:** 2026-03-30
+> **Last Updated:** 2026-10-25 (v2.2.0)
 
 ---
 
@@ -24,11 +24,14 @@
 | **모바일 (Mobile)** | 22 | 0 | Not implemented (duplicate) |
 | **맞춤형 (Customized)** | 6 | 0 | Not implemented |
 | **법령정보 지식베이스 (Knowledge Base)** | 9 | 9 | ✅ lstrm_ai_search, dlytrm_search, lstrm_rlt_search, dlytrm_rlt_search, lstrm_rlt_jo_search, jo_rlt_lstrm_search, ls_rlt_search + aiSearch, aiRltLs_search |
-| **중앙부처 1차 해석 (Ministry Interpretations)** | 64 | 2 | ✅ cgm_expc_search, cgm_expc_service (39 ministries, parametric) |
+| **중앙부처 1차 해석 (Ministry Interpretations)** | 76 | 2 | ✅ cgm_expc_search, cgm_expc_service (39 ministries, parametric; 재정경제부·국세청은 목록만) |
 | **특별행정심판 (Special Appeals)** | 8 | 2 | ✅ special_decc_search, special_decc_service (4 tribunals, parametric) |
+| **사전컨설팅 의견서 (Pre-consulting Opinions)** | 2 | 0 | Not implemented (NEW, 감사원 `baiPvcs`; JSON verified) |
 | **Custom (article_citation)** | 1 | 1 | ✅ HTML parsing tool |
 | **Custom (chain tools + cache_stats)** | 5 | 5 | ✅ chain_full_research, chain_amendment_track, chain_dispute_prep, chain_law_system, cache_stats |
-| **Total** | **191+** | **54** | **~28% coverage** |
+| **Total** | **195+** | **54** | **~28% coverage** |
+
+> v2.2.0 note: 모든 업스트림 target 이름·엔드포인트는 2026-10-25 점검(`AUDIT_CHECKLIST_2026-10-25.md`)에서 직접 호출로 재검증했다. 미구현 API 중 JSON 동작을 확인한 목록은 Appendix D 참조.
 
 ---
 
@@ -126,6 +129,9 @@ http://www.law.go.kr/DRF/lawSearch.do?OC=test&target=eflaw&query=자동차관리
 | efYd | int(필수) | 법령의 시행일자 (ID 입력시에는 무시) |
 | JO | int | 조번호 6자리숫자 (000200: 2조, 001002: 10조의2) |
 | chrClsCd | char | 원문/한글 여부 (010202: 한글, 010201: 원문) |
+
+> **LexLink `jo` 정규화 (v2.2.0):** `eflaw_service`, `law_service`, `eflaw_josub`, `law_josub`은 `35`, `35의5`, `제35조의5`, `35-5`, `003505`를 모두 받아 업스트림용 6자리 코드(`003505`)로 변환한다. 형식이 잘못되면 `VALIDATION_ERROR`, 해당 조문이 응답에 없으면 `ARTICLE_NOT_FOUND`.
+> **계정 신청 주의:** `eflaw` **본문**(`lawService.do?target=eflaw`)은 OC에 해당 API가 신청돼 있지 않으면 "미신청된 목록/본문에 대한 접근입니다" HTML을 반환한다 → LexLink는 `API_NOT_SUBSCRIBED` 오류로 변환하고 `law_service`/`eflaw_josub`을 대안으로 안내한다 (Appendix C).
 
 **Sample URLs:**
 ```
@@ -596,7 +602,7 @@ http://www.law.go.kr/DRF/lawService.do?OC=test&target=admrul&ID=10000005747&type
 
 # 3. 자치법규 (Local Ordinances) APIs — 3 APIs
 
-## 3.1 자치법규 목록 조회 — NOT IMPLEMENTED
+## 3.1 자치법규 목록 조회 — `ordin_search` ✅ IMPLEMENTED
 **Endpoint**: `GET http://www.law.go.kr/DRF/lawSearch.do?target=ordin`
 
 | 요청변수 | 값 | 설명 |
@@ -647,11 +653,47 @@ http://www.law.go.kr/DRF/lawSearch.do?OC=test&target=ordin&query=청소년&type=
 
 ---
 
-## 3.2 자치법규 본문 조회 — NOT IMPLEMENTED
+## 3.2 자치법규 본문 조회 — `ordin_service` ✅ IMPLEMENTED
 **Endpoint**: `GET http://www.law.go.kr/DRF/lawService.do?target=ordin`
 
-## 3.3 자치법규 기준 법령 연계 관련 목록 조회 — NOT IMPLEMENTED
-**Endpoint**: `GET http://www.law.go.kr/DRF/lawSearch.do?target=ordinLsCon`
+| 요청변수 | 값 | 설명 |
+|----------|-----|------|
+| OC | string(필수) | 사용자 이메일의 ID |
+| target | string: ordin(필수) | 서비스 대상 |
+| type | char(필수) | 출력 형태 HTML/XML/JSON |
+| ID | char | 자치법규 ID (ID 또는 MST 중 하나 필수) |
+| MST | char | 자치법규 일련번호 |
+
+LexLink 인자: `id`, `mst`, `oc`, `type` (기본 JSON). 본문이 크다(예: mst=2171833 → 72KB).
+
+**Sample URL:**
+```
+http://www.law.go.kr/DRF/lawService.do?OC=test&target=ordin&MST=2171833&type=JSON
+```
+
+---
+
+## 3.3 자치법규 기준 법령 연계 관련 목록 조회 — `ordinLsCon_search` ✅ IMPLEMENTED (redesigned v2.2.0)
+**Endpoint**: `GET http://www.law.go.kr/DRF/lawSearch.do?target=lnkOrd | lnkLsOrd | lnkOrg`
+
+> 이전 버전은 존재하지 않는 target `ordinLsCon`을 호출해 항상 빈 응답(`raw_content: ""`)을 받았다. 업스트림 가이드의 실제 target은 아래 3종이며, LexLink는 **한 도구에서 정확히 하나의 모드 인자**만 받도록 구현했다. 0개 또는 2개 이상이면 `VALIDATION_ERROR`.
+
+| LexLink 인자 | 업스트림 target | 업스트림 파라미터 | 설명 |
+|--------------|-----------------|-------------------|------|
+| `query` | `lnkOrd` | `query` | 조례명 검색 (예: "주차장") |
+| `law_id` | `lnkLsOrd` | `knd` = 법령ID | 해당 법령을 근거로 한 자치법규 (예: 001823) |
+| `org` | `lnkOrg` | `org` | 지자체 코드별 (예: 3270000 부산 동구). 항목에 연계 법령ID/법령명한글 포함 |
+
+공통 파라미터: `OC`, `type`, `display` (default 20, max 100), `page`, `sort` (lasc/ldes, dasc/ddes, nasc/ndes, efasc/efdes — `lnkOrd` 문서 기준).
+
+**Response:** 루트 `OrdinSearch` (org 모드는 `lnkOrgSearch`), 리스트 키 `law`. 항목: 자치법규ID, 자치법규일련번호, 자치법규명, 자치법규종류, 공포일자, 공포번호, 시행일자, 제개정구분명. 본문은 `ordin_service(id=자치법규ID)`.
+
+**Sample URLs:**
+```
+http://www.law.go.kr/DRF/lawSearch.do?OC=test&target=lnkOrd&query=주차장&type=JSON&display=2
+http://www.law.go.kr/DRF/lawSearch.do?OC=test&target=lnkLsOrd&knd=001823&type=JSON&display=2
+http://www.law.go.kr/DRF/lawSearch.do?OC=test&target=lnkOrg&org=3270000&type=JSON&display=2
+```
 
 ---
 
@@ -844,7 +886,7 @@ http://www.law.go.kr/DRF/lawService.do?OC=test&target=decc&ID=243263&type=HTML
 
 ---
 
-# 5. 위원회 결정문 (Committee Decisions) APIs — 24 APIs (NOT IMPLEMENTED)
+# 5. 위원회 결정문 (Committee Decisions) APIs — 24 APIs (2 parametric tools implemented)
 
 ## 5.1 개인정보보호위원회 결정문 목록 조회
 **Endpoint**: `GET http://www.law.go.kr/DRF/lawSearch.do?target=ppc`
@@ -909,7 +951,7 @@ All 12 committees follow the same API pattern:
 
 ---
 
-# 6. 조약 (Treaties) APIs — 2 APIs (NOT IMPLEMENTED)
+# 6. 조약 (Treaties) APIs — 2 APIs (ALL IMPLEMENTED)
 
 ## 6.1 조약 목록 조회
 **Endpoint**: `GET http://www.law.go.kr/DRF/lawSearch.do?target=trty`
@@ -1039,7 +1081,7 @@ http://www.law.go.kr/DRF/lawSearch.do?OC=test&target=trty&type=XML&cls=2
 
 ---
 
-# 12. 법령정보 지식베이스 (Knowledge Base) APIs — 9 APIs (NOT IMPLEMENTED)
+# 12. 법령정보 지식베이스 (Knowledge Base) APIs — 9 APIs (ALL IMPLEMENTED)
 
 ## 12.1 법령용어 조회
 **Endpoint**: `GET http://www.law.go.kr/DRF/lawSearch.do?target=lstrmAI`
@@ -1047,17 +1089,35 @@ http://www.law.go.kr/DRF/lawSearch.do?OC=test&target=trty&type=XML&cls=2
 ## 12.2 일상용어 조회
 **Endpoint**: `GET http://www.law.go.kr/DRF/lawSearch.do?target=dlytrm`
 
-## 12.3 법령용어-일상용어 연계 조회
-**Endpoint**: `GET http://www.law.go.kr/DRF/lawSearch.do?target=lstrmRlt`
+## 12.3 법령용어-일상용어 연계 조회 — `lstrm_rlt_search` ✅ IMPLEMENTED
+**Endpoint**: `GET http://www.law.go.kr/DRF/lawService.do?target=lstrmRlt` (v2.2.0: **lawService.do**, 이전엔 lawSearch.do라 0-byte 응답)
 
-## 12.4 일상용어-법령용어 연계 조회
-**Endpoint**: `GET http://www.law.go.kr/DRF/lawSearch.do?target=dlytrmRlt`
+| LexLink 인자 | 업스트림 | 설명 |
+|--------------|----------|------|
+| `query` / `mst` | `query` / `MST` | 법령용어명 또는 용어 일련번호 (둘 중 하나) |
+| `trm_rlt_cd` | `trmRltCd` | 140301 동의어, … 140305 연관어 (선택) |
 
-## 12.5 법령용어-조문 연계 조회
-**Endpoint**: `GET http://www.law.go.kr/DRF/lawSearch.do?target=lstrmRltJo`
+`display`/`page`는 업스트림에 없다. 응답 루트 `lstrmRltService`.
 
-## 12.6 조문-법령용어 연계 조회
-**Endpoint**: `GET http://www.law.go.kr/DRF/lawSearch.do?target=joRltLstrm`
+## 12.4 일상용어-법령용어 연계 조회 — `dlytrm_rlt_search` ✅ IMPLEMENTED
+**Endpoint**: `GET http://www.law.go.kr/DRF/lawService.do?target=dlytrmRlt` (v2.2.0: lawService.do)
+
+인자는 12.3과 동일 (`query` 또는 `mst`, 선택 `trm_rlt_cd`). 응답 루트 `dlytrmRltService`.
+
+## 12.5 법령용어-조문 연계 조회 — `lstrm_rlt_jo_search` ✅ IMPLEMENTED
+**Endpoint**: `GET http://www.law.go.kr/DRF/lawService.do?target=lstrmRltJo` (v2.2.0: lawService.do)
+
+인자: `query` 또는 `mst`. 응답 루트 `lstrmRltJoService`. `display`/`page` 없음.
+
+## 12.6 조문-법령용어 연계 조회 — `jo_rlt_lstrm_search` ✅ IMPLEMENTED
+**Endpoint**: `GET http://www.law.go.kr/DRF/lawService.do?target=joRltLstrm` (v2.2.0: lawService.do)
+
+| LexLink 인자 | 업스트림 | 설명 |
+|--------------|----------|------|
+| `jo` (필수) | `JO` | 6자리 조문코드. `35`, `35의5` 등은 자동 정규화 |
+| `query` 또는 `law_id` | `query` / `ID` | 법령명 또는 법령ID (둘 중 하나) |
+
+응답 루트 `joRltLstrmService`. 예: `lawService.do?target=joRltLstrm&query=저작권법&JO=003505`.
 
 ## 12.7 관련법령 조회
 **Endpoint**: `GET http://www.law.go.kr/DRF/lawSearch.do?target=lsRlt`
@@ -1097,24 +1157,26 @@ https://www.law.go.kr/DRF/lawSearch.do?OC=test&target=aiSearch&type=XML&search=0
 
 ---
 
-# 13. 중앙부처 1차 해석 (Ministry Interpretations) APIs — 64 APIs (NOT IMPLEMENTED)
+# 13. 중앙부처 1차 해석 (Ministry Interpretations) APIs — 76 APIs (2 parametric tools implemented, v2.2.0 fixed)
 
-All 32 ministries follow the same API pattern:
+39 ministries / 76 APIs (37개 부처: 목록+본문, **재정경제부·국세청: 목록만**) follow the same pattern:
 
 **Endpoint Pattern:**
-- 목록 조회: `GET http://www.law.go.kr/DRF/lawSearch.do?target=cgmExpc{Ministry}`
-- 본문 조회: `GET http://www.law.go.kr/DRF/lawService.do?target=cgmExpc{Ministry}`
+- 목록 조회: `GET http://www.law.go.kr/DRF/lawSearch.do?target={code}CgmExpc`
+- 본문 조회: `GET http://www.law.go.kr/DRF/lawService.do?target={code}CgmExpc` (ID 필수)
+
+> v2.2.0: target 형식은 `{code}CgmExpc` (소문자 코드, 예 `moelCgmExpc`). 이전 `cgmExpc{Code}`는 모든 부처에서 빈 응답이었다. 응답 루트 `CgmExpc`, 리스트 키 `cgmExpc`, 제목 필드 `안건명`. 목록 전용 부처(재정경제부, 국세청)에 `cgm_expc_service`를 호출하면 `VALIDATION_ERROR`.
 
 | Ministry | target code |
 |----------|-------------|
 | 고용노동부 | Moel |
 | 국토교통부 | Molit |
-| 기획재정부 | Moef |
+| 재정경제부 (구 기획재정부, 별칭 허용) | Moef (목록만) |
 | 해양수산부 | Mof |
 | 행정안전부 | Mois |
 | 기후에너지환경부 | Me |
 | 관세청 | Kcs |
-| 국세청 | Nts |
+| 국세청 | Nts (목록만) |
 | 교육부 | Moe |
 | 과학기술정보통신부 | Msit |
 | 국가보훈부 | Mpva |
@@ -1149,13 +1211,15 @@ All 32 ministries follow the same API pattern:
 
 **Example (고용노동부):**
 ```
-http://www.law.go.kr/DRF/lawSearch.do?OC=test&target=cgmExpcMoel&type=XML
-http://www.law.go.kr/DRF/lawService.do?OC=test&target=cgmExpcMoel&ID=123&type=XML
+http://www.law.go.kr/DRF/lawSearch.do?OC=test&target=moelCgmExpc&type=XML
+http://www.law.go.kr/DRF/lawService.do?OC=test&target=moelCgmExpc&ID=123&type=XML
 ```
 
 ---
 
-# 14. 특별행정심판 (Special Administrative Appeals) APIs — 8 APIs (NOT IMPLEMENTED)
+# 14. 특별행정심판 (Special Administrative Appeals) APIs — 8 APIs (2 parametric tools implemented)
+
+> v2.2.0: `special_decc_search`는 응답 루트 `Decc`/리스트 키 `decc`를 인식해 `display`를 실제로 적용한다 (이전: 100건·59KB 원본 반환).
 
 ## 14.1 조세심판원 특별행정심판재결례 목록 조회
 **Endpoint**: `GET http://www.law.go.kr/DRF/lawSearch.do?target=ttSpecialDecc`
@@ -1313,6 +1377,19 @@ article_citation(
 
 ---
 
+# 16. 사전컨설팅 의견서 (Pre-consulting Opinions) APIs — 2 APIs (NOT IMPLEMENTED, NEW)
+
+감사원 사전컨설팅 의견서. 2026-10-25 가이드에서 신규 확인 (191 → 195).
+
+| 구분 | Endpoint |
+|------|----------|
+| 목록 | `GET http://www.law.go.kr/DRF/lawSearch.do?target=baiPvcs` |
+| 본문 | `GET http://www.law.go.kr/DRF/lawService.do?target=baiPvcs` |
+
+직접 호출 확인: `type=JSON` 정상 (151건, `search=2` 본문검색 지원, 응답 루트 `BaiPvcs`). 도구 추가 후보이나 PlayMCP 컨텍스트 비용 때문에 미정.
+
+---
+
 # Appendix A: 제개정 종류 코드표
 
 | 코드 | 구분명 |
@@ -1347,4 +1424,44 @@ article_citation(
 
 ---
 
-**🚀 Status: Complete documentation for all 191 APIs from law.go.kr Open API + 1 custom article_citation tool.**
+# Appendix C: LexLink 구조화 오류 코드 (v2.2.0)
+
+모든 도구 오류는 `status: "error"`, `error_code`, `message`, `hints[]`, `request_id` 형태로 반환된다.
+
+| error_code | 의미 | 처리 |
+|------------|------|------|
+| `VALIDATION_ERROR` | 인자 형식·범위·조합 오류 (잘못된 `jo`, `ordinLsCon_search` 모드 인자 0/2개 이상, 목록 전용 부처의 `cgm_expc_service` 등) | 힌트의 유효값 확인 |
+| `TIMEOUT` | law.go.kr 요청 시간 초과 | 재시도 |
+| `UPSTREAM_ERROR` | law.go.kr가 오류 응답 반환 | 메시지 확인 (IP/OC 등록 등) |
+| `INTERNAL_ERROR` | 예상치 못한 서버 오류 | 정상 운영에서는 발생하지 않아야 함 |
+| `ARTICLE_NOT_FOUND` | 요청한 조문(`jo`)이 응답에 없음 | 조문 번호·법령 버전 확인 |
+| `EMPTY_RESPONSE` | HTTP 200이지만 0-byte 본문. 대개 잘못된 target/엔드포인트 | target·엔드포인트 점검 (코드 버그 신호) |
+| `API_NOT_SUBSCRIBED` | "미신청된 목록/본문에 대한 접근입니다" — OC 계정이 해당 API 종류를 open.law.go.kr에서 신청하지 않음. `eflaw` 본문이면 `law_service`/`eflaw_josub` 대안 안내 | open.law.go.kr에서 API 신청 추가 |
+| `UPSTREAM_HTML_ERROR` | JSON/XML을 요청했는데 HTML 또는 `error500` 페이지가 반환됨 | 재시도, 지속되면 `type=HTML` 가능 여부 확인 |
+
+앞의 세 종류(EMPTY_RESPONSE, API_NOT_SUBSCRIBED, UPSTREAM_HTML_ERROR)는 `client.py`에서 감지하며, 이전에는 `status: ok`로 통과했다.
+
+---
+
+# Appendix D: 미구현 API 중 JSON 동작 확인 목록 (2026-10-25)
+
+| target | 분류 | 확인 결과 |
+|--------|------|-----------|
+| `lsStmd` | 법령 체계도 목록 | JSON 정상 (root `LsStmdSearch`) |
+| `oldAndNew` | 신구법 목록 | JSON 정상 (root `OldAndNewLawSearch`) |
+| `thdCmp` | 3단 비교 목록 | JSON 정상 (root `thdCmpLawSearch`) |
+| `licbyl` | 법령 별표·서식 목록 | JSON 정상 (root `licBylSearch`) |
+| `lstrm` | 법령용어 목록 (비AI) | JSON 정상 (root `LsTrmSearch`) |
+| `pi` | 학칙·공단·공공기관 목록 | JSON 정상 (root `AdmRulSearch`) |
+| `lsHstInf` | 법령 변경이력 (regDt) | JSON 정상 (root `LawSearch`) |
+| `lsJoHstInf` | 조문별 변경 이력 (`lawService.do`, ID+JO) | JSON 정상 |
+| `lnkOrd` / `lnkLsOrd` / `lnkOrg` | 자치법규 기준 연계 | JSON 정상 (v2.2.0부터 `ordinLsCon_search`로 구현) |
+| `baiPvcs` | 감사원 사전컨설팅 의견서 | JSON 정상 (Section 16) |
+| `lsAbrv` | 법률명 약칭 | JSON 정상이나 query/display 무시, 2,714건 전체(2.3MB) 반환 |
+| `lsHistory` | 법령 연혁 목록/본문 | **HTML 전용** (type=JSON/XML도 HTML 반환) |
+
+미확인: `admrulOldAndNew`, `oneView`, `datDelHst`, `admrulByl`, `ordinByl`, `lsDayJoRvs`, 모바일 22종, 맞춤형 6종.
+
+---
+
+**🚀 Status: Documentation for all 195 APIs from the law.go.kr Open API guide + 1 custom article_citation tool.**

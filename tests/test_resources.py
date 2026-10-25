@@ -84,19 +84,22 @@ async def test_seed_alias_via_resolver(server):
 
 @pytest.mark.anyio
 async def test_live_lookup_exact_match_is_cached(monkeypatch):
+    # 다른 테스트가 전역 resolver에 학습시키지 않은 고유한 법령명을 써야
+    # 라이브 조회 경로가 실제로 실행된다 (저작권법은 test_amendment 픽스처가 학습시킴).
+    name = "가상테스트법령"
     laws = [
-        {"법령명한글": "저작권법 시행령", "법령ID": "012345", "법령약칭명": None, "법령구분명": "대통령령"},
-        {"법령명한글": "저작권법", "법령ID": "000798", "법령약칭명": None, "법령구분명": "법률"},
+        {"법령명한글": f"{name} 시행령", "법령ID": "999002", "법령약칭명": None, "법령구분명": "대통령령"},
+        {"법령명한글": name, "법령ID": "999001", "법령약칭명": None, "법령구분명": "법률"},
     ]
     fake, calls = _stub_run_search(laws)
     monkeypatch.setattr(server_module, "run_search", fake)
     monkeypatch.setenv("OC", "test")
     srv = create_server()
 
-    out = await _read(srv, "lexlink://law/" + quote("저작권법"))
-    assert out["id"] == "000798"
-    assert out["full_name"] == "저작권법"
-    assert len(calls) == 1 and calls[0]["query"] == "저작권법"
+    out = await _read(srv, "lexlink://law/" + quote(name))
+    assert out["id"] == "999001"
+    assert out["full_name"] == name
+    assert len(calls) == 1 and calls[0]["query"] == name
 
     # Second read is served from cache: no further upstream call
     out2 = await _read(srv, "lexlink://law/저작권법")

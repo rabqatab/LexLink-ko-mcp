@@ -3583,12 +3583,13 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
 
             # Try 법령용어→일상용어
             try:
+                # 지식베이스 연계 API는 lawService.do 전용 (lawSearch.do는 빈 응답)
                 term_params = {
                     "oc": resolved_oc, "target": "lstrmRlt", "type": "JSON",
-                    "query": term, "display": 1, "page": 1,
+                    "query": term,
                 }
                 upstream = map_params_to_upstream(term_params)
-                term_result = client.get("/DRF/lawSearch.do", upstream, "JSON")
+                term_result = client.get("/DRF/lawService.do", upstream, "JSON")
                 term_raw = term_result.get("raw_content", "")
                 if term_raw:
                     import json as _json
@@ -3613,10 +3614,10 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 try:
                     term_params2 = {
                         "oc": resolved_oc, "target": "dlytrmRlt", "type": "JSON",
-                        "query": term, "display": 1, "page": 1,
+                        "query": term,
                     }
                     upstream2 = map_params_to_upstream(term_params2)
-                    term_result2 = client.get("/DRF/lawSearch.do", upstream2, "JSON")
+                    term_result2 = client.get("/DRF/lawService.do", upstream2, "JSON")
                     term_raw2 = term_result2.get("raw_content", "")
                     if term_raw2:
                         import json as _json

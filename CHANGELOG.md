@@ -6,6 +6,36 @@ All notable changes to LexLink are documented here in both English and Korean.
 
 ## English
 
+### v2.2.0 (2026-10-25)
+
+#### Fixed (P0)
+- `cgm_expc_search` / `cgm_expc_service`: upstream target names were inverted (`cgmExpcMoel` → `moelCgmExpc`); all 39 ministries returned empty results.
+- Knowledge-base linkage tools (`lstrm_rlt_search`, `dlytrm_rlt_search`, `lstrm_rlt_jo_search`, `jo_rlt_lstrm_search`) called `lawSearch.do` instead of `lawService.do` and returned nothing. They now take `query`/`mst` and an optional `trm_rlt_cd`; `jo_rlt_lstrm_search` requires `jo`.
+- `ordinLsCon_search` used a nonexistent upstream target; redesigned with three modes: `query` → lnkOrd, `law_id` → lnkLsOrd, `org` → lnkOrg.
+
+#### Fixed (P1)
+- `special_decc_search` ignored `display` and returned 100 rows (~59KB).
+- `jo` arguments now accept `35`, `35의5`, `제35조의5`, and `003505` (normalized to 6 digits); `ARTICLE_NOT_FOUND` is returned when the article is missing.
+- Upstream HTML/empty-body responses now become structured errors (`API_NOT_SUBSCRIBED`, `EMPTY_RESPONSE`, `UPSTREAM_HTML_ERROR`) instead of `status: ok`.
+- Resource `lexlink://law/{name}` now URL-decodes the name and resolves aliases (e.g. 자통법).
+- `serverInfo.version` now reports LexLink's version instead of the mcp library version.
+- Cache key now includes the response format (a JSON body was being served to XML requests).
+- Ministry rename 기획재정부 → 재정경제부 (old name kept as alias). 재정경제부 and 국세청 have a list API only.
+
+#### Planned in this release (being merged)
+- `law_amendment_summary` builds revision history from `eflaw_search` filtered by 법령ID (previously it listed current laws from `law_search`).
+- `simplify_article`, `article_amendment_diff`, `chain_amendment_track` extract full article text (항/호/목) via the new `article_text.py` instead of the heading only.
+- The current (현행) version is preferred over the scheduled (시행예정) version.
+- Precedent tools fall back to body-text search (`search=2`).
+- The stale `date_to="20261231"` default is replaced by the computed end of the current year.
+
+#### Infrastructure
+- New modules: `agency_codes.py`, `linkage.py`, `article_text.py`.
+- `tests/` is now tracked (122+ offline tests).
+- Audit document: `docs/AUDIT_CHECKLIST_2026-10-25.md`.
+
+---
+
 ### v2.1.0 (2026-03-30)
 
 #### Added
@@ -482,6 +512,36 @@ All notable changes to LexLink are documented here in both English and Korean.
 ---
 
 ## 한국어 (Korean)
+
+### v2.2.0 (2026-10-25)
+
+#### 수정 (P0)
+- `cgm_expc_search` / `cgm_expc_service`: 업스트림 target 이름이 뒤집혀 있었음(`cgmExpcMoel` → `moelCgmExpc`). 39개 부처 전부 빈 결과를 반환하던 문제 수정.
+- 지식베이스 연계 도구(`lstrm_rlt_search`, `dlytrm_rlt_search`, `lstrm_rlt_jo_search`, `jo_rlt_lstrm_search`)가 `lawService.do`가 아닌 `lawSearch.do`를 호출해 결과가 없던 문제 수정. 이제 `query`/`mst`와 선택 인자 `trm_rlt_cd`를 받으며, `jo_rlt_lstrm_search`는 `jo`가 필수.
+- `ordinLsCon_search`가 존재하지 않는 target을 사용하던 문제 수정. `query`→lnkOrd, `law_id`→lnkLsOrd, `org`→lnkOrg 세 가지 모드로 재설계.
+
+#### 수정 (P1)
+- `special_decc_search`가 `display`를 무시하고 100건(약 59KB)을 반환하던 문제 수정.
+- `jo` 인자가 `35`, `35의5`, `제35조의5`, `003505`를 모두 받아 6자리로 정규화. 조문이 없으면 `ARTICLE_NOT_FOUND` 반환.
+- 업스트림 HTML/빈 본문 응답을 `status: ok`로 통과시키지 않고 구조화 오류(`API_NOT_SUBSCRIBED`, `EMPTY_RESPONSE`, `UPSTREAM_HTML_ERROR`)로 반환.
+- 리소스 `lexlink://law/{name}`이 URL 디코딩과 약칭(자통법 등) 해석을 수행.
+- `serverInfo.version`이 mcp 라이브러리 버전 대신 LexLink 버전을 표시.
+- 캐시 키에 응답 형식을 포함(JSON 본문이 XML 요청에 반환되던 문제 수정).
+- 부처명 기획재정부 → 재정경제부 변경(기존 이름은 별칭으로 유지). 재정경제부·국세청은 목록 API만 제공.
+
+#### 이번 릴리스에 포함 예정 (병합 중)
+- `law_amendment_summary`가 `law_search`의 현행 법령 목록 대신 법령ID로 필터링한 `eflaw_search` 결과로 개정 이력을 구성.
+- `simplify_article`, `article_amendment_diff`, `chain_amendment_track`이 제목만이 아니라 신규 `article_text.py`로 항/호/목을 포함한 조문 전문을 추출.
+- 시행예정 버전보다 현행 버전을 우선 선택.
+- 판례 도구가 본문 검색(`search=2`)으로 폴백.
+- 고정된 `date_to="20261231"` 기본값을 현재 연도 말일 계산값으로 교체.
+
+#### 인프라
+- 신규 모듈: `agency_codes.py`, `linkage.py`, `article_text.py`
+- `tests/` 디렉터리 추적 시작(오프라인 테스트 122개 이상)
+- 점검 문서: `docs/AUDIT_CHECKLIST_2026-10-25.md`
+
+---
 
 ### v2.1.0 (2026-03-30)
 

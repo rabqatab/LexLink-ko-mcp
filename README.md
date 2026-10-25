@@ -35,7 +35,7 @@ LexLink is an MCP (Model Context Protocol) server that exposes the Korean Nation
     - Related laws discovery (aiRltLs_search)
   - **MCP Resources - Law ID Cache**
     - Cached mapping of ~20 frequently-used law names to stable 법령ID codes
-    - Template lookup by Korean name or abbreviation (`lexlink://law/{name}`)
+    - Template lookup by Korean name or abbreviation (`lexlink://law/{name}`): URL-decodes the name, consults resolver aliases (e.g. 자통법 → 자본시장과 금융투자업에 관한 법률, 010513), and falls back to one live `law_search` exact-name lookup
     - Dynamic caching: search results automatically populate the cache
 - **Smart Features** (inspired by [korean-law-mcp](https://github.com/chrisryugj/korean-law-mcp)):
   - **Intelligent Caching** - Per-tool TTL caching (search 1hr, articles 24hr, AI search 30min)
@@ -59,9 +59,11 @@ LexLink is an MCP (Model Context Protocol) server that exposes the Korean Nation
 | **API Coverage** | ~28% of 191+ endpoints |
 | **LLM Integration** | ✅ Validated (Gemini) |
 | **Code Quality** | Clean, documented, tested |
-| **Version** | v2.1.0 |
+| **Version** | v2.2.0 |
 
-**Latest:** v2.1.0 — 54 tools (Phase 9 added), intelligent caching (`cache.py`), law name resolution (`resolver.py`), chain tools for multi-step research workflows.
+**Latest:** v2.2.0 — audit fixes: knowledge-base linkage tools now call `lawService.do`, `ordinLsCon_search` redesigned (3 modes), ministry interpretations use the `{code}CgmExpc` target (39 ministries), `jo` normalization (`35`, `35의5`, `제35조의5`, `003505`), structured upstream error codes, format-aware cache key, and 122 offline tests. See CHANGELOG.md.
+
+**v2.1.0** — 54 tools (Phase 9 added), intelligent caching (`cache.py`), law name resolution (`resolver.py`), chain tools for multi-step research workflows.
 
 ## Prerequisites
 
@@ -172,6 +174,9 @@ eflaw_josub(
 )
 # jo format: "XXXXXX" where first 4 digits = article (zero-padded), last 2 = branch (00=main)
 # Examples: "017400" (제174조), "000300" (제3조), "001502" (제15조의2)
+# Also accepted (normalized to 6 digits): 174, "35의5", "제35조의5", "35-5", "003505"
+# Invalid jo → VALIDATION_ERROR; article missing in response → ARTICLE_NOT_FOUND
+# (same normalization for law_josub, eflaw_service, law_service)
 ```
 
 #### 6. `law_josub` - Query Article/Paragraph (Announcement Date)
@@ -459,6 +464,13 @@ aiRltLs_search(
 | 중앙부처 1차 해석 (Ministry Interpretations) | `cgm_expc_search`, `cgm_expc_service` |
 | 특별행정심판 (Special Appeals) | `special_decc_search`, `special_decc_service` |
 
+**Notes on Phase 7 tools (v2.2.0):**
+
+- **`ordinLsCon_search`** takes exactly one of `query` (→ upstream `lnkOrd`, ordinance-name search), `law_id` (→ `lnkLsOrd`, upstream `knd`), or `org` (→ `lnkOrg`, local-government code); optional `sort`, `display`, `page`.
+- **`lstrm_rlt_search`, `dlytrm_rlt_search`, `lstrm_rlt_jo_search`, `jo_rlt_lstrm_search`** call `lawService.do`. Provide `query` or `mst` (term serial number); optional `trm_rlt_cd` where supported: `140301` 동의어, `140302` 반의어, `140303` 상위어, `140304` 하위어, `140305` 연관어 (Korean names also accepted). `jo_rlt_lstrm_search` requires `jo` (`35`, `35의5`, `제35조의5`, `003505`) plus `query` (law name) or `law_id`. `display`/`page` are not upstream parameters for these tools.
+- **`cgm_expc_search` / `cgm_expc_service`** cover 39 ministries (upstream target `{code}CgmExpc`, e.g. `moelCgmExpc`). 기획재정부 was renamed 재정경제부 (code `Moef`); the old name and 환경부, 산업통상자원부, 여성가족부, 통계청, 특허청, 문화재청 are accepted as aliases. 재정경제부 and 국세청 have a list API only, so `cgm_expc_service` returns `VALIDATION_ERROR` for them.
+- **`special_decc_search`** now respects `display`.
+
 ### Phase 9: Chain Tools (5 tools)
 
 Inspired by [korean-law-mcp](https://github.com/chrisryugj/korean-law-mcp), these tools run multi-step research workflows in a single call — eliminating the need for an LLM to orchestrate sequential tool calls manually.
@@ -543,7 +555,7 @@ result = eflaw_search(query="test")
 # Returns helpful error:
 {
     "status": "error",
-    "error_code": "MISSING_OC",
+    "error_code": "VALIDATION_ERROR",
     "message": "OC parameter is required but not provided.",
     "hints": [
         "1. Tool argument: oc='your_value'",
@@ -551,6 +563,15 @@ result = eflaw_search(query="test")
     ]
 }
 ```
+
+**Error codes:** `VALIDATION_ERROR`, `TIMEOUT`, `UPSTREAM_ERROR`, `INTERNAL_ERROR`, plus structured upstream detection (v2.2.0):
+
+| Code | Meaning |
+|------|---------|
+| `EMPTY_RESPONSE` | HTTP 200 with a 0-byte body (unknown target/endpoint) |
+| `API_NOT_SUBSCRIBED` | "미신청된 목록/본문에 대한 접근입니다" page: apply for the API at open.law.go.kr (for target `eflaw`, try `law_service`/`eflaw_josub`) |
+| `UPSTREAM_HTML_ERROR` | HTML/error500 page returned although JSON/XML was requested |
+| `ARTICLE_NOT_FOUND` | Requested `jo` is not present in the upstream response |
 
 ## Golden MCP Tool Trajectories
 
@@ -685,14 +706,18 @@ lexlink-ko-mcp/
 │   ├── http_server.py   # HTTP/SSE server for Kakao PlayMCP
 │   ├── stdio_server.py  # Stdio transport entry point
 │   ├── params.py        # Parameter resolution & mapping
-│   ├── validation.py    # Input validation
+│   ├── validation.py    # Input validation (dates, `jo` normalization)
+│   ├── agency_codes.py  # Ministry/tribunal codes, aliases, cgm_expc/special_decc targets
+│   ├── linkage.py       # Knowledge-base / ordinance-link logic (jo, trm_rlt_cd, link modes)
+│   ├── article_text.py  # Article text extraction (조문내용 + 항/호/목 flattening)
 │   ├── parser.py        # XML parsing utilities
 │   ├── ranking.py       # Relevance ranking
 │   ├── citation.py      # Article citation extraction (Phase 4)
-│   ├── client.py        # HTTP client for law.go.kr API
+│   ├── client.py        # HTTP client for law.go.kr API (+ upstream error detection)
 │   ├── errors.py        # Error codes & responses
 │   ├── raw_logger.py    # PlayMCP traffic logging
 │   └── log_processor.py # Log format converter
+├── tests/                # 122 offline tests
 ├── logs/playmcp/         # PlayMCP traffic logs (daily JSONL)
 ├── pyproject.toml        # Project configuration
 └── README.md             # This file
@@ -704,11 +729,14 @@ lexlink-ko-mcp/
 # Install test dependencies
 uv sync
 
-# Run all tests
-uv run pytest
+# Run all tests (122 offline tests; no network or OC needed)
+uv run pytest tests/
 
 # Run with coverage
 uv run pytest --cov=src/lexlink --cov-report=html
+
+# Test files: test_cache, test_cgm_expc, test_client_errors, test_knowledge_base,
+#             test_ordin_link, test_resources, test_special_decc, test_validation_jo
 
 # Run specific test category
 uv run pytest -m unit
