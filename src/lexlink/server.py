@@ -1984,43 +1984,71 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
     @server.tool(annotations=TOOL_ANNOTATIONS)
     @handle_tool_error
     def ordinLsCon_search(
-        query: str = "*",
+        query: Optional[str] = None,
+        law_id: Optional[Union[str, int]] = None,
+        org: Optional[Union[str, int]] = None,
         display: int = 20,
         page: int = 1,
+        sort: Optional[str] = None,
         oc: Optional[str] = None,
         type: str = "JSON",
         ctx: Context = None,
     ) -> dict:
         """
-        Search ordinance-to-law linkage (자치법규 기준 법령 연계 관련 목록 조회).
+        Search ordinances linked to national laws (자치법규 기준 법령 연계 목록 조회).
 
-        This tool searches national law articles that are referenced or linked
-        by local ordinances. Useful for finding the legal basis (상위 법령) that
-        a specific ordinance is based on.
+        One tool, three modes — pass EXACTLY ONE of query / law_id / org:
+          - query  → lawSearch.do?target=lnkOrd   : linked ordinances whose name
+                     matches the keyword (e.g. "주차장")
+          - law_id → lawSearch.do?target=lnkLsOrd : ordinances that implement /
+                     reference the statute with that 법령ID (e.g. "001823")
+          - org    → lawSearch.do?target=lnkOrg   : ordinances of a local
+                     government (지자체 code, e.g. "3270000" 부산 동구); each item
+                     also carries the linked 법령ID / 법령명한글
+
+        Results use root OrdinSearch (lnkOrgSearch for org mode) with list key
+        `law`; items hold 자치법규ID, 자치법규일련번호, 자치법규명, 자치법규종류,
+        공포일자, 공포번호, 시행일자, 제개정구분명. Use ordin_service(id=자치법규ID)
+        for the full ordinance text.
 
         Args:
-            query: Search keyword (default "*")
-            display: Number of results per page (max 100, default 20)
+            query: Ordinance name keyword (mode lnkOrd)
+            law_id: 법령ID of a statute (mode lnkLsOrd, upstream param knd)
+            org: Local-government code (mode lnkOrg, upstream param org)
+            display: Number of results (max 100, default 20)
             page: Page number (1-based, default 1)
+            sort: lasc/ldes (name), dasc/ddes (공포일자), nasc/ndes (공포번호),
+                  efasc/efdes (시행일자) — documented for lnkOrd
             oc: Optional OC override (defaults to env var)
             type: Response format - "JSON" (default), "XML", or "HTML"
             ctx: MCP context (injected automatically)
 
         Returns:
-            Search results with ordinance-law linkage list or error
+            Search results (ranked_data) with the ordinance list, or a
+            VALIDATION_ERROR when zero or more than one mode argument is given.
 
         Examples:
-            Search for linked laws:
-            >>> ordinLsCon_search(query="건축", type="XML")
+            >>> ordinLsCon_search(query="주차장", display=2)
+            >>> ordinLsCon_search(law_id="001823", display=2)
+            >>> ordinLsCon_search(org="3270000", display=2)
         """
+        from .linkage import select_ordin_link_mode
+
+        (law_id, org) = stringify_id(law_id, org)
+        target, mode_params, ranking_query = select_ordin_link_mode(query, law_id, org)
         resolved_oc = resolve_oc(override_oc=oc)
         snake_params = {
-            "oc": resolved_oc, "target": "ordinLsCon", "type": type,
-            "query": query, "display": display, "page": page,
+            "oc": resolved_oc, "target": target, "type": type,
+            "display": display, "page": page, **mode_params,
         }
+        if sort: snake_params["sort"] = sort
+        # Only lnkOrd has a keyword to rank by; "*" disables ranking for the
+        # knd/org modes so upstream `display` is passed through untouched.
         return run_search(
-            get_client=_get_client, target="ordinLsCon", query=query,
+            get_client=_get_client, target=target, query=ranking_query,
             snake_params=snake_params, response_type=type, display=display,
+            ranking_field="자치법규명", list_type="law",
+            over_fetch_key="display",
         )
 
     # ==================== TOOL 30: trty_search ====================
@@ -2212,156 +2240,215 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
     @server.tool(annotations=TOOL_ANNOTATIONS)
     @handle_tool_error
     def lstrm_rlt_search(
-        query: str = "*",
-        display: int = 20,
-        page: int = 1,
+        query: Optional[str] = None,
+        mst: Optional[Union[str, int]] = None,
+        trm_rlt_cd: Optional[Union[str, int]] = None,
         oc: Optional[str] = None,
         type: str = "JSON",
         ctx: Context = None,
     ) -> dict:
         """
-        Legal term to everyday term linkage (법령용어→일상용어 연계 조회).
+        Legal term → everyday term linkage (법령용어-일상용어 연계 조회).
 
-        This tool searches the linkage between formal legal terms and their
-        plain-language (everyday) equivalents. Useful for finding how legal
-        terminology maps to everyday Korean.
+        Calls lawService.do?target=lstrmRlt (a lookup, not a paged search).
+        Given a legal term, returns the everyday terms it is linked to with
+        the relation type (동의어/반의어/상위어/하위어/연관어), plus follow-up
+        links (dlytrmRlt MST, dlytrm query). Root key: lstrmRltService.
 
         Args:
-            query: Search keyword (default "*")
-            display: Number of results per page (max 100, default 20)
-            page: Page number (1-based, default 1)
+            query: Exact legal term, e.g. "공정한이용" (required unless mst given)
+            mst: Legal-term 일련번호 (MST) from a previous linkage result,
+                 e.g. "1470403" (alternative to query)
+            trm_rlt_cd: Optional 용어관계코드 filter — 140301 동의어, 140302 반의어,
+                 140303 상위어, 140304 하위어, 140305 연관어 (Korean names accepted)
             oc: Optional OC override (defaults to env var)
-            type: Response format - "JSON" (default), "XML", or "HTML"
+            type: Response format - "JSON" (default) or "XML"
             ctx: MCP context (injected automatically)
 
+        Note: display/page are not supported by this upstream endpoint.
+
         Returns:
-            Search results or error
+            Response with raw_content plus parsed_data (검색결과개수, 법령용어 →
+            연계용어[]) or a structured error.
+
+        Examples:
+            >>> lstrm_rlt_search(query="공정한이용")
+            >>> lstrm_rlt_search(mst="1470403", trm_rlt_cd="140305")
         """
+        from .linkage import attach_parsed_data, require_query_or_mst, validate_trm_rlt_cd
+
+        (mst,) = stringify_id(mst)
+        require_query_or_mst(query, mst, "lstrm_rlt_search")
+        trm_rlt_cd = validate_trm_rlt_cd(trm_rlt_cd)
         resolved_oc = resolve_oc(override_oc=oc)
-        snake_params = {
-            "oc": resolved_oc, "target": "lstrmRlt", "type": type,
-            "query": query, "display": display, "page": page,
-        }
-        return run_search(
-            get_client=_get_client, target="lstrmRlt", query=query,
-            snake_params=snake_params, response_type=type, display=display,
-        )
+        snake_params = {"oc": resolved_oc, "target": "lstrmRlt", "type": type}
+        if query: snake_params["query"] = query
+        if mst: snake_params["mst"] = mst
+        if trm_rlt_cd: snake_params["trm_rlt_cd"] = trm_rlt_cd
+        response = run_service(get_client=_get_client, target="lstrmRlt",
+                               snake_params=snake_params, response_type=type)
+        return attach_parsed_data(response, type)
 
     # ==================== TOOL 35: dlytrm_rlt_search ====================
     @server.tool(annotations=TOOL_ANNOTATIONS)
     @handle_tool_error
     def dlytrm_rlt_search(
-        query: str = "*",
-        display: int = 20,
-        page: int = 1,
+        query: Optional[str] = None,
+        mst: Optional[Union[str, int]] = None,
+        trm_rlt_cd: Optional[Union[str, int]] = None,
         oc: Optional[str] = None,
         type: str = "JSON",
         ctx: Context = None,
     ) -> dict:
         """
-        Everyday term to legal term linkage (일상용어→법령용어 연계 조회).
+        Everyday term → legal term linkage (일상용어-법령용어 연계 조회).
 
-        This tool searches the linkage from plain-language (everyday) terms
-        back to their formal legal equivalents. Useful for finding the correct
-        legal terminology when starting from common language.
+        Calls lawService.do?target=dlytrmRlt (a lookup, not a paged search).
+        Given an everyday word, returns the formal legal terms it maps to with
+        the relation type (동의어/반의어/상위어/하위어/연관어) and follow-up links
+        (lstrmRlt MST, lstrmRltJo MST). Root key: dlytrmRltService.
 
         Args:
-            query: Search keyword (default "*")
-            display: Number of results per page (max 100, default 20)
-            page: Page number (1-based, default 1)
+            query: Exact everyday term, e.g. "월세" (required unless mst given)
+            mst: Everyday-term 일련번호 (MST) from a previous result (alternative to query)
+            trm_rlt_cd: Optional 용어관계코드 filter — 140301 동의어, 140302 반의어,
+                 140303 상위어, 140304 하위어, 140305 연관어 (Korean names accepted)
             oc: Optional OC override (defaults to env var)
-            type: Response format - "JSON" (default), "XML", or "HTML"
+            type: Response format - "JSON" (default) or "XML"
             ctx: MCP context (injected automatically)
 
+        Note: display/page are not supported by this upstream endpoint.
+
         Returns:
-            Search results or error
+            Response with raw_content plus parsed_data (검색결과개수, 일상용어 →
+            연계용어[]) or a structured error.
+
+        Examples:
+            >>> dlytrm_rlt_search(query="월세")
+            >>> dlytrm_rlt_search(query="월세", trm_rlt_cd="동의어")
         """
+        from .linkage import attach_parsed_data, require_query_or_mst, validate_trm_rlt_cd
+
+        (mst,) = stringify_id(mst)
+        require_query_or_mst(query, mst, "dlytrm_rlt_search")
+        trm_rlt_cd = validate_trm_rlt_cd(trm_rlt_cd)
         resolved_oc = resolve_oc(override_oc=oc)
-        snake_params = {
-            "oc": resolved_oc, "target": "dlytrmRlt", "type": type,
-            "query": query, "display": display, "page": page,
-        }
-        return run_search(
-            get_client=_get_client, target="dlytrmRlt", query=query,
-            snake_params=snake_params, response_type=type, display=display,
-        )
+        snake_params = {"oc": resolved_oc, "target": "dlytrmRlt", "type": type}
+        if query: snake_params["query"] = query
+        if mst: snake_params["mst"] = mst
+        if trm_rlt_cd: snake_params["trm_rlt_cd"] = trm_rlt_cd
+        response = run_service(get_client=_get_client, target="dlytrmRlt",
+                               snake_params=snake_params, response_type=type)
+        return attach_parsed_data(response, type)
 
     # ==================== TOOL 36: lstrm_rlt_jo_search ====================
     @server.tool(annotations=TOOL_ANNOTATIONS)
     @handle_tool_error
     def lstrm_rlt_jo_search(
-        query: str = "*",
-        display: int = 20,
-        page: int = 1,
+        query: Optional[str] = None,
+        mst: Optional[Union[str, int]] = None,
         oc: Optional[str] = None,
         type: str = "JSON",
         ctx: Context = None,
     ) -> dict:
         """
-        Legal term to article linkage (법령용어→조문 연계 조회).
+        Legal term → article linkage (법령용어-조문 연계 조회).
 
-        This tool searches the linkage between legal terms and the specific
-        law articles where those terms are used or defined.
+        Calls lawService.do?target=lstrmRltJo (a lookup, not a paged search).
+        Given a legal term, returns the law articles that define or use it:
+        법령명, 조번호 (4 digits), 조가지번호 (2 digits), 용어구분 (핵심용어 등),
+        조문내용. Root key: lstrmRltJoService.
 
         Args:
-            query: Search keyword (default "*")
-            display: Number of results per page (max 100, default 20)
-            page: Page number (1-based, default 1)
+            query: Exact legal term, e.g. "공정한이용" (required unless mst given)
+            mst: Legal-term 일련번호 (MST), e.g. "1470403" (alternative to query)
             oc: Optional OC override (defaults to env var)
-            type: Response format - "JSON" (default), "XML", or "HTML"
+            type: Response format - "JSON" (default) or "XML"
             ctx: MCP context (injected automatically)
 
+        Note: display/page are not supported by this upstream endpoint.
+
         Returns:
-            Search results or error
+            Response with raw_content plus parsed_data (검색결과개수, 법령용어 →
+            연계법령[]) or a structured error.
+
+        Examples:
+            >>> lstrm_rlt_jo_search(query="공정한이용")
         """
+        from .linkage import attach_parsed_data, require_query_or_mst
+
+        (mst,) = stringify_id(mst)
+        require_query_or_mst(query, mst, "lstrm_rlt_jo_search")
         resolved_oc = resolve_oc(override_oc=oc)
-        snake_params = {
-            "oc": resolved_oc, "target": "lstrmRltJo", "type": type,
-            "query": query, "display": display, "page": page,
-        }
-        return run_search(
-            get_client=_get_client, target="lstrmRltJo", query=query,
-            snake_params=snake_params, response_type=type, display=display,
-        )
+        snake_params = {"oc": resolved_oc, "target": "lstrmRltJo", "type": type}
+        if query: snake_params["query"] = query
+        if mst: snake_params["mst"] = mst
+        response = run_service(get_client=_get_client, target="lstrmRltJo",
+                               snake_params=snake_params, response_type=type)
+        return attach_parsed_data(response, type)
 
     # ==================== TOOL 37: jo_rlt_lstrm_search ====================
     @server.tool(annotations=TOOL_ANNOTATIONS)
     @handle_tool_error
     def jo_rlt_lstrm_search(
-        query: str = "*",
-        display: int = 20,
-        page: int = 1,
+        jo: Union[str, int],
+        query: Optional[str] = None,
+        law_id: Optional[Union[str, int]] = None,
         oc: Optional[str] = None,
         type: str = "JSON",
         ctx: Context = None,
     ) -> dict:
         """
-        Article to legal term linkage (조문→법령용어 연계 조회).
+        Article → legal term linkage (조문-법령용어 연계 조회).
 
-        This tool searches the linkage from specific law articles to the
-        legal terms defined or used within those articles. Useful for finding
-        all technical terms in a given article.
+        Calls lawService.do?target=joRltLstrm (a lookup, not a paged search).
+        Given a law (name or 법령ID) and an article, returns the legal terms
+        selected in that article: 법령용어명, 용어구분 (선정용어/핵심용어),
+        용어구분코드, plus lstrmRlt / lstrmRltJo follow-up links.
+        Root key: joRltLstrmService.
 
         Args:
-            query: Search keyword (default "*")
-            display: Number of results per page (max 100, default 20)
-            page: Page number (1-based, default 1)
+            jo: Article (REQUIRED). Accepts "35", "35의5", "제35조의5" or the
+                6-digit upstream code "003505"; normalized to XXXXYY.
+            query: Law name, e.g. "저작권법" (required unless law_id given)
+            law_id: 법령ID of the law (upstream param ID; alternative to query)
             oc: Optional OC override (defaults to env var)
-            type: Response format - "JSON" (default), "XML", or "HTML"
+            type: Response format - "JSON" (default) or "XML"
             ctx: MCP context (injected automatically)
 
+        Note: display/page are not supported by this upstream endpoint.
+
         Returns:
-            Search results or error
+            Response with raw_content, parsed_data (검색결과개수, 법령조문 →
+            연계용어[]) and the normalized `jo` code, or a structured error.
+
+        Examples:
+            >>> jo_rlt_lstrm_search(query="저작권법", jo="35의5")
+            >>> jo_rlt_lstrm_search(law_id="001823", jo="003505")
         """
+        from ._helpers import ToolValidationError
+        from .linkage import attach_parsed_data, normalize_jo_code
+
+        (law_id,) = stringify_id(law_id)
+        jo_code = normalize_jo_code(jo)
+        if (not query or query.strip() in ("", "*")) and not law_id:
+            raise ToolValidationError(
+                "jo_rlt_lstrm_search: provide 'query' (law name) or 'law_id' (법령ID)",
+                hints=[
+                    "query='저작권법', jo='35의5'",
+                    "law_id='001823', jo='3'",
+                ],
+            )
         resolved_oc = resolve_oc(override_oc=oc)
-        snake_params = {
-            "oc": resolved_oc, "target": "joRltLstrm", "type": type,
-            "query": query, "display": display, "page": page,
-        }
-        return run_search(
-            get_client=_get_client, target="joRltLstrm", query=query,
-            snake_params=snake_params, response_type=type, display=display,
-        )
+        snake_params = {"oc": resolved_oc, "target": "joRltLstrm", "type": type, "jo": jo_code}
+        if query: snake_params["query"] = query
+        if law_id: snake_params["id"] = law_id
+        response = run_service(get_client=_get_client, target="joRltLstrm",
+                               snake_params=snake_params, response_type=type)
+        response = attach_parsed_data(response, type)
+        if response.get("status") == "ok":
+            response["jo"] = jo_code
+        return response
 
     # ==================== TOOL 38: ls_rlt_search ====================
     @server.tool(annotations=TOOL_ANNOTATIONS)

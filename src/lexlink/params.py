@@ -121,6 +121,9 @@ def map_params_to_upstream(snake_params: dict) -> dict:
         "sborg": "sborg",     # 지자체 시/군/구 (pass-through)
         "ordin_fd": "ordinFd",  # 분류코드 (ordinance classification)
 
+        # Phase 7: Legal term knowledge base linkage (lstrmRlt / dlytrmRlt)
+        "trm_rlt_cd": "trmRltCd",  # 용어관계코드 (140301 동의어 … 140305 연관어)
+
         # Service params (ID/MST uppercase per API convention)
         "id": "ID",
         "mst": "MST",
