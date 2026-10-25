@@ -2774,6 +2774,187 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
 
     # ==================== PHASE 8: PUBLIC LEGAL ASSISTANCE ====================
 
+    # Shared helpers for the Phase 8/9 tools (article text, version selection).
+    from .article_text import (
+        ArticleNotFoundError, normalize_article, article_label,
+        extract_article, law_rows, select_law_rows, pick_current_version,
+        dedupe_versions, revision_record, previous_version, parse_article_history,
+        end_of_current_year, strip_html, compact_delegation_tree,
+    )
+    from ._helpers import ToolValidationError
+    from .validation import format_article_number
+
+    def _internal_format(response_type: str) -> str:
+        """Tools accept HTML for pass-through, but internal parsing needs JSON/XML."""
+        return response_type if response_type in ("JSON", "XML") else "JSON"
+
+    def _items_from_result(result: dict, response_type: str) -> tuple[list, int]:
+        """Return (items, totalCnt) from a run_search result.
+
+        Uses ranked_data when present; otherwise falls back to the raw body so a
+        failed ranking step (unknown list key) does not look like an empty result.
+        """
+        ranked = result.get("ranked_data")
+        parsed = ranked
+        if parsed is None:
+            raw = result.get("raw_content", "")
+            if raw and response_type == "JSON":
+                try:
+                    jd = json.loads(raw)
+                    parsed = list(jd.values())[0] if isinstance(jd, dict) and jd else None
+                except ValueError:
+                    parsed = None
+            elif raw:
+                parsed = parse_xml_response(raw)
+        if not isinstance(parsed, dict):
+            return [], 0
+        items: list = []
+        for val in parsed.values():
+            if isinstance(val, list) and (not val or isinstance(val[0], dict)):
+                items = val
+                break
+            if isinstance(val, dict) and any(k in val for k in ("판례일련번호", "사건명", "사건번호")):
+                items = [val]
+                break
+        total = parsed.get("totalCnt", len(items))
+        if isinstance(total, str):
+            total = int(total) if total.isdigit() else len(items)
+        elif not isinstance(total, int):
+            total = len(items)
+        return items, total
+
+    def _search_with_fallback(
+        *, target: str, query: str, display: int, response_type: str,
+        resolved_oc: str, ranking_field: str, item_category: str,
+        min_results: int = 1, extra_params: Optional[dict] = None,
+    ) -> dict:
+        """Case-name search (search=1) first; retry as full-text (search=2) when thin.
+
+        Returns {"items", "total", "mode", "attempts"}. ``mode`` names the search
+        that produced the items so callers can report it.
+        """
+        modes = [(1, "사건명(search=1)"), (2, "본문(search=2)")]
+        best = {"items": [], "total": 0, "mode": modes[0][1], "attempts": []}
+        for code, label in modes:
+            params = {
+                "oc": resolved_oc, "target": target, "type": response_type,
+                "query": query, "display": display, "page": 1, "search": code,
+            }
+            if extra_params:
+                params.update(extra_params)
+            result = run_search(
+                get_client=_get_client, target=target, query=query,
+                snake_params=params, response_type=response_type, display=display,
+                ranking_field=ranking_field, list_type="items", item_category=item_category,
+                over_fetch_key="display",
+            )
+            items, total = _items_from_result(result, response_type)
+            best["attempts"].append({"mode": label, "found": total})
+            if len(items) > len(best["items"]):
+                best.update(items=items, total=total, mode=label)
+            if len(items) >= max(1, min_results):
+                break
+        return best
+
+    def _resolve_law_versions(law_name: str, resolved_oc: str, response_type: str,
+                              need_history: bool = False) -> dict:
+        """Resolve a law name to one 법령ID and (optionally) all of its versions.
+
+        Step 1: eflaw search by name → rows for the best-matching 법령ID
+                (exact 법령명한글, 법률 preferred unless the user named a 시행령/시행규칙).
+        Step 2 (need_history): eflaw search filtered by LID (paged) → every
+                연혁/현행/시행예정 row of that law, de-duplicated by MST.
+        """
+        search_params = {
+            "oc": resolved_oc, "target": "eflaw", "type": response_type,
+            "query": law_name, "display": 100, "page": 1,
+        }
+        search_result = run_search(
+            get_client=_get_client, target="eflaw", query=law_name,
+            snake_params=search_params, response_type=response_type, display=100,
+            ranking_field="법령명한글", list_type="law",
+            over_fetch_key="numOfRows",
+        )
+        rows = select_law_rows(law_rows(search_result), law_name)
+        if not rows:
+            raise ToolValidationError(
+                f"법령 '{law_name}'을(를) 찾을 수 없습니다.",
+                hints=["정식 법령명(예: '저작권법', '근로기준법')으로 다시 시도하세요."],
+            )
+        head = rows[0]
+        law_id = head.get("법령ID", "")
+        info = {
+            "law_id": law_id,
+            "law_name": head.get("법령명한글", law_name),
+            "law_type": head.get("법령구분명", ""),
+            "ministry": head.get("소관부처명", ""),
+        }
+
+        all_rows = list(rows)
+        if need_history and law_id:
+            fetched: list = []
+            page = 1
+            while page <= 3:
+                lid_params = {
+                    "oc": resolved_oc, "target": "eflaw", "type": response_type,
+                    "lid": law_id, "display": 100, "page": page,
+                }
+                lid_result = run_search(
+                    get_client=_get_client, target="eflaw", query="",
+                    snake_params=lid_params, response_type=response_type, display=100,
+                    ranking_field=None, list_type=None,
+                )
+                page_rows = [r for r in law_rows(lid_result) if r.get("법령ID") == law_id]
+                fetched.extend(page_rows)
+                _, total = _items_from_result(lid_result, response_type)
+                if not page_rows or len(fetched) >= total or len(page_rows) < 100:
+                    break
+                page += 1
+            if fetched:
+                all_rows = fetched
+
+        info["versions"] = dedupe_versions(all_rows)
+        info["current"] = pick_current_version(all_rows) or (info["versions"][0] if info["versions"] else head)
+        return info
+
+    def _fetch_article(mst: str, article: int, branch: int, resolved_oc: str,
+                       response_type: str) -> dict:
+        """Fetch one article via lawService.do?target=law&MST=…&JO=… and flatten it.
+
+        Raises ArticleNotFoundError (with hints) when the version lacks the article.
+        """
+        jo = format_article_number(article, branch)
+        svc_params = {
+            "oc": resolved_oc, "target": "law", "type": response_type,
+            "mst": str(mst), "jo": jo,
+        }
+        result = run_service(
+            get_client=_get_client, target="law",
+            snake_params=svc_params, response_type=response_type,
+        )
+        if result.get("status") != "ok":
+            raise ValueError(
+                f"MST {mst} {article_label(article, branch)} 조회 실패: {result.get('message', result.get('error_code', 'upstream error'))}"
+            )
+        info = extract_article(result.get("raw_content", ""), response_type, article, branch)
+        info["mst"] = str(mst)
+        info["jo"] = jo
+        return info
+
+    def _version_meta(info: dict) -> dict:
+        """Compact version descriptor for diff outputs."""
+        law = info.get("law", {}) if info else {}
+        return {
+            "mst": info.get("mst", "") if info else "",
+            "law_name": law.get("law_name", ""),
+            "date": law.get("announced", ""),
+            "announcement_no": law.get("announcement_no", ""),
+            "effective_date": law.get("effective", ""),
+            "revision_type": law.get("revision_type", ""),
+            "article_effective": info.get("effective", "") if info else "",
+            "text": info.get("text", "") if info else "",
+        }
+
     # ==================== TOOL 45: check_precedent_odds ====================
     @server.tool(annotations=TOOL_ANNOTATIONS)
     @handle_tool_error
@@ -2807,39 +2988,36 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         """
         resolved_oc = resolve_oc(override_oc=oc)
 
-        # Step 1: Search precedents
-        search_params = {
-            "oc": resolved_oc, "target": "prec", "type": type,
-            "query": query, "display": display, "page": 1,
-        }
-        search_result = run_search(
-            get_client=_get_client, target="prec", query=query,
-            snake_params=search_params, response_type=type, display=display,
-            ranking_field="판례명", list_type="items", item_category="prec",
-            over_fetch_key="display",
+        # Step 1: Search precedents — 사건명(search=1) first, 본문(search=2) fallback
+        # when the case-name search yields fewer than top_n hits (topical queries
+        # such as "저작권 공정이용" rarely appear verbatim in case names).
+        fmt = _internal_format(type)
+        found = _search_with_fallback(
+            target="prec", query=query, display=display, response_type=fmt,
+            resolved_oc=resolved_oc, ranking_field="판례명", item_category="prec",
+            min_results=max(1, top_n),
         )
-
-        # Extract precedent IDs from ranked results
-        ranked = search_result.get("ranked_data", {})
-        prec_list = []
-        for key, val in ranked.items():
-            if isinstance(val, list):
-                prec_list = val
-                break
-
-        total_found = ranked.get("totalCnt", len(prec_list))
-        if isinstance(total_found, str):
-            total_found = int(total_found) if total_found.isdigit() else len(prec_list)
+        prec_list = found["items"]
+        total_found = found["total"]
+        search_mode = found["mode"]
 
         # Step 2: Analyze top_n precedents
         outcomes = {}
         all_factors = []
         cases = []
 
-        for item in prec_list[:top_n]:
+        seen_case_numbers: set = set()
+        for item in prec_list:
+            if len(cases) >= top_n:
+                break
             prec_id = item.get("판례일련번호") or item.get("id")
             if not prec_id:
                 continue
+            # Upstream lists the same judgment under several ids; analyze it once
+            case_no = item.get("사건번호", "")
+            if case_no and case_no in seen_case_numbers:
+                continue
+            seen_case_numbers.add(case_no)
 
             # Fetch summary
             svc_params = {
@@ -2875,17 +3053,22 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 if s_match:
                     summary_text = s_match.group(1).strip()
 
+            # Upstream prose carries <br/> tags; strip them before analysis/output
+            holding = strip_html(holding)
+            summary_text = strip_html(summary_text)
+
             # Extract outcome and factors
             outcome = extract_outcome(summary_text)
             outcomes[outcome] = outcomes.get(outcome, 0) + 1
-            factors = extract_key_factors(holding)
-            all_factors.extend(factors)
+            factors = [strip_html(f) for f in extract_key_factors(holding)]
+            all_factors.extend(f for f in factors if f)
 
             cases.append({
                 "id": str(prec_id),
-                "name": item.get("사건명", ""),
+                "name": strip_html(item.get("사건명", "")),
                 "date": item.get("선고일자", ""),
                 "case_number": item.get("사건번호", ""),
+                "court": item.get("법원명", ""),
                 "outcome": outcome,
                 "holding": holding[:500] if holding else "",
                 "summary": summary_text[:500] if summary_text else "",
@@ -2906,6 +3089,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             "analyzed": len(cases),
             "outcome_summary": outcomes,
             "key_factors": unique_factors[:10],
+            "search_mode": search_mode,
+            "search_attempts": found["attempts"],
             "representative_cases": cases,
             "disclaimer": "이 분석은 참고용이며 법률 자문이 아닙니다. 정확한 판단을 위해 변호사와 상담하세요.",
         }
@@ -3009,24 +3194,24 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         if applicable_laws:
             top = applicable_laws[0]
             mst = ""
-            # Get MST from a quick search
+            # Get MST from a quick search — prefer the 현행 version, not the first
+            # row (which is usually a 시행예정 MST)
             search_params = {
                 "oc": resolved_oc, "target": "eflaw", "type": type,
-                "query": top["law_name"], "display": 1, "page": 1,
+                "query": top["law_name"], "display": 20, "page": 1,
             }
             s_result = run_search(
                 get_client=_get_client, target="eflaw", query=top["law_name"],
-                snake_params=search_params, response_type=type, display=1,
+                snake_params=search_params, response_type=type, display=20,
                 ranking_field="법령명한글", list_type="law",
                 over_fetch_key="numOfRows",
             )
             api_calls += 1
 
-            s_ranked = s_result.get("ranked_data", {})
-            for key, val in s_ranked.items():
-                if isinstance(val, list) and val:
-                    mst = val[0].get("법령일련번호", "")
-                    break
+            s_rows = select_law_rows(law_rows(s_result), top["law_name"])
+            current_row = pick_current_version(s_rows)
+            if current_row:
+                mst = current_row.get("법령일련번호", "")
 
             if mst and top.get("article"):
                 try:
@@ -3094,8 +3279,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
     @handle_tool_error
     def simplify_article(
         law_name: str,
-        article: int,
-        article_branch: int = 0,
+        article: Union[int, str],
+        article_branch: Union[int, str] = 0,
         oc: Optional[str] = None,
         type: str = "JSON",
         ctx: Context = None,
@@ -3103,12 +3288,14 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         """
         Get a law article with legal terms replaced by everyday Korean (쉬운 법률 읽기).
 
-        Fetches a law article and annotates legal jargon with plain Korean equivalents
-        using the official 법제처 legal terminology database.
+        Fetches a law article (heading + 항 + 호 + 목, from the 현행 version of the
+        law) and annotates legal jargon with plain Korean equivalents using the
+        official 법제처 legal terminology database.
 
         Args:
             law_name: Law name (e.g., "민법", "근로기준법")
-            article: Article number (e.g., 750 for 제750조)
+            article: Article number (e.g., 750 for 제750조). Strings such as
+                "35의5" or "제35조의5" are accepted too.
             article_branch: Branch number (e.g., 2 for 제37조의2, default 0)
             oc: Optional OC override
             type: Response format - "JSON" (default), "XML", or "HTML"
@@ -3121,78 +3308,22 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             >>> simplify_article(law_name="건축법", article=37, article_branch=2)
         """
         resolved_oc = resolve_oc(override_oc=oc)
+        fmt = _internal_format(type)
+        article, article_branch = normalize_article(article, article_branch)
 
-        # Step 1: Search for the law to get MST
-        search_params = {
-            "oc": resolved_oc, "target": "eflaw", "type": type,
-            "query": law_name, "display": 1, "page": 1,
-        }
-        search_result = run_search(
-            get_client=_get_client, target="eflaw", query=law_name,
-            snake_params=search_params, response_type=type, display=1,
-            ranking_field="법령명한글", list_type="law",
-            over_fetch_key="numOfRows",
-        )
-
-        # Extract MST
-        ranked = search_result.get("ranked_data", {})
-        mst = ""
-        for key, val in ranked.items():
-            if isinstance(val, list) and val:
-                mst = val[0].get("법령일련번호", "")
-                break
-
+        # Step 1: Resolve the law and pick its 현행 version (not the first row,
+        # which is typically a 시행예정 MST)
+        law_info = _resolve_law_versions(law_name, resolved_oc, fmt)
+        current = law_info["current"]
+        mst = str(current.get("법령일련번호", ""))
         if not mst:
-            raise ValueError(f"법령 '{law_name}'을(를) 찾을 수 없습니다.")
+            raise ValueError(f"법령 '{law_name}'의 MST를 확인할 수 없습니다.")
 
-        # Step 2: Get article text
-        jo_str = f"{article:04d}{article_branch:02d}"
-        svc_params = {
-            "oc": resolved_oc, "target": "eflawjosub", "type": type,
-            "mst": mst, "jo": jo_str,
-        }
-        upstream_params = map_params_to_upstream(svc_params)
+        # Step 2: Get article text — lawService.do?target=law&MST=…&JO=…
+        # (full text: heading + 항내용 + 호내용 + 목내용)
+        article_info = _fetch_article(mst, article, article_branch, resolved_oc, fmt)
+        original_text = article_info["text"]
         client = _get_client()
-        article_result = client.get("/DRF/lawService.do", upstream_params, type)
-
-        # Extract article text from response
-        raw = article_result.get("raw_content", "")
-        original_text = ""
-
-        if raw and type == "JSON":
-            try:
-                import json as _json
-                jd = _json.loads(raw)
-                # Navigate JSON to find article content
-                def _find_text(obj):
-                    if isinstance(obj, dict):
-                        for k, v in obj.items():
-                            if "조문내용" in k or "content" in k.lower():
-                                if isinstance(v, str) and len(v) > 10:
-                                    return v
-                            result = _find_text(v)
-                            if result:
-                                return result
-                    elif isinstance(obj, list):
-                        for item in obj:
-                            result = _find_text(item)
-                            if result:
-                                return result
-                    return None
-                original_text = _find_text(jd) or raw
-            except:
-                original_text = raw
-        elif raw:
-            import re as _re
-            # Try to extract from XML
-            match = _re.search(r'<조문내용>(.*?)</조문내용>', raw, _re.DOTALL)
-            if match:
-                original_text = match.group(1).strip()
-            else:
-                original_text = raw
-
-        if not original_text:
-            raise ValueError(f"'{law_name}' 제{article}조 본문을 가져올 수 없습니다.")
 
         # Step 3: Extract legal terms
         terms = extract_legal_terms(original_text)
@@ -3272,9 +3403,18 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
 
         return {
             "status": "ok",
-            "law_name": law_name,
+            "law_name": law_info["law_name"],
+            "query": law_name,
             "article": article_display,
+            "article_title": article_info.get("title", ""),
             "mst": mst,
+            "version": {
+                "status": current.get("현행연혁코드", ""),
+                "date": current.get("공포일자", ""),
+                "announcement_no": current.get("공포번호", ""),
+                "effective_date": current.get("시행일자", ""),
+                "law_type": current.get("법령구분명", ""),
+            },
             "original_text": original_text,
             "simplified_text": simplified,
             "term_glossary": glossary,
@@ -3289,7 +3429,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
     def law_amendment_summary(
         law_name: str,
         date_from: str = "20100101",
-        date_to: str = "20261231",
+        date_to: Optional[str] = None,
         oc: Optional[str] = None,
         type: str = "JSON",
         ctx: Context = None,
@@ -3297,86 +3437,62 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         """
         List all revisions of a law within a date range (법령 개정 이력 조회).
 
-        Shows when and how a law was amended over time. Use the MST values from
+        Resolves the name to a single 법령ID (법률 preferred over 시행령/시행규칙
+        unless you name the 시행령) and lists every version of that law —
+        연혁, 현행 and 시행예정 — announced in the range. Use the MST values from
         the results with article_amendment_diff to see specific article changes.
 
         Args:
             law_name: Law name (e.g., "근로기준법")
             date_from: Start date YYYYMMDD (default "20100101")
-            date_to: End date YYYYMMDD (default "20261231")
+            date_to: End date YYYYMMDD (default: end of the current year)
             oc: Optional OC override
             type: Response format - "JSON" (default), "XML", or "HTML"
 
         Returns:
-            List of revisions with dates, types, and MST identifiers
+            Revisions (date, effective_date, type, announcement_no, mst, status,
+            law_type) sorted by announcement date, newest first
 
         Examples:
             >>> law_amendment_summary(law_name="근로기준법", date_from="20200101")
             >>> law_amendment_summary(law_name="민법", date_from="20150101", date_to="20251231")
         """
         resolved_oc = resolve_oc(override_oc=oc)
+        fmt = _internal_format(type)
+        date_to = date_to or end_of_current_year()
+        validate_date_range(f"{date_from}~{date_to}", "date_from~date_to")
 
-        # Search with announcement date range
-        date_range = f"{date_from}~{date_to}"
-        search_params = {
-            "oc": resolved_oc, "target": "law", "type": type,
-            "query": law_name, "display": 100, "page": 1,
-        }
-        search_result = run_search(
-            get_client=_get_client, target="law", query=law_name,
-            snake_params=search_params, response_type=type, display=100,
-            ranking_field="법령명한글", list_type="law",
-            over_fetch_key="numOfRows",
-        )
+        # Resolve to one 법령ID and fetch all of its versions (eflaw, LID filter)
+        law_info = _resolve_law_versions(law_name, resolved_oc, fmt, need_history=True)
 
-        ranked = search_result.get("ranked_data", {})
-        laws = []
-        for key, val in ranked.items():
-            if isinstance(val, list):
-                laws = val
-                break
-
-        # Filter by matching law name and date range
-        revisions = []
-        law_id = ""
-        for law in laws:
-            name = law.get("법령명한글", "")
-            # Match exact name or abbreviation
-            if law_name not in name and name not in law_name:
-                continue
-
-            date_str = law.get("공포일자", "")
-            if date_str and date_from <= date_str <= date_to:
-                if not law_id:
-                    law_id = law.get("법령ID", "")
-                revisions.append({
-                    "date": date_str,
-                    "effective_date": law.get("시행일자", ""),
-                    "type": law.get("제개정구분명", ""),
-                    "announcement_no": law.get("공포번호", ""),
-                    "mst": law.get("법령일련번호", ""),
-                })
-
-        # Sort by date descending
-        revisions.sort(key=lambda r: r["date"], reverse=True)
+        revisions = [
+            revision_record(row) for row in law_info["versions"]
+            if date_from <= (row.get("공포일자", "") or "") <= date_to
+        ]
+        current = law_info.get("current") or {}
 
         return {
             "status": "ok",
-            "law_name": law_name,
-            "law_id": law_id,
+            "law_name": law_info["law_name"],
+            "query": law_name,
+            "law_id": law_info["law_id"],
+            "law_type": law_info["law_type"],
             "period": f"{date_from}~{date_to}",
+            "current_mst": str(current.get("법령일련번호", "")),
             "revisions": revisions,
             "total_revisions": len(revisions),
+            "total_versions": len(law_info["versions"]),
+            "source": "eflaw_search (target=eflaw, 법령ID filter; 현행연혁코드 = status)",
         }
 
     # ==================== TOOL 49: article_amendment_diff ====================
     @server.tool(annotations=TOOL_ANNOTATIONS)
     @handle_tool_error
     def article_amendment_diff(
-        mst_old: str,
-        mst_new: str,
-        article: int,
-        article_branch: int = 0,
+        mst_old: Union[str, int],
+        mst_new: Union[str, int],
+        article: Union[int, str],
+        article_branch: Union[int, str] = 0,
         oc: Optional[str] = None,
         type: str = "JSON",
         ctx: Context = None,
@@ -3384,12 +3500,14 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         """
         Compare how a specific article changed between two law versions (조문 신구대조).
 
-        Use MST values from law_amendment_summary to compare article text across revisions.
+        Fetches the full article text (heading + 항 + 호 + 목) from each MST via
+        lawService.do?target=law&MST=…&JO=… and diffs them line by line.
+        Use MST values from law_amendment_summary (same 법령ID) for both sides.
 
         Args:
             mst_old: MST of the older version (법령일련번호, from law_amendment_summary)
             mst_new: MST of the newer version
-            article: Article number (e.g., 52 for 제52조)
+            article: Article number (e.g., 52 for 제52조; "35의5" also accepted)
             article_branch: Branch number (e.g., 2 for 제52조의2, default 0)
             oc: Optional OC override
             type: Response format - "JSON" (default), "XML", or "HTML"
@@ -3398,102 +3516,89 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             Side-by-side comparison with line-level diff
 
         Examples:
-            >>> article_amendment_diff(mst_old="269000", mst_new="273000", article=52)
+            >>> article_amendment_diff(mst_old="270165", mst_new="283335", article=35, article_branch=5)
         """
         resolved_oc = resolve_oc(override_oc=oc)
-        jo_str = f"{article:04d}{article_branch:02d}"
+        fmt = _internal_format(type)
+        mst_old, mst_new = stringify_id(mst_old, mst_new)
+        if not mst_old or not mst_new:
+            raise ValueError("mst_old and mst_new are both required (법령일련번호).")
+        article, article_branch = normalize_article(article, article_branch)
+        article_display = article_label(article, article_branch)
 
-        # Fetch old version
-        old_params = {
-            "oc": resolved_oc, "target": "eflawjosub", "type": type,
-            "mst": mst_old, "jo": jo_str,
-        }
-        old_upstream = map_params_to_upstream(old_params)
-        client = _get_client()
-        old_result = client.get("/DRF/lawService.do", old_upstream, type)
+        def _try_fetch(mst: str):
+            try:
+                return _fetch_article(mst, article, article_branch, resolved_oc, fmt), None
+            except ArticleNotFoundError as e:
+                return None, str(e)
 
-        # Fetch new version
-        new_params = {
-            "oc": resolved_oc, "target": "eflawjosub", "type": type,
-            "mst": mst_new, "jo": jo_str,
-        }
-        new_upstream = map_params_to_upstream(new_params)
-        new_result = client.get("/DRF/lawService.do", new_upstream, type)
+        old_info, old_err = _try_fetch(mst_old)
+        new_info, new_err = _try_fetch(mst_new)
 
-        # Extract text from both
-        def _extract_text(result, fmt):
-            raw = result.get("raw_content", "")
-            if not raw:
-                return ""
-            if fmt == "JSON":
-                try:
-                    import json as _json
-                    jd = _json.loads(raw)
-                    def _find(obj):
-                        if isinstance(obj, dict):
-                            for k, v in obj.items():
-                                if "조문내용" in k and isinstance(v, str):
-                                    return v
-                                r = _find(v)
-                                if r: return r
-                        elif isinstance(obj, list):
-                            for i in obj:
-                                r = _find(i)
-                                if r: return r
-                        return None
-                    return _find(jd) or raw
-                except:
-                    return raw
-            else:
-                import re as _re
-                match = _re.search(r'<조문내용>(.*?)</조문내용>', raw, _re.DOTALL)
-                return match.group(1).strip() if match else raw
+        if old_info is None and new_info is None:
+            raise ToolValidationError(
+                f"{article_display} 텍스트를 두 버전(MST {mst_old}, {mst_new}) 모두에서 찾을 수 없습니다.",
+                hints=[h for h in (old_err, new_err) if h] + [
+                    "law_amendment_summary로 같은 법령ID의 MST인지, 조문 번호/가지번호가 맞는지 확인하세요.",
+                ],
+            )
 
-        old_text = _extract_text(old_result, type)
-        new_text = _extract_text(new_result, type)
+        old_meta = _version_meta(old_info) if old_info else {"mst": mst_old, "text": "", "note": old_err}
+        new_meta = _version_meta(new_info) if new_info else {"mst": mst_new, "text": "", "note": new_err}
+        old_text = old_meta.get("text", "")
+        new_text = new_meta.get("text", "")
 
-        if not old_text and not new_text:
-            raise ValueError(f"제{article}조 텍스트를 두 버전 모두에서 찾을 수 없습니다.")
+        same_law = bool(
+            old_info and new_info
+            and old_info["law"].get("law_id") and new_info["law"].get("law_id")
+            and old_info["law"].get("law_id") == new_info["law"].get("law_id")
+        )
+        warning = None
+        if old_info and new_info and not same_law:
+            warning = (
+                f"서로 다른 법령을 비교하고 있습니다: {old_info['law'].get('law_name')} "
+                f"(ID {old_info['law'].get('law_id')}) vs {new_info['law'].get('law_name')} "
+                f"(ID {new_info['law'].get('law_id')})"
+            )
 
         # Handle article added/deleted
         if not old_text:
-            return {
+            result = {
                 "status": "ok",
-                "article": f"제{article}조" if article_branch == 0 else f"제{article}조의{article_branch}",
-                "old_version": {"mst": mst_old, "text": ""},
-                "new_version": {"mst": mst_new, "text": new_text},
+                "article": article_display,
+                "old_version": old_meta,
+                "new_version": new_meta,
                 "has_changes": True,
-                "changes": [{"type": "added", "old_line": None, "new_line": new_text}],
-                "unified_diff": f"+++ {new_text}",
-                "summary": "Article added in new version",
+                "changes": [{"type": "added", "old_line": None, "new_line": line} for line in new_text.splitlines()],
+                "unified_diff": "\n".join(f"+{line}" for line in new_text.splitlines()),
+                "summary": "Article added in new version (old version has no such article)",
             }
-        if not new_text:
-            return {
+        elif not new_text:
+            result = {
                 "status": "ok",
-                "article": f"제{article}조" if article_branch == 0 else f"제{article}조의{article_branch}",
-                "old_version": {"mst": mst_old, "text": old_text},
-                "new_version": {"mst": mst_new, "text": ""},
+                "article": article_display,
+                "old_version": old_meta,
+                "new_version": new_meta,
                 "has_changes": True,
-                "changes": [{"type": "deleted", "old_line": old_text, "new_line": None}],
-                "unified_diff": f"--- {old_text}",
-                "summary": "Article deleted in new version",
+                "changes": [{"type": "deleted", "old_line": line, "new_line": None} for line in old_text.splitlines()],
+                "unified_diff": "\n".join(f"-{line}" for line in old_text.splitlines()),
+                "summary": "Article deleted in new version (new version has no such article)",
             }
-
-        # Compute diff
-        changes, unified, summary = compute_text_diff(old_text, new_text)
-
-        article_display = f"제{article}조" if article_branch == 0 else f"제{article}조의{article_branch}"
-
-        return {
-            "status": "ok",
-            "article": article_display,
-            "old_version": {"mst": mst_old, "text": old_text},
-            "new_version": {"mst": mst_new, "text": new_text},
-            "has_changes": len(changes) > 0,
-            "changes": changes,
-            "unified_diff": unified,
-            "summary": summary,
-        }
+        else:
+            changes, unified, summary = compute_text_diff(old_text, new_text)
+            result = {
+                "status": "ok",
+                "article": article_display,
+                "old_version": old_meta,
+                "new_version": new_meta,
+                "has_changes": len(changes) > 0,
+                "changes": changes,
+                "unified_diff": unified,
+                "summary": summary if changes else "No textual changes between the two versions",
+            }
+        if warning:
+            result["warning"] = warning
+        return result
 
     # ==================== PHASE 9: CHAIN TOOLS & UTILITIES ====================
 
@@ -3542,6 +3647,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 "outcome_summary": odds.get("outcome_summary", {}),
                 "key_factors": odds.get("key_factors", []),
                 "representative_cases": odds.get("representative_cases", [])[:3],
+                "search_mode": odds.get("search_mode", ""),
             },
             "legal_interpretations": base.get("legal_interpretations", []),
             "citations": base.get("citations", []),
@@ -3555,9 +3661,10 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
     @handle_tool_error
     def chain_amendment_track(
         law_name: str,
-        article: int = 0,
+        article: Union[int, str] = 0,
         date_from: str = "20200101",
-        date_to: str = "20261231",
+        date_to: Optional[str] = None,
+        article_branch: Union[int, str] = 0,
         oc: Optional[str] = None,
         type: str = "JSON",
         ctx: Context = None,
@@ -3565,58 +3672,131 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         """
         Track law amendment history with optional article-level diff (법령 개정 추적).
 
-        Chains: amendment summary → article diff between latest two versions.
-        If article=0, returns only the revision list. If article is specified,
-        also diffs that article between the two most recent revisions.
+        Chains: revision list (one 법령ID, 연혁/현행/시행예정) → per-article change
+        history (lsJoHstInf) → full-text diff of the article between two adjacent
+        versions of the SAME law. If article=0, returns only the revision list.
+
+        Version pair selection: the most recent version in the period where
+        lsJoHstInf says the article changed, against the version right before
+        it; if no article-level history is available, the two most recent
+        revisions in the period.
 
         Args:
             law_name: Law name (e.g., "근로기준법")
-            article: Article number to diff (0 = summary only, e.g., 52 for 제52조)
+            article: Article number to diff (0 = summary only; 52, "35의5", "제35조의5")
             date_from: Start date YYYYMMDD (default "20200101")
-            date_to: End date YYYYMMDD (default "20261231")
+            date_to: End date YYYYMMDD (default: end of the current year)
+            article_branch: Branch number (e.g., 5 for 제35조의5, default 0)
             oc: Optional OC override
             type: Response format
 
         Returns:
-            Revision history and optional article diff
+            Revision history, article change history and optional article diff
 
         Examples:
             >>> chain_amendment_track(law_name="근로기준법")
-            >>> chain_amendment_track(law_name="근로기준법", article=52, date_from="20180101")
+            >>> chain_amendment_track(law_name="저작권법", article=35, article_branch=5)
         """
-        # Step 1: Get amendment summary
-        summary = law_amendment_summary(
-            law_name=law_name, date_from=date_from, date_to=date_to,
-            oc=oc, type=type, ctx=ctx
-        )
+        resolved_oc = resolve_oc(override_oc=oc)
+        fmt = _internal_format(type)
+        date_to = date_to or end_of_current_year()
+        validate_date_range(f"{date_from}~{date_to}", "date_from~date_to")
+
+        # Step 1: Resolve the law and list every version of that single 법령ID
+        law_info = _resolve_law_versions(law_name, resolved_oc, fmt, need_history=True)
+        all_versions = [revision_record(r) for r in law_info["versions"]]
+        revisions = [r for r in all_versions if date_from <= r["date"] <= date_to]
+        current = law_info.get("current") or {}
 
         result = {
             "status": "ok",
-            "law_name": law_name,
-            "revisions": summary.get("revisions", []),
-            "total_revisions": summary.get("total_revisions", 0),
+            "law_name": law_info["law_name"],
+            "query": law_name,
+            "law_id": law_info["law_id"],
+            "law_type": law_info["law_type"],
+            "current_mst": str(current.get("법령일련번호", "")),
+            "revisions": revisions,
+            "total_revisions": len(revisions),
             "period": f"{date_from}~{date_to}",
         }
 
-        # Step 2: If article specified and ≥2 revisions, diff the article
-        revisions = summary.get("revisions", [])
-        if article > 0 and len(revisions) >= 2:
-            mst_new = revisions[0].get("mst", "")
-            mst_old = revisions[1].get("mst", "")
-            if mst_new and mst_old:
-                diff = article_amendment_diff(
-                    mst_old=mst_old, mst_new=mst_new, article=article,
-                    oc=oc, type=type, ctx=ctx
-                )
-                result["article_diff"] = {
-                    "article": diff.get("article", ""),
-                    "old_date": revisions[1].get("date", ""),
-                    "new_date": revisions[0].get("date", ""),
-                    "has_changes": diff.get("has_changes", False),
-                    "changes": diff.get("changes", []),
-                    "summary": diff.get("summary", ""),
-                }
+        if not article or str(article).strip() in ("0", ""):
+            return result
 
+        # Step 2: Article-level change history (lsJoHstInf) for the same 법령ID
+        number, branch = normalize_article(article, article_branch)
+        jo = format_article_number(number, branch)
+        history: list = []
+        if law_info["law_id"]:
+            hist_params = {
+                "oc": resolved_oc, "target": "lsJoHstInf", "type": fmt,
+                "id": law_info["law_id"], "jo": jo,
+            }
+            hist_result = run_service(
+                get_client=_get_client, target="lsJoHstInf",
+                snake_params=hist_params, response_type=fmt,
+            )
+            if hist_result.get("status") == "ok":
+                history = parse_article_history(hist_result.get("raw_content", ""), fmt)
+        result["article"] = article_label(number, branch)
+        result["article_history"] = history
+
+        # Step 3: Choose two adjacent versions of this law to diff
+        pair = None
+        basis = ""
+        known = {v["mst"]: v for v in all_versions}
+        for change in history:
+            change_date = change.get("date") or change.get("change_date") or ""
+            if not (date_from <= change_date <= date_to):
+                continue
+            newer = known.get(change["mst"])
+            if not newer:
+                continue
+            older = previous_version(all_versions, change["mst"])
+            if older:
+                pair = (older, newer)
+                basis = f"lsJoHstInf: {change.get('change_date')} {change.get('reason')} (MST {change['mst']})"
+                break
+        if pair is None and len(revisions) >= 2:
+            pair = (revisions[1], revisions[0])
+            basis = "latest two revisions in period (no article-level history matched)"
+
+        if pair is None:
+            result["article_diff"] = None
+            result["note"] = "비교할 두 버전이 없습니다 (기간 내 개정이 1건 이하)."
+            return result
+
+        older, newer = pair
+        diff = article_amendment_diff(
+            mst_old=older["mst"], mst_new=newer["mst"], article=number,
+            article_branch=branch, oc=oc, type=type, ctx=ctx,
+        )
+        if diff.get("status") != "ok":
+            result["article_diff"] = {
+                "article": article_label(number, branch),
+                "old_mst": older["mst"], "new_mst": newer["mst"],
+                "basis": basis,
+                "error": diff,
+            }
+            return result
+
+        result["article_diff"] = {
+            "article": diff.get("article", ""),
+            "basis": basis,
+            "old_mst": older["mst"],
+            "old_date": older.get("date", ""),
+            "old_status": older.get("status", ""),
+            "new_mst": newer["mst"],
+            "new_date": newer.get("date", ""),
+            "new_status": newer.get("status", ""),
+            "has_changes": diff.get("has_changes", False),
+            "changes": diff.get("changes", []),
+            "summary": diff.get("summary", ""),
+            "old_text": diff.get("old_version", {}).get("text", ""),
+            "new_text": diff.get("new_version", {}).get("text", ""),
+        }
+        if diff.get("warning"):
+            result["article_diff"]["warning"] = diff["warning"]
         return result
 
     # ==================== TOOL 52: chain_dispute_prep ====================
@@ -3649,90 +3829,34 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             >>> chain_dispute_prep(query="개인정보 유출 과징금")
         """
         resolved_oc = resolve_oc(override_oc=oc)
+        fmt = _internal_format(type)
         results = {}
+        search_modes = {}
 
-        # 1. Court precedents
-        prec_params = {
-            "oc": resolved_oc, "target": "prec", "type": type,
-            "query": query, "display": display, "page": 1,
-        }
-        prec_r = run_search(
-            get_client=_get_client, target="prec", query=query,
-            snake_params=prec_params, response_type=type, display=display,
-            ranking_field="판례명", list_type="items", item_category="prec",
-            over_fetch_key="display",
-        )
-        prec_ranked = prec_r.get("ranked_data", {})
-        prec_items = []
-        for k, v in prec_ranked.items():
-            if isinstance(v, list):
-                prec_items = v[:display]
-                break
-        results["precedents"] = prec_items
+        # Each source: 사건명(search=1) first, 본문(search=2) fallback when the
+        # case-name search returns fewer than `display` hits.
+        sources = [
+            ("precedents", "prec", "판례명", "prec"),
+            ("admin_appeals", "decc", "사건명", "decc"),
+            ("constitutional_decisions", "detc", "사건명", "detc"),
+            ("special_tribunal", "ttSpecialDecc", "사건명", "decc"),
+        ]
+        for key, target, ranking_field, category in sources:
+            found = _search_with_fallback(
+                target=target, query=query, display=display, response_type=fmt,
+                resolved_oc=resolved_oc, ranking_field=ranking_field,
+                item_category=category, min_results=display,
+            )
+            results[key] = found["items"][:display]
+            search_modes[key] = {"mode": found["mode"], "total_found": found["total"]}
 
-        # 2. Administrative appeals
-        decc_params = {
-            "oc": resolved_oc, "target": "decc", "type": type,
-            "query": query, "display": display, "page": 1, "search": 1,
-        }
-        decc_r = run_search(
-            get_client=_get_client, target="decc", query=query,
-            snake_params=decc_params, response_type=type, display=display,
-            ranking_field="사건명", list_type="items", item_category="decc",
-            over_fetch_key="display",
-        )
-        decc_ranked = decc_r.get("ranked_data", {})
-        decc_items = []
-        for k, v in decc_ranked.items():
-            if isinstance(v, list):
-                decc_items = v[:display]
-                break
-        results["admin_appeals"] = decc_items
-
-        # 3. Constitutional court decisions
-        detc_params = {
-            "oc": resolved_oc, "target": "detc", "type": type,
-            "query": query, "display": display, "page": 1,
-        }
-        detc_r = run_search(
-            get_client=_get_client, target="detc", query=query,
-            snake_params=detc_params, response_type=type, display=display,
-            ranking_field="사건명", list_type="items", item_category="detc",
-            over_fetch_key="display",
-        )
-        detc_ranked = detc_r.get("ranked_data", {})
-        detc_items = []
-        for k, v in detc_ranked.items():
-            if isinstance(v, list):
-                detc_items = v[:display]
-                break
-        results["constitutional_decisions"] = detc_items
-
-        # 4. Special tribunal (tax)
-        special_params = {
-            "oc": resolved_oc, "target": "ttSpecialDecc", "type": type,
-            "query": query, "display": display, "page": 1,
-        }
-        special_r = run_search(
-            get_client=_get_client, target="ttSpecialDecc", query=query,
-            snake_params=special_params, response_type=type, display=display,
-            ranking_field="사건명", list_type="items", item_category="decc",
-            over_fetch_key="display",
-        )
-        special_ranked = special_r.get("ranked_data", {})
-        special_items = []
-        for k, v in special_ranked.items():
-            if isinstance(v, list):
-                special_items = v[:display]
-                break
-        results["special_tribunal"] = special_items
-
-        total = len(prec_items) + len(decc_items) + len(detc_items) + len(special_items)
+        total = sum(len(v) for v in results.values())
 
         return {
             "status": "ok",
             "query": query,
             "total_results": total,
+            "search_modes": search_modes,
             "precedents": results["precedents"],
             "admin_appeals": results["admin_appeals"],
             "constitutional_decisions": results["constitutional_decisions"],
@@ -3769,38 +3893,21 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         """
         resolved_oc = resolve_oc(override_oc=oc)
 
-        # Step 1: Find the law
-        search_params = {
-            "oc": resolved_oc, "target": "eflaw", "type": type,
-            "query": law_name, "display": 1, "page": 1,
-        }
-        search_r = run_search(
-            get_client=_get_client, target="eflaw", query=law_name,
-            snake_params=search_params, response_type=type, display=1,
-            ranking_field="법령명한글", list_type="law",
-            over_fetch_key="numOfRows",
-        )
-
-        ranked = search_r.get("ranked_data", {})
-        law_info = None
-        law_id = ""
-        mst = ""
-        for k, v in ranked.items():
-            if isinstance(v, list) and v:
-                law_info = v[0]
-                law_id = law_info.get("법령ID", "")
-                mst = law_info.get("법령일련번호", "")
-                break
-
-        if not law_info:
-            raise ValueError(f"법령 '{law_name}'을(를) 찾을 수 없습니다.")
+        # Step 1: Find the law — one 법령ID, 현행 version preferred over 시행예정
+        fmt = _internal_format(type)
+        resolved = _resolve_law_versions(law_name, resolved_oc, fmt)
+        law_info = resolved["current"]
+        law_id = resolved["law_id"]
+        mst = str(law_info.get("법령일련번호", ""))
 
         result = {
             "status": "ok",
-            "law_name": law_info.get("법령명한글", law_name),
+            "law_name": resolved["law_name"],
             "law_id": law_id,
             "mst": mst,
-            "law_type": law_info.get("법령구분명", ""),
+            "version_status": law_info.get("현행연혁코드", ""),
+            "effective_date": law_info.get("시행일자", ""),
+            "law_type": resolved["law_type"],
             "ministry": law_info.get("소관부처명", ""),
         }
 
@@ -3817,7 +3924,15 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             client = _get_client()
             del_r = client.get("/DRF/lawService.do", del_upstream, type)
             if del_r.get("status") == "ok":
-                result["delegation_tree_raw"] = del_r.get("raw_content", "")[:5000]
+                # Compact structure instead of a JSON string cut mid-way
+                result["delegation_tree"] = compact_delegation_tree(
+                    del_r.get("raw_content", ""), type, max_entries=80,
+                )
+            else:
+                result["delegation_tree"] = {
+                    "entries": [], "entry_count": 0,
+                    "note": del_r.get("message", "lsDelegated 조회 실패"),
+                }
 
         # Step 3: Linked ordinances
         lnk_params = {
