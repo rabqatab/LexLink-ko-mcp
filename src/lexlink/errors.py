@@ -23,6 +23,19 @@ class ErrorCode:
     INTERNAL_ERROR = "INTERNAL_ERROR"
     """Unexpected server error (should not occur in normal operation)."""
 
+    API_NOT_SUBSCRIBED = "API_NOT_SUBSCRIBED"
+    """law.go.kr returned the '미신청된 목록/본문' page: the OC account has not
+    applied for this API (target) at open.law.go.kr."""
+
+    UPSTREAM_HTML_ERROR = "UPSTREAM_HTML_ERROR"
+    """law.go.kr returned an HTML (error) page where XML/JSON was requested."""
+
+    EMPTY_RESPONSE = "EMPTY_RESPONSE"
+    """law.go.kr returned HTTP 200 with a 0-byte body (unknown target/endpoint)."""
+
+    ARTICLE_NOT_FOUND = "ARTICLE_NOT_FOUND"
+    """The requested article (jo) is not present in the upstream response."""
+
 
 def create_error_response(
     error_code: str,

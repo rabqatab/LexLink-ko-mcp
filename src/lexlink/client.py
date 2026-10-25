@@ -21,6 +21,154 @@ from .errors import ErrorCode, create_error_response, get_http_error_hints
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Upstream body error detection (HTTP 200 with an error inside the body)
+# ---------------------------------------------------------------------------
+
+AUTH_FAILURE_MARKER = "사용자 정보 검증에 실패하였습니다"
+NOT_SUBSCRIBED_MARKER = "미신청된 목록/본문에 대한 접근입니다"
+ERROR_PAGE_MARKER_RE = re.compile(r'id\s*=\s*["\']error\d{3}["\']', re.I)
+_HTML_START_RE = re.compile(r"^\s*(?:<!doctype\s+html|<html)", re.I)
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _html_headline(body: str) -> str | None:
+    """Pull the first <h1>/<h2>/<h3>/<title> text out of an HTML error page."""
+    for tag in ("h2", "h1", "h3", "title"):
+        m = re.search(rf"<{tag}[^>]*>(.*?)</{tag}>", body, re.I | re.S)
+        if m:
+            text = _TAG_RE.sub("", m.group(1)).strip()
+            if text:
+                return text
+    return None
+
+
+def _not_subscribed_hints(target: str | None) -> list[str]:
+    hints = [
+        "OC 계정이 이 API(target)를 신청하지 않았습니다. open.law.go.kr 로그인 후 "
+        "[OPEN API] → [OPEN API 신청]에서 해당 법령종류(목록/본문)를 체크해 신청하세요.",
+        "The OC account has not applied for this API target at open.law.go.kr "
+        "(OPEN API → OPEN API 신청). Approval is per law type and per 목록/본문.",
+    ]
+    if target == "eflaw":
+        hints.append(
+            "대안: law_service(공포일 기준 본문) 또는 eflaw_josub(시행일 기준 조문 단위 조회)는 "
+            "별도 신청 항목이므로 그대로 동작할 수 있습니다."
+        )
+        hints.append(
+            "Alternative: use law_service (announcement-date full text) or eflaw_josub "
+            "(effective-date article lookup) while the eflaw 본문 API is pending approval."
+        )
+    elif target:
+        hints.append(f"신청 상태를 확인할 target: {target}")
+    return hints
+
+
+def detect_upstream_body_error(
+    body: str | None,
+    format_type: str,
+    *,
+    request_id: str | None = None,
+    target: str | None = None,
+    endpoint: str | None = None,
+) -> dict | None:
+    """
+    Inspect a 2xx response body for law.go.kr error conditions.
+
+    law.go.kr signals many failures with HTTP 200:
+      - 0-byte body            → unknown target / wrong endpoint       (EMPTY_RESPONSE)
+      - 사용자 정보 검증 실패   → OC / IP not authorised                (UPSTREAM_ERROR)
+      - 미신청된 목록/본문      → API not applied for by the OC account (API_NOT_SUBSCRIBED)
+      - <div id="error500">    → generic upstream error page            (UPSTREAM_HTML_ERROR)
+      - any HTML page when XML/JSON was requested                       (UPSTREAM_HTML_ERROR)
+
+    Returns a structured error dict (status="error") or None when the body looks
+    like a normal payload. Anti-bot JS redirect pages are handled before this
+    (see LawAPIClient._follow_antibot) and are not re-classified here.
+    """
+    fmt = (format_type or "").upper()
+    text = body or ""
+
+    # 1) Empty body with HTTP 200 → upstream did not recognise the target
+    if text.strip() == "":
+        return create_error_response(
+            error_code=ErrorCode.EMPTY_RESPONSE,
+            message="법제처 API가 빈 응답(0바이트)을 반환했습니다. "
+                    "law.go.kr returned an empty body (HTTP 200).",
+            hints=[
+                "target 이름 또는 엔드포인트(lawSearch/lawService) 확인 — 알 수 없는 target이면 빈 응답이 돌아옵니다",
+                "Check the target name and endpoint (lawSearch.do vs lawService.do)",
+                *( [f"요청 target: {target}, endpoint: {endpoint}"] if target or endpoint else [] ),
+            ],
+            request_id=request_id,
+            upstream_target=target,
+        )
+
+    # 2) Auth failure (existing behaviour, kept as UPSTREAM_ERROR)
+    if AUTH_FAILURE_MARKER in text:
+        return create_error_response(
+            error_code=ErrorCode.UPSTREAM_ERROR,
+            message="법제처 API 인증 실패: 사용자 정보 검증에 실패하였습니다",
+            request_id=request_id,
+            hints=[
+                "서버 IP가 open.law.go.kr에 등록되어 있는지 확인하세요",
+                "OC 값이 올바른지 확인하세요 (이메일 ID 부분만 사용)",
+                "Register your server IP at open.law.go.kr",
+            ],
+        )
+
+    # 3) "미신청" page: OC account has not applied for this API
+    if NOT_SUBSCRIBED_MARKER in text:
+        return create_error_response(
+            error_code=ErrorCode.API_NOT_SUBSCRIBED,
+            message="법제처 Open API 미신청: 미신청된 목록/본문에 대한 접근입니다. "
+                    "This API target has not been applied for by the OC account.",
+            hints=_not_subscribed_hints(target),
+            request_id=request_id,
+            upstream_target=target,
+        )
+
+    is_html = bool(_HTML_START_RE.match(text)) or "<html" in text[:2048].lower()
+
+    # 4) Generic law.go.kr error page (<div id="error500"> etc.)
+    if ERROR_PAGE_MARKER_RE.search(text):
+        headline = _html_headline(text)
+        return create_error_response(
+            error_code=ErrorCode.UPSTREAM_HTML_ERROR,
+            message="법제처 API가 오류 페이지를 반환했습니다"
+                    + (f": {headline}" if headline else "")
+                    + ". law.go.kr returned an error page.",
+            hints=[
+                "요청 인자(ID/MST/JO 등)와 target 이름이 올바른지 확인하세요",
+                "잠시 후 다시 시도하세요 (업스트림 일시 오류일 수 있음)",
+                "Check request parameters and retry; this is an upstream (law.go.kr) error page",
+            ],
+            request_id=request_id,
+            upstream_target=target,
+            upstream_headline=headline,
+        )
+
+    # 5) HTML body when a structured format was requested
+    if is_html and fmt in ("XML", "JSON"):
+        headline = _html_headline(text)
+        return create_error_response(
+            error_code=ErrorCode.UPSTREAM_HTML_ERROR,
+            message=f"{fmt} 응답을 요청했지만 법제처 API가 HTML 페이지를 반환했습니다"
+                    + (f" ({headline})" if headline else "")
+                    + f". Expected {fmt} but law.go.kr returned HTML.",
+            hints=[
+                "이 target은 HTML 전용이거나, 인증/신청 문제 또는 안티봇 페이지일 수 있습니다",
+                "type='HTML'로 재시도하거나 OC 신청 상태(open.law.go.kr)를 확인하세요",
+                "This target may be HTML-only, or the account/IP is not authorised for it",
+            ],
+            request_id=request_id,
+            upstream_target=target,
+            upstream_headline=headline,
+        )
+
+    return None
+
+
 class LawAPIClient:
     """HTTP client for law.go.kr API with error handling and logging."""
 
@@ -127,8 +275,11 @@ class LawAPIClient:
                 }
             )
 
-            # Return response
-            return self._passthrough_response(response, request_id, response_type)
+            # Return response (with upstream body error detection)
+            return self._passthrough_response(
+                response, request_id, response_type,
+                target=params.get("target"), endpoint=endpoint,
+            )
 
         except httpx.TimeoutException:
             logger.error(
@@ -245,7 +396,9 @@ class LawAPIClient:
         self,
         response: httpx.Response,
         request_id: str,
-        format_type: str
+        format_type: str,
+        target: str | None = None,
+        endpoint: str | None = None,
     ) -> dict:
         """
         Return response content, detecting upstream errors in the body.
@@ -258,25 +411,22 @@ class LawAPIClient:
             response: HTTP response from law.go.kr
             request_id: Request ID for tracking
             format_type: Response format ("HTML", "XML", or "JSON")
+            target: Upstream target name (for context-specific hints)
+            endpoint: Endpoint path (for context-specific hints)
 
         Returns:
             Response with raw content, or error if upstream body contains error
         """
         body = response.text
-
-        # Detect auth failure (HTTP 200 but body says auth failed)
-        if "사용자 정보 검증에 실패하였습니다" in body:
-            logger.warning(f"Upstream auth failure detected in response body")
-            return create_error_response(
-                error_code=ErrorCode.UPSTREAM_ERROR,
-                message="법제처 API 인증 실패: 사용자 정보 검증에 실패하였습니다",
-                request_id=request_id,
-                hints=[
-                    "서버 IP가 open.law.go.kr에 등록되어 있는지 확인하세요",
-                    "OC 값이 올바른지 확인하세요 (이메일 ID 부분만 사용)",
-                    "Register your server IP at open.law.go.kr",
-                ]
+        error = detect_upstream_body_error(
+            body, format_type, request_id=request_id, target=target, endpoint=endpoint
+        )
+        if error is not None:
+            logger.warning(
+                f"Upstream body error detected: {error['error_code']}",
+                extra={"request_id": request_id, "target": target},
             )
+            return error
 
         # Detect "no matching law" (HTTP 200 but body says no match)
         if "일치하는 법령이 없습니다" in body:
