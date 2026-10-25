@@ -104,6 +104,9 @@ Use `sections="full"` only when the complete judgment text is specifically neede
 
 **Ministry Interpretations (중앙부처 해석):**
 - cgm_expc_search/service: First-instance interpretations from 39 ministries
+  (ministry names follow the current 정부조직: 재정경제부 (formerly 기획재정부), 기후에너지환경부, 산업통상부,
+  성평등가족부, 국가데이터처, 지식재산처, 국가유산청. 재정경제부 and 국세청 provide the list API only —
+  no full text via cgm_expc_service; use the item's 법령해석상세링크 instead)
 
 **Special Administrative Appeals (특별행정심판):**
 - special_decc_search/service: Decisions from 4 special tribunals
@@ -2522,23 +2525,16 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
 
     # ==================== TASK 13: 중앙부처 1차 해석 ====================
 
-    # Ministry target code mapping (for cgmExpc{Code} pattern)
-    MINISTRY_CODES = {
-        "고용노동부": "Moel", "국토교통부": "Molit", "기획재정부": "Moef",
-        "해양수산부": "Mof", "행정안전부": "Mois", "기후에너지환경부": "Me",
-        "관세청": "Kcs", "국세청": "Nts", "교육부": "Moe",
-        "과학기술정보통신부": "Msit", "국가보훈부": "Mpva", "국방부": "Mnd",
-        "농림축산식품부": "Mafra", "문화체육관광부": "Mcst", "법무부": "Moj",
-        "보건복지부": "Mohw", "산업통상부": "Motie", "성평등가족부": "Mogef",
-        "외교부": "Mofa", "중소벤처기업부": "Mss", "통일부": "Mou",
-        "법제처": "Moleg", "식품의약품안전처": "Mfds", "인사혁신처": "Mpm",
-        "기상청": "Kma", "국가유산청": "Khs", "농촌진흥청": "Rda",
-        "경찰청": "Npa", "방위사업청": "Dapa", "병무청": "Mma",
-        "산림청": "Kfs", "소방청": "Nfa", "재외동포청": "Oka",
-        "조달청": "Pps", "질병관리청": "Kdca", "국가데이터처": "Kostat",
-        "지식재산처": "Kipo", "해양경찰청": "Kcg",
-        "행정중심복합도시건설청": "Naacc",
-    }
+    # Ministry/tribunal code tables and target builders live in agency_codes.py
+    # (upstream target is "{code}CgmExpc", e.g. moelCgmExpc — NOT "cgmExpc{Code}").
+    from .agency_codes import (
+        MINISTRY_CODES, MINISTRIES_LIST_ONLY, TRIBUNAL_CODES,
+        CGM_EXPC_LIST_KEY, CGM_EXPC_TITLE_FIELD,
+        SPECIAL_DECC_LIST_KEY, SPECIAL_DECC_TITLE_FIELD,
+        resolve_ministry, valid_ministry_names,
+        cgm_expc_target, special_decc_target, enforce_display,
+    )
+    from ._helpers import ToolValidationError
 
     # ==================== TOOL 41: cgm_expc_search ====================
     @server.tool(annotations=TOOL_ANNOTATIONS)
@@ -2562,7 +2558,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
 
         Args:
             ministry: Ministry name in Korean. Valid values:
-                고용노동부, 국토교통부, 기획재정부, 해양수산부, 행정안전부,
+                고용노동부, 국토교통부, 재정경제부, 해양수산부, 행정안전부,
                 기후에너지환경부, 관세청, 국세청, 교육부, 과학기술정보통신부,
                 국가보훈부, 국방부, 농림축산식품부, 문화체육관광부, 법무부,
                 보건복지부, 산업통상부, 성평등가족부, 외교부, 중소벤처기업부,
@@ -2570,6 +2566,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 국가유산청, 농촌진흥청, 경찰청, 방위사업청, 병무청, 산림청,
                 소방청, 재외동포청, 조달청, 질병관리청, 국가데이터처,
                 지식재산처, 해양경찰청, 행정중심복합도시건설청
+                (former names such as 기획재정부 → 재정경제부 are accepted as aliases)
             query: Search keyword (default "*")
             display: Number of results per page (max 100, default 20)
             page: Page number (1-based, default 1)
@@ -2581,18 +2578,23 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             ctx: MCP context (injected automatically)
 
         Returns:
-            Ministry interpretation list or error
+            Ministry interpretation list or error. Each item has 안건명, 법령해석일련번호
+            (use as `id` for cgm_expc_service), 해석기관명, 해석일자, 법령해석상세링크.
+            For 재정경제부/국세청 only this list exists upstream — follow 법령해석상세링크
+            for the text instead of cgm_expc_service.
 
         Examples:
             Search 고용노동부 interpretations:
             >>> cgm_expc_search(ministry="고용노동부", query="퇴직금")
         """
-        code = MINISTRY_CODES.get(ministry)
-        if not code:
-            valid = ", ".join(MINISTRY_CODES.keys())
-            raise ValueError(f"Invalid ministry: '{ministry}'. Valid values: {valid}")
+        canonical = resolve_ministry(ministry)
+        if not canonical:
+            raise ValueError(
+                f"Invalid ministry: '{ministry}'. Valid values: {valid_ministry_names()}"
+            )
+        code = MINISTRY_CODES[canonical]
 
-        target = f"cgmExpc{code}"
+        target = cgm_expc_target(code)
         resolved_oc = resolve_oc(override_oc=oc)
         snake_params = {
             "oc": resolved_oc, "target": target, "type": type,
@@ -2602,12 +2604,15 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         if sort: snake_params["sort"] = sort
         if gana: snake_params["gana"] = gana
 
-        return run_search(
+        # Response root is "CgmExpc", list key "cgmExpc" (same for every ministry)
+        response = run_search(
             get_client=_get_client, target=target, query=query,
             snake_params=snake_params, response_type=type, display=display,
-            ranking_field="사건명", list_type="items", item_category=target,
-            over_fetch_key="display",
+            ranking_field=CGM_EXPC_TITLE_FIELD, list_type="items",
+            item_category=CGM_EXPC_LIST_KEY, over_fetch_key="display",
         )
+        # Never leak the 100-row over-fetch, even if ranking didn't run
+        return enforce_display(response, display, CGM_EXPC_LIST_KEY)
 
     # ==================== TOOL 42: cgm_expc_service ====================
     @server.tool(annotations=TOOL_ANNOTATIONS)
@@ -2623,21 +2628,36 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         Retrieve ministry interpretation full text (중앙부처 1차 해석 본문 조회).
 
         Args:
-            ministry: Ministry name (same values as cgm_expc_search)
-            id: Interpretation serial number (해석례일련번호)
+            ministry: Ministry name (same values as cgm_expc_search).
+                Not available for 재정경제부 and 국세청 — upstream provides no
+                full-text API for them (list only; see 법령해석상세링크 in search results).
+            id: Interpretation serial number (법령해석일련번호 from cgm_expc_search)
             oc: Optional OC override
             type: Response format - "JSON" (default), "XML", or "HTML"
             ctx: MCP context (injected automatically)
 
         Returns:
-            Full interpretation text or error
+            Full interpretation text (root CgmExpcService: 안건명, 질의요지, 회답, 이유 ...) or error
         """
-        code = MINISTRY_CODES.get(ministry)
-        if not code:
-            valid = ", ".join(MINISTRY_CODES.keys())
-            raise ValueError(f"Invalid ministry: '{ministry}'. Valid values: {valid}")
+        canonical = resolve_ministry(ministry)
+        if not canonical:
+            raise ValueError(
+                f"Invalid ministry: '{ministry}'. Valid values: {valid_ministry_names()}"
+            )
+        if canonical in MINISTRIES_LIST_ONLY:
+            raise ToolValidationError(
+                f"'{canonical}' provides the interpretation list API only; law.go.kr has no "
+                f"full-text (본문) API for this ministry, so cgm_expc_service cannot be used.",
+                hints=[
+                    f"Use cgm_expc_search(ministry='{canonical}', ...) to list interpretations.",
+                    "Each list item's 법령해석상세링크 points to the ministry's own site "
+                    "(taxlaw.nts.go.kr) where the full text is published.",
+                    f"Ministries without full text: {', '.join(sorted(MINISTRIES_LIST_ONLY))}.",
+                ],
+            )
+        code = MINISTRY_CODES[canonical]
 
-        target = f"cgmExpc{code}"
+        target = cgm_expc_target(code)
         resolved_oc = resolve_oc(override_oc=oc)
         snake_params = {
             "oc": resolved_oc, "target": target,
@@ -2648,13 +2668,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
 
     # ==================== TASK 14: 특별행정심판 ====================
 
-    # Special tribunal target code mapping (for {Code}SpecialDecc pattern)
-    TRIBUNAL_CODES = {
-        "조세심판원": "tt",
-        "해양안전심판원": "kmst",
-        "국민권익위원회": "acr",
-        "인사혁신처 소청심사위원회": "adap",
-    }
+    # TRIBUNAL_CODES ({code}SpecialDecc pattern) imported from agency_codes above.
 
     # ==================== TOOL 43: special_decc_search ====================
     @server.tool(annotations=TOOL_ANNOTATIONS)
@@ -2710,7 +2724,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             valid = ", ".join(TRIBUNAL_CODES.keys())
             raise ValueError(f"Invalid tribunal: '{tribunal}'. Valid values: {valid}")
 
-        target = f"{code}SpecialDecc"
+        target = special_decc_target(code)
         resolved_oc = resolve_oc(override_oc=oc)
         snake_params = {
             "oc": resolved_oc, "target": target, "type": type,
@@ -2728,12 +2742,15 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             validate_date_range(rsl_yd, "rsl_yd")
             snake_params["rsl_yd"] = rsl_yd
 
-        return run_search(
+        # Response root is "Decc", list key "decc" — not the target name
+        response = run_search(
             get_client=_get_client, target=target, query=query,
             snake_params=snake_params, response_type=type, display=display,
-            ranking_field="사건명", list_type="items", item_category=target,
-            over_fetch_key="display",
+            ranking_field=SPECIAL_DECC_TITLE_FIELD, list_type="items",
+            item_category=SPECIAL_DECC_LIST_KEY, over_fetch_key="display",
         )
+        # Never leak the 100-row over-fetch, even if ranking didn't run
+        return enforce_display(response, display, SPECIAL_DECC_LIST_KEY)
 
     # ==================== TOOL 44: special_decc_service ====================
     @server.tool(annotations=TOOL_ANNOTATIONS)
@@ -2763,7 +2780,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             valid = ", ".join(TRIBUNAL_CODES.keys())
             raise ValueError(f"Invalid tribunal: '{tribunal}'. Valid values: {valid}")
 
-        target = f"{code}SpecialDecc"
+        target = special_decc_target(code)
         resolved_oc = resolve_oc(override_oc=oc)
         snake_params = {
             "oc": resolved_oc, "target": target,

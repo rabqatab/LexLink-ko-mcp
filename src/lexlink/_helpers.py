@@ -117,6 +117,29 @@ from .resolver import get_resolver
 from .ranking import rank_search_results, should_apply_ranking
 
 
+def detect_items_key(parsed_data: dict) -> Optional[str]:
+    """Find the single list-of-dicts key in a parsed search response.
+
+    Upstream list keys don't always match the target name (e.g. target
+    "ttSpecialDecc" → root "Decc", list "decc"; "moelCgmExpc" → "cgmExpc").
+    Returns the key when exactly one candidate exists, else None.
+    """
+    if not isinstance(parsed_data, dict):
+        return None
+    candidates = [
+        k for k, v in parsed_data.items()
+        if (isinstance(v, list) and v and all(isinstance(i, dict) for i in v))
+        or (isinstance(v, dict) and v and k.lower() not in ("basicinfo", "기본정보"))
+    ]
+    # Prefer real lists over single-item dicts
+    lists = [k for k in candidates if isinstance(parsed_data[k], list)]
+    if len(lists) == 1:
+        return lists[0]
+    if not lists and len(candidates) == 1:
+        return candidates[0]
+    return None
+
+
 def run_search(
     *,
     get_client,
@@ -192,6 +215,14 @@ def run_search(
                         items = extract_law_list(parsed_data)
                     elif list_type == "items":
                         items = extract_items_list(parsed_data, item_category)
+                        if not items:
+                            # Fallback: item_category didn't match the response's
+                            # list key (e.g. target "ttSpecialDecc" vs list key "decc").
+                            # If the response has exactly one list-of-dicts, use it.
+                            detected = detect_items_key(parsed_data)
+                            if detected:
+                                item_category = detected
+                                items = extract_items_list(parsed_data, item_category)
                     else:
                         items = parsed_data.get(list_type, [])
                         if not isinstance(items, list):
