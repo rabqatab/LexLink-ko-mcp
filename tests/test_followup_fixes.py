@@ -150,7 +150,7 @@ def test_redact_oc_structural(src, expected):
 def test_redact_oc_short_literal_is_delimited_only():
     assert redact_oc("the law of law", "law") == "the law of law"
     assert redact_oc("법 g4c 조항", "g4c") == "법 g4c 조항"
-    assert redact_oc('"x":"g4c" a=g4c&b', "g4c") == '"x":"***" a=***&b'
+    assert redact_oc('"x":"g4c" a=g4c&b a="g4c"', "g4c") == '"x":"g4c" a=***&b a="***"'
     assert redact_oc("tok unit-test-oc", FAKE_OC) == "tok ***"
 
 
@@ -345,3 +345,171 @@ def test_service_tools_send_type(monkeypatch):
     call("lnkDep_search", org="1400000", type="XML")
     assert len(seen) == 7
     assert all(p.get("type") == "XML" for p in seen), seen
+
+
+# --- review round 2: logging, ReDoS, encoded OC, corruption, slim, resolver, NO_MATCH ---
+
+import time  # noqa: E402
+
+OC_URL_BODY = "boom connecting to http://www.law.go.kr/DRF/lawService.do?OC={oc}&target=law"
+
+
+@pytest.mark.unit
+def test_generic_exception_log_has_no_oc(caplog):
+    def handler(request):
+        raise httpx.ConnectError(f"boom connecting to {request.url}", request=request)
+
+    c = LawAPIClient(base_url="http://law.test")
+    c.client = httpx.Client(transport=httpx.MockTransport(handler))
+    with caplog.at_level(logging.DEBUG):
+        out = c.get("/DRF/lawService.do", {"OC": FAKE_OC, "target": "law", "MST": "1"})
+    assert out["status"] == "error"
+    assert FAKE_OC not in json.dumps(out)
+    logged = "\n".join(
+        r.getMessage() + (str(r.exc_info[1]) if r.exc_info else "") for r in caplog.records
+    )
+    assert FAKE_OC not in logged
+    assert all(FAKE_OC not in (r.exc_text or "") for r in caplog.records)
+    assert not any(r.exc_info for r in caplog.records)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("body", [
+    "<a " + 'name="OC" ' * 10000,
+    "<a " * 30000,
+    '<a name="OC" ' * 8000,
+    "<" + "a" * 100000,
+], ids=["unclosed-names", "many-starts", "many-tags", "long-name"])
+def test_redact_oc_adversarial_is_linear(body):
+    start = time.perf_counter()
+    redact_oc(body, FAKE_OC)
+    assert time.perf_counter() - start < 1.0
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("src", [
+    "http://x/lawSearch.do%3FOC%3Dg4c%26target%3Dlaw",
+    "http://x/lawSearch.do?a=1%26oc%3Dg4c%26target%3Dlaw",
+    "a&#38;OC=g4c&#38;b=1",
+    "a&#x26;OC=g4c&#x26;b=1",
+    r"a\x26OC=g4c\x26b=1",
+    "<OC>g4c</OC>",
+    "<OC>some-long-value-here</OC>",
+])
+def test_redact_oc_encoded_forms(src):
+    out = redact_oc(src, "g4c")
+    assert "g4c" not in out and "long-value" not in out, out
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("src", [
+    'In this Act, "law" means a rule.',
+    'OC: "Office of Command"',
+    'OC="운영위원회"',
+    '{"ordinance":"OC = \'x (온라인)\'"}',
+    'x < y and name="OC" then value="keep" > z',
+])
+def test_redact_oc_does_not_corrupt_legal_text(src):
+    assert redact_oc(src, "law") == src
+
+
+@pytest.mark.unit
+def test_redact_oc_credential_values_and_short_literal_left_context():
+    assert redact_oc('OC: "abc12"') == 'OC: ""'
+    assert redact_oc('{"OC":"a.b@c-d"}') == '{"OC":""}'
+    assert redact_oc("OC = 'x'") == "OC = ''"
+    assert redact_oc('OC: "Some Thing", y', "Some Thing") == 'OC: "", y'
+    assert redact_oc('a="law"', "law") == 'a="***"'
+    assert redact_oc('<a name="OC" value="v">') == '<a name="OC" value="">'
+
+
+def _slim_search_client():
+    return SearchFake()
+
+
+@pytest.mark.unit
+def test_run_search_slim_has_no_id_note(monkeypatch):
+    monkeypatch.setenv("SLIM_RESPONSE", "1")
+    out = run_search(
+        get_client=lambda: SearchFake(), target="eflaw", query="저작권법",
+        snake_params={"oc": FAKE_OC, "target": "eflaw", "query": "저작권법", "type": "JSON"},
+        response_type="JSON", display=5, ranking_field="법령명한글", list_type="law",
+    )
+    assert "raw_content" not in out and "ranked_data" in out
+    assert "id_note" not in out
+
+
+@pytest.mark.unit
+def test_elaw_search_slim_has_no_id_note(monkeypatch):
+    monkeypatch.setenv("SLIM_RESPONSE", "1")
+    monkeypatch.setenv("OC", FAKE_OC)
+    body = json.dumps({"LawSearch": {"law": [
+        {"id": "1", "법령일련번호": "11", "법령명영문": "Copyright Act", "법령명한글": "저작권법"},
+    ]}}, ensure_ascii=False)
+
+    def handler(request):
+        return httpx.Response(200, text=body, request=request)
+
+    def make_client(*a, **k):
+        c = LawAPIClient(base_url="http://law.test")
+        c.client = httpx.Client(transport=httpx.MockTransport(handler))
+        return c
+
+    monkeypatch.setattr(server_mod, "LawAPIClient", make_client)
+    server = server_mod.create_server()
+    out = server._tool_manager.get_tool("elaw_search").fn(query="Copyright")
+    assert "raw_content" not in out
+    assert "id_note" not in out
+
+
+@pytest.mark.unit
+def test_legal_resolver_reports_success_false_extraction(monkeypatch, resolver_tools):
+    import lexlink.citation as citation_mod
+
+    async def failed(**kwargs):
+        return {"success": False, "citations": [],
+                "errors": [f"Could not fetch HTML OC={FAKE_OC}&x=1"]}
+
+    monkeypatch.setattr(citation_mod, "extract_article_citations", failed)
+    out = resolver_tools("legal_resolver", situation="저작물 이용")
+    assert out["citations"] == []
+    assert len(out["warnings"]) == 1
+    assert "인용 관계 추출" in out["warnings"][0]
+    assert "Could not fetch HTML" in out["warnings"][0]
+    assert FAKE_OC not in out["warnings"][0]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("body,fmt", [
+    ('{"Law":"일치하는 법령이 없습니다."}', "JSON"),
+    ("<Law>일치하는 법령이 없습니다.</Law>", "XML"),
+    ('<?xml version="1.0"?><Law>일치하는 법령이 없습니다.</Law>', "XML"),
+    ("일치하는 법령이 없습니다.", "XML"),
+])
+def test_bare_no_match_is_not_found(body, fmt):
+    err = detect_upstream_body_error(body, fmt, target="law", endpoint=SERVICE)
+    assert err and err["error_code"] == ErrorCode.NOT_FOUND
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("body,fmt", [
+    (json.dumps({"법령": {"법령명": "민법", "조문": "일치하는 법령이 없습니다 라고 규정"}},
+                ensure_ascii=False), "JSON"),
+    (json.dumps({"조문": "가" * 100 + "일치하는 법령이 없습니다 라고 규정", "법령명": "x"},
+                ensure_ascii=False), "JSON"),
+    ("<법령><법령명>민법</법령명><조문>일치하는 법령이 없습니다 라고</조문></법령>", "XML"),
+    ("가" * 100 + "일치하는 법령이 없습니다 라고 규정", "XML"),
+])
+def test_short_real_body_quoting_phrase_passes(body, fmt):
+    assert detect_upstream_body_error(body, fmt, target="law", endpoint=SERVICE) is None
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("target", ["lstrmRlt", "dlytrmRlt", "lstrmRltJo", "joRltLstrm"])
+@pytest.mark.parametrize("body", ["{}", ""])
+def test_query_keyed_target_not_found_hints(target, body):
+    err = detect_upstream_body_error(body, "JSON", target=target, endpoint=SERVICE)
+    assert err and err["error_code"] == ErrorCode.NOT_FOUND
+    text = json.dumps(err, ensure_ascii=False)
+    assert "연계 정보가 없거나 검색어를 확인하세요" in text
+    assert "ID(일련번호" not in text and "ID가 잘못" not in text

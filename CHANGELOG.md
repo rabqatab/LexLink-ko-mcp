@@ -24,6 +24,7 @@ All notable changes to LexLink are documented here in both English and Korean.
 - Zero-result searches (`run_search`, `elaw_search`) and empty `legal_resolver` / `check_precedent_odds` / `chain_dispute_prep` results keep `status: ok` but add `warning: "no_results"`, `message` and Korean `hints` (shorten query, use the formal name, `search=2` where the tool has it).
 - `extract_outcome` checks specific outcomes first (일부인용, 일부기각, 파기환송 ...) and requires disposition context for 기각/각하/인용/취소, so "일부인용" is no longer "인용" and "원심판결 인용" / "인용하지" / "인용된" are `불명`. `check_precedent_odds` adds `outcome_note` (heuristic, not a citable result).
 - `ordin_search` `knd` docstring: official codes are 30001 조례, 30002 규칙, 30003 훈령, 30004 예규, 30006 기타, 30010 고시, 30011 의회규칙 (source: open.law.go.kr ordinListGuide); 1/2/3 are not valid.
+- `lawService.do` "일치하는 … 없습니다" is `NOT_FOUND` only when the whole body is that message (short real bodies quoting the phrase pass); query-keyed linkage targets get a "연계 정보가 없거나 검색어를 확인하세요" hint. `id_note` is dropped with `raw_content` under `SLIM_RESPONSE`. `legal_resolver` reports `success: false` citation extractions in `warnings`.
 
 #### Changed (behaviour)
 - Search responses: in `ranked_data`, each row's `id` (upstream row number 1, 2, 3, not a key) is renamed to `rank`. `raw_content` is unchanged and, when kept, a new `id_note` explains that its `id` is a row number. Use 판례일련번호, 법령ID, 법령일련번호(MST) etc. for service calls.
@@ -32,7 +33,7 @@ All notable changes to LexLink are documented here in both English and Korean.
 - `docs/ISSUES.md` lists `*_service` tools without a size-control option; their docstrings now warn that responses can be large.
 
 #### Security
-- The OC credential is removed from upstream response bodies (e.g. `판례상세링크`), error messages, and debug/request logs (`has_oc` flag only); the `httpx` logger is limited to WARNING.
+- The OC credential is removed from upstream response bodies (e.g. `판례상세링크`), error messages, and debug/request logs (`has_oc` flag only); the `httpx` logger is limited to WARNING. The client's generic error path logs a redacted message plus traceback frames only. Encoded forms (`%3FOC%3D`, `&#38;OC=`, `\x26OC=`, `<OC>..</OC>`) are removed; redaction is linear-time and leaves legal text alone (`OC: "Office of Command"`, `"law" means`).
 - OC removal is now structural (hidden `name="OC"` form fields, `OC = '...'` / `"OC":"..."` assignments) regardless of the value; short literal values are replaced only when quote/`=`/`&`-delimited. Tool error messages and logs are redacted too (no `logger.exception`).
 
 ---
