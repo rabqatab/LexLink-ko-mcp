@@ -13,6 +13,7 @@ from lexlink import http_server
 from lexlink.http_security import (
     BearerAuthMiddleware,
     RateLimitMiddleware,
+    SessionBindingMiddleware,
     parse_auth_tokens,
     resolve_client_ip,
     token_id_for,
@@ -580,3 +581,184 @@ def test_dropped_entries_counted_and_warned_once_a_minute(tmp_path, caplog):
     assert w.dropped >= 20
     warns = [r for r in caplog.records if "entries dropped" in r.message]
     assert len(warns) == 1
+
+
+# ------------------------------------------------------- session binding
+def _two_token_env(monkeypatch, **extra):
+    monkeypatch.setenv("LEXLINK_AUTH_TOKENS", f"a:{TOKEN},b:{TOKEN2}")
+    monkeypatch.setenv("LEXLINK_ALLOWED_HOSTS", "testserver")
+    for k, v in extra.items():
+        monkeypatch.setenv(k, v)
+
+
+def _new_session(c, token=TOKEN):
+    r = c.post("/mcp", json=INIT, headers=auth_headers(token))
+    assert r.status_code == 200
+    h = {**auth_headers(token), "mcp-session-id": r.headers["mcp-session-id"]}
+    c.post("/mcp", json={"jsonrpc": "2.0", "method": "notifications/initialized"}, headers=h)
+    return r.headers["mcp-session-id"]
+
+
+LIST = {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}
+
+
+def test_session_foreign_token_gets_404_owner_unaffected(monkeypatch):
+    _two_token_env(monkeypatch)
+    with TestClient(http_server.create_app()) as c:
+        sid = _new_session(c)
+        hb = {**auth_headers(TOKEN2), "mcp-session-id": sid}
+        assert c.post("/mcp", json=LIST, headers=hb).status_code == 404
+        assert c.get("/mcp", headers=hb).status_code == 404
+        assert c.delete("/mcp", headers=hb).status_code == 404
+        ha = {**auth_headers(), "mcp-session-id": sid}
+        r = c.post("/mcp", json=LIST, headers=ha)
+        assert r.status_code == 200 and "law_search" in r.text
+
+
+def test_session_owner_delete_removes_binding(monkeypatch):
+    _two_token_env(monkeypatch)
+    with TestClient(http_server.create_app()) as c:
+        sid = _new_session(c)
+        ha = {**auth_headers(), "mcp-session-id": sid}
+        assert c.delete("/mcp", headers=ha).status_code in (200, 204)
+        assert c.post("/mcp", json=LIST, headers=ha).status_code == 404
+
+
+def test_session_binding_table_released_on_delete_and_404():
+    def fake(status_for):
+        async def app(scope, receive, send):
+            hdrs = [] if scope["method"] != "POST" else [(b"mcp-session-id", b"s1")]
+            if any(k == b"mcp-session-id" for k, _ in scope["headers"]):
+                hdrs = []
+            await send({"type": "http.response.start", "status": status_for(scope), "headers": hdrs})
+            await send({"type": "http.response.body", "body": b""})
+        return app
+
+    def scope(method, sid=None):
+        h = [("mcp-session-id", sid)] if sid else []
+        return make_scope(method=method, headers=h, state={"token_id": "A"})
+
+    mw = SessionBindingMiddleware(fake(lambda s: 200), 10)
+    asyncio.run(call(mw, scope("POST")))
+    assert mw._bindings == {"s1": "A"}
+    asyncio.run(call(mw, scope("DELETE", "s1")))
+    assert mw._bindings == {}
+    asyncio.run(call(mw, scope("POST")))
+    mw.app = fake(lambda s: 404)  # session crashed/terminated inside the app
+    asyncio.run(call(mw, scope("POST", "s1")))
+    assert mw._bindings == {}
+
+
+def test_session_unknown_and_foreign_bodies_identical(monkeypatch):
+    _two_token_env(monkeypatch)
+    with TestClient(http_server.create_app()) as c:
+        sid = _new_session(c)
+        unknown = c.post("/mcp", json=LIST, headers={
+            **auth_headers(TOKEN2), "mcp-session-id": "0" * 32})
+        foreign = c.post("/mcp", json=LIST, headers={
+            **auth_headers(TOKEN2), "mcp-session-id": sid})
+        assert unknown.status_code == foreign.status_code == 404
+        assert unknown.content == foreign.content
+        assert unknown.headers["content-type"] == foreign.headers["content-type"]
+
+
+def test_session_cap_refuses_new_sessions_without_eviction(monkeypatch):
+    _two_token_env(monkeypatch, LEXLINK_MAX_SESSIONS="2")
+    with TestClient(http_server.create_app()) as c:
+        s1 = _new_session(c)
+        s2 = _new_session(c)
+        r = c.post("/mcp", json=INIT, headers=auth_headers(TOKEN2))
+        assert r.status_code == 503 and "mcp-session-id" not in r.headers
+        # existing sessions stay bound (not evicted) and still work for the owner
+        hb = {**auth_headers(TOKEN2), "mcp-session-id": s1}
+        assert c.post("/mcp", json=LIST, headers=hb).status_code == 404
+        ha = {**auth_headers(), "mcp-session-id": s1}
+        assert c.post("/mcp", json=LIST, headers=ha).status_code == 200
+        # freeing a slot admits a new session
+        assert c.delete("/mcp", headers={**auth_headers(), "mcp-session-id": s2}).status_code in (200, 204)
+        assert c.post("/mcp", json=INIT, headers=auth_headers(TOKEN2)).status_code == 200
+
+
+def test_session_binding_streams_unbuffered():
+    def build(app):
+        return BearerAuthMiddleware(SessionBindingMiddleware(app, 10), [TOKEN])
+
+    scope = make_scope(method="GET", headers=[("authorization", f"Bearer {TOKEN}")], state={})
+    sent = asyncio.run(_prove_streaming(build, scope, None))
+    assert [m.get("body") for m in sent[1:]] == [b"data: one\n\n", b"data: two\n\n"]
+    assert [v for k, v in sent[0]["headers"] if k == b"set-cookie"] == [b"a=1", b"b=2"]
+
+
+SSE_SID = "a" * 32
+
+
+def sse_app(release: asyncio.Event):
+    async def app(scope, receive, send):
+        if scope["path"] == "/sse":
+            await send({"type": "http.response.start", "status": 200,
+                        "headers": [(b"content-type", b"text/event-stream")]})
+            await send({"type": "http.response.body", "more_body": True,
+                        "body": f"event: endpoint\r\ndata: /messages/?session_id={SSE_SID}\r\n\r\n".encode()})
+            await release.wait()
+            await send({"type": "http.response.body", "body": b""})
+        else:
+            await send({"type": "http.response.start", "status": 202, "headers": []})
+            await send({"type": "http.response.body", "body": b"Accepted"})
+    return app
+
+
+def _sse_scope(method, path, token, query=b""):
+    s = make_scope(method=method, headers=[("authorization", f"Bearer {token}")], state={})
+    s.update(path=path, query_string=query)
+    return s
+
+
+def test_sse_session_bound_to_token_and_released_on_close():
+    async def run():
+        release = asyncio.Event()
+        got = asyncio.Event()
+        chunks = []
+        app = BearerAuthMiddleware(
+            SessionBindingMiddleware(sse_app(release), 10), [TOKEN, TOKEN2])
+
+        async def receive():
+            await asyncio.sleep(3600)
+
+        async def send(m):
+            if m["type"] == "http.response.body":
+                chunks.append(m["body"])
+                got.set()
+
+        task = asyncio.create_task(app(_sse_scope("GET", "/sse", TOKEN), receive, send))
+        await asyncio.wait_for(got.wait(), 2)
+        assert chunks[0].startswith(b"event: endpoint")  # forwarded unaltered
+        q = f"session_id={SSE_SID}".encode()
+        post_b = await call(app, _sse_scope("POST", "/messages/", TOKEN2, q), b"{}")
+        post_a = await call(app, _sse_scope("POST", "/messages/", TOKEN, q), b"{}")
+        post_u = await call(app, _sse_scope("POST", "/messages/", TOKEN2, b"session_id=" + b"b" * 32), b"{}")
+        post_dup = await call(app, _sse_scope(
+            "POST", "/messages/", TOKEN2, b"session_id=" + b"b" * 32 + b"&" + q), b"{}")
+        post_up = await call(app, _sse_scope(
+            "POST", "/messages/", TOKEN2, f"session_id={SSE_SID.upper()}".encode()), b"{}")
+        release.set()
+        await asyncio.wait_for(task, 2)
+        after = await call(app, _sse_scope("POST", "/messages/", TOKEN2, q), b"{}")
+        return post_b, post_a, post_u, post_dup, post_up, after
+
+    post_b, post_a, post_u, post_dup, post_up, after = asyncio.run(run())
+    assert post_b[0]["status"] == 404 and post_b[1]["body"] == b"Could not find session"
+    assert post_dup[0]["status"] == 404 and post_up[0]["status"] == 404
+    assert post_a[0]["status"] == 202
+    assert post_u[0]["status"] == 202  # unknown id passes through to the app
+    assert after[0]["status"] == 202  # binding gone once the stream ended
+
+
+def test_noauth_sessions_unaffected(monkeypatch):
+    monkeypatch.setenv("LEXLINK_ALLOW_NO_AUTH", "true")
+    monkeypatch.setenv("LEXLINK_ALLOWED_HOSTS", "testserver")
+    with TestClient(http_server.create_app()) as c:
+        r = c.post("/mcp", json=INIT, headers=MCP_HEADERS)
+        sid = r.headers["mcp-session-id"]
+        h = {**MCP_HEADERS, "mcp-session-id": sid}
+        c.post("/mcp", json={"jsonrpc": "2.0", "method": "notifications/initialized"}, headers=h)
+        assert c.post("/mcp", json=LIST, headers=h).status_code == 200

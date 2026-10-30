@@ -4,6 +4,7 @@ HTTP hardening for the LexLink HTTP/SSE server (pure ASGI, no BaseHTTPMiddleware
 Provides:
     - BearerAuthMiddleware: constant-time bearer token check (fail closed)
     - RateLimitMiddleware: per-token concurrency + sliding-window limits
+    - SessionBindingMiddleware: MCP session id -> token binding (Streamable HTTP + SSE)
     - build_transport_security(): Host/Origin validation settings for FastMCP
     - resolve_client_ip(): X-Forwarded-For handling for trusted proxies
 
@@ -19,6 +20,7 @@ Environment variables:
     LEXLINK_TRUSTED_PROXIES   comma list of exact peer IPs allowed to set X-Forwarded-For
     LEXLINK_MAX_CONCURRENCY   concurrent POST requests per token (default 8)
     LEXLINK_RATE_LIMIT_PER_MIN  POST requests per minute per token (default 60)
+    LEXLINK_MAX_SESSIONS      bound MCP sessions kept in memory (default 10000)
 """
 
 import hashlib
@@ -27,9 +29,12 @@ import json
 import logging
 import math
 import os
+import re
 import time
 from collections import deque
 from typing import Optional
+from urllib.parse import parse_qsl
+from uuid import UUID
 
 logger = logging.getLogger(__name__)
 
@@ -299,3 +304,142 @@ class RateLimitMiddleware:
                 self._inflight[key] = left
             else:
                 self._inflight.pop(key, None)
+
+
+# ---------------------------------------------------------------------------
+# Session binding
+# ---------------------------------------------------------------------------
+
+# Byte-identical to what mcp's StreamableHTTPSessionManager sends for an
+# unknown session id (404, application/json), so a foreign id is
+# indistinguishable from a non-existent one.
+_STREAMABLE_NOT_FOUND = (
+    b'{"jsonrpc":"2.0","id":"server-error",'
+    b'"error":{"code":-32600,"message":"Session not found"}}'
+)
+# Same for SSE POST /messages/ (starlette Response default text/plain).
+_SSE_NOT_FOUND = b"Could not find session"
+_SSE_ENDPOINT_RE = re.compile(rb"session_id=([0-9A-Za-z-]{32,36})")
+_SSE_SCAN_LIMIT = 4096
+
+
+def _sse_key(raw: str) -> str:
+    """Canonical key for an SSE session id (UUID hex, however it is spelled)."""
+    try:
+        return "sse:" + UUID(hex=raw).hex
+    except ValueError:
+        return "sse:" + raw
+
+
+class SessionBindingMiddleware:
+    """Bind MCP session ids to the token that created them.
+
+    Streamable HTTP: the ``mcp-session-id`` response header of a request that
+    carried none is recorded against ``scope["state"]["token_id"]`` before the
+    response is forwarded. Later requests naming a session bound to another
+    token get the app's own "unknown session" 404 and never reach the app.
+    SSE: the ``session_id`` in the first ``endpoint`` event of ``GET /sse`` is
+    bound the same way (recorded before the chunk is forwarded, so the client
+    cannot POST before the binding exists) and enforced on the
+    ``session_id`` query parameter; removed when the stream ends.
+
+    Memory: at most ``max_sessions`` bindings. Entries are never evicted while
+    the session may still exist (an evicted binding would turn into an
+    unbound session any token could use); at the cap new sessions are
+    refused with 503 instead. Bindings are removed on owner DELETE (2xx), when
+    the app answers 404 for a bound id (terminated/crashed session) and when
+    an SSE stream ends. Ids unknown to the binding table pass to the app,
+    which answers 404 itself.
+
+    No-auth mode: every request has token_id "noauth", so binding is a no-op.
+    In-memory, single process; no awaits between table reads and writes.
+    """
+
+    def __init__(self, app, max_sessions: Optional[int] = None):
+        self.app = app
+        self.max_sessions = (
+            _int_env("LEXLINK_MAX_SESSIONS", 10000) if max_sessions is None else max_sessions
+        )
+        self._bindings: dict[str, str] = {}
+
+    def _foreign(self, key: str, token_id: str) -> bool:
+        owner = self._bindings.get(key)
+        return owner is not None and not hmac.compare_digest(
+            owner.encode("utf-8"), token_id.encode("utf-8"))
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        token_id = scope.get("state", {}).get("token_id", NO_AUTH_TOKEN_ID)
+        method = scope.get("method")
+
+        header_ids = [
+            v.decode("latin-1") for k, v in scope.get("headers", [])
+            if k == b"mcp-session-id"
+        ]
+        query_ids = [
+            v for k, v in parse_qsl(
+                scope.get("query_string", b"").decode("latin-1"), keep_blank_values=True)
+            if k == "session_id"
+        ]
+        if any(self._foreign(i, token_id) for i in header_ids) or any(
+                self._foreign(_sse_key(i), token_id) for i in query_ids):
+            if query_ids and not header_ids:
+                await self._reject(send, b"text/plain; charset=utf-8", _SSE_NOT_FOUND)
+            else:
+                await self._reject(send, b"application/json", _STREAMABLE_NOT_FOUND)
+            return
+
+        creating = not header_ids and method in ("POST", "GET") and not query_ids
+        if creating and len(self._bindings) >= self.max_sessions:
+            await _json_response(
+                send, 503,
+                {"error": "too_many_sessions", "message": "Session limit reached"},
+                [(b"retry-after", b"30")],
+            )
+            return
+
+        status = 0
+        sse_buf: Optional[bytearray] = bytearray() if (creating and method == "GET") else None
+        sse_key: Optional[str] = None
+
+        async def wrapped_send(message):
+            nonlocal status, sse_buf, sse_key
+            if message["type"] == "http.response.start":
+                status = message["status"]
+                if creating:
+                    for k, v in message.get("headers", []):
+                        if k.lower() == b"mcp-session-id":
+                            self._bindings[v.decode("latin-1")] = token_id
+                            break
+                if sse_buf is not None and status != 200:
+                    sse_buf = None
+            elif message["type"] == "http.response.body" and sse_buf is not None:
+                sse_buf += message.get("body", b"")
+                m = _SSE_ENDPOINT_RE.search(bytes(sse_buf))
+                if m is not None and b"\n" in sse_buf[m.end():]:
+                    sse_key = _sse_key(m.group(1).decode("ascii"))
+                    self._bindings[sse_key] = token_id
+                    sse_buf = None
+                elif len(sse_buf) > _SSE_SCAN_LIMIT:
+                    sse_buf = None  # not an SSE endpoint stream; stop scanning
+            await send(message)
+
+        try:
+            await self.app(scope, receive, wrapped_send)
+        finally:
+            if sse_key is not None:
+                self._bindings.pop(sse_key, None)
+        for i in header_ids:
+            if self._bindings.get(i) == token_id and (
+                    status == 404 or (method == "DELETE" and 200 <= status < 300)):
+                del self._bindings[i]
+
+    @staticmethod
+    async def _reject(send, ctype: bytes, body: bytes) -> None:
+        await send({"type": "http.response.start", "status": 404, "headers": [
+            (b"content-length", str(len(body)).encode()),
+            (b"content-type", ctype),
+        ]})
+        await send({"type": "http.response.body", "body": body})

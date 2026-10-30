@@ -8,6 +8,9 @@ All notable changes to LexLink are documented here in both English and Korean.
 
 ### Unreleased
 
+#### Session binding
+- New pure ASGI `SessionBindingMiddleware` (order Auth > Logging > RateLimit > SessionBinding > app): MCP sessions (Streamable HTTP `mcp-session-id`, SSE `session_id` from the `endpoint` event) are bound to the creating token. Another token gets the same 404 an unknown session gets and never reaches the app; owner DELETE / SSE close removes the binding. `LEXLINK_MAX_SESSIONS` (default 10000) caps bindings; at the cap new sessions get 503 rather than evicting (eviction would leave an unbound, usable session). No-auth mode shares one id, so binding is a no-op.
+
 #### HTTP hardening follow-up
 - Default logs no longer contain client-controlled strings: `tool_name` only for registered tools (else `<unknown>`), argument keys only if declared in the tool schema (others counted in `unknown_arg_keys`), `method` limited to known MCP methods. `create_app` passes tool names/schemas to `LoggingMiddleware`.
 - `LEXLINK_LOG_BODIES` now drops oc/token/authorization-like keys recursively (dicts, lists, JSON inside `result` text).
@@ -547,6 +550,9 @@ All notable changes to LexLink are documented here in both English and Korean.
 ## 한국어 (Korean)
 
 ### 미배포 (Unreleased)
+
+#### 세션 바인딩
+- 순수 ASGI `SessionBindingMiddleware` 추가(순서 Auth > Logging > RateLimit > SessionBinding > app): MCP 세션(Streamable HTTP `mcp-session-id`, SSE `endpoint` 이벤트의 `session_id`)을 만든 토큰에 묶음. 다른 토큰은 존재하지 않는 세션과 같은 404를 받고 앱까지 도달하지 못하며, 소유자 DELETE/SSE 종료 시 바인딩 제거. `LEXLINK_MAX_SESSIONS`(기본 10000) 상한에서는 오래된 항목을 쫓아내지 않고(바인딩 없는 세션이 생기므로) 새 세션을 503으로 거절. 인증 없음 모드는 모든 요청이 같은 id라 효과 없음.
 
 #### HTTP 보강
 - 기본 로그에 클라이언트가 제어하는 문자열이 남지 않음: 등록된 도구만 `tool_name`, 스키마에 선언된 인자 키만 기록(나머지는 `unknown_arg_keys` 개수), 알려진 MCP 메서드만 `method`.

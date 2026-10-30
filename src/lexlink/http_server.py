@@ -18,9 +18,10 @@ Authentication:
     law.go.kr validates OC + requesting IP as a pair, so the server's OC
     must have the server's public IP registered at open.law.go.kr.
 
-Hardening (pure ASGI, order Auth > Logging > RateLimit > app):
+Hardening (pure ASGI, order Auth > Logging > RateLimit > SessionBinding > app):
     - Host/Origin validation via LEXLINK_ALLOWED_HOSTS / LEXLINK_ALLOWED_ORIGINS
     - Per-token concurrency and per-minute limits (single process only)
+    - MCP sessions bound to the creating token (LEXLINK_MAX_SESSIONS)
     - Privacy-preserving JSONL logging with retention (see raw_logger.py)
     Run a single uvicorn worker. See docs/OPERATIONS.md for all variables.
 
@@ -60,6 +61,7 @@ from starlette.routing import Mount
 from .http_security import (
     BearerAuthMiddleware,
     RateLimitMiddleware,
+    SessionBindingMiddleware,
     build_transport_security,
     load_auth_tokens,
 )
@@ -77,7 +79,7 @@ logger = logging.getLogger(__name__)
 
 def create_app(transport: str = "http"):
     """
-    Build the ASGI app: Auth > Logging > RateLimit > FastMCP.
+    Build the ASGI app: Auth > Logging > RateLimit > SessionBinding > FastMCP.
 
     Owns the single create_server() call and the session manager lifespan.
     Raises RuntimeError at startup if authentication is not configured
@@ -131,7 +133,8 @@ def create_app(transport: str = "http"):
             flush_all()
 
     starlette_app = Starlette(routes=[Mount("/", app=inner)], lifespan=lifespan)
-    app = RateLimitMiddleware(starlette_app)
+    app = SessionBindingMiddleware(starlette_app)
+    app = RateLimitMiddleware(app)
     app = LoggingMiddleware(app, tool_schemas=tool_schemas)
     return BearerAuthMiddleware(app, tokens)
 
