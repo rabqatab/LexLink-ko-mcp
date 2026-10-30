@@ -9,7 +9,9 @@ HTTP/SSE 모드(`uv run serve`)를 외부에 노출할 때의 인증, 로깅, �
 - 인증 없이는 시작되지 않습니다(fail closed). `LEXLINK_AUTH_TOKENS`가 없고 `LEXLINK_ALLOW_NO_AUTH=true`도 아니면 기동 시 `RuntimeError`가 발생합니다.
 - HTTP 모드에서는 도구의 `oc` 인자를 **무시**하고 항상 서버 환경변수 `OC`를 사용합니다. (stdio 모드는 기존대로 `oc` 인자를 허용합니다.)
 - 미들웨어 순서: 인증 > 로깅 > 속도 제한 > 앱.
-- ASGI 팩토리로도 실행할 수 있습니다: `uvicorn --factory lexlink.http_server:create_app --host 127.0.0.1 --port 8000` (워커 1개).
+- ASGI 팩토리로도 실행할 수 있습니다: `uvicorn --factory --no-proxy-headers lexlink.http_server:create_app --host 127.0.0.1 --port 8000` (워커 1개). 팩토리는 **항상 Streamable HTTP(`/mcp`)만, TLS 없는 평문 HTTP로** 서비스하며 `TRANSPORT`/`HOST`/`PORT`는 무시합니다(주소는 uvicorn 옵션 사용). `--no-proxy-headers`를 반드시 붙여 `LEXLINK_TRUSTED_PROXIES`가 `X-Forwarded-For`의 유일한 판단 기준이 되게 하세요(`uv run serve`는 코드에서 `proxy_headers=False`로 실행).
+- HTTP 모드의 "`oc` 인자 무시" 스위치는 **프로세스 단위**입니다. `create_app()`을 호출하면 같은 프로세스의 모든 도구 호출이 서버 `OC`를 사용합니다.
+- **SSE 전송(`TRANSPORT=sse`, 현재 기본값)의 한계**: 도구 결과가 `GET /sse` 스트림으로 전달되고 `POST /messages/`는 즉시 202를 반환합니다. 따라서 요청별 로그의 `status`/`error_code`는 항상 `ok`/없음으로 남고(스트림은 연결 종료 시 `method: GET`으로 한 번만 기록), 동시성 제한은 업스트림 부하를 제한하지 못합니다(분당 제한은 동작). 시작 시 경고를 출력합니다. 의미 있는 로그/제한이 필요하면 `TRANSPORT=http`를 사용하세요.
 
 ## 2. 환경변수
 
@@ -21,7 +23,7 @@ HTTP/SSE 모드(`uv run serve`)를 외부에 노출할 때의 인증, 로깅, �
 | `LEXLINK_AUTH_TOKENS` | - | `이름:토큰,이름2:토큰2`. 클라이언트는 `Authorization: Bearer <토큰>` 전송. 형식 오류/중복이면 기동 실패 |
 | `LEXLINK_ALLOW_NO_AUTH` | - | 정확히 `true`일 때만 토큰 없이 기동 (PlayMCP 인증 없음 등록 전용). 기동 시 강한 경고 로그 출력 |
 | `LEXLINK_ALLOWED_HOSTS` | - | 허용 Host 헤더 목록(쉼표 구분, 예: `mcp.example.com`). 설정 시 DNS 리바인딩 보호가 해당 호스트 기준으로 켜짐 |
-| `LEXLINK_ALLOWED_ORIGINS` | - | 허용 Origin 목록(쉼표 구분, 예: `https://mcp.example.com`) |
+| `LEXLINK_ALLOWED_ORIGINS` | - | 허용 Origin 목록(쉼표 구분, 예: `https://mcp.example.com`). `LEXLINK_ALLOWED_HOSTS` 없이 설정하면 기동 시 `RuntimeError` |
 | `LEXLINK_TRUSTED_PROXIES` | - | `X-Forwarded-For`를 신뢰할 직접 접속 피어 IP 목록(정확히 일치, 쉼표 구분) |
 | `LEXLINK_MAX_CONCURRENCY` | `8` | 토큰별 동시 POST 요청 수 (`0`이면 제한 없음) |
 | `LEXLINK_RATE_LIMIT_PER_MIN` | `60` | 토큰별 분당 POST 요청 수, 슬라이딩 윈도우 (`0`이면 제한 없음) |
@@ -38,12 +40,20 @@ HTTP/SSE 모드(`uv run serve`)를 외부에 노출할 때의 인증, 로깅, �
 
 기본 로그(JSONL, 하루 한 파일)에는 다음만 남습니다.
 
-`timestamp`, `token_id`(토큰 SHA-256 앞 12자; 토큰/이름 아님), `method`, `tool_name`, 인자 **키 이름**(값 없음), `status`(ok/error), `error_code`, `http_status`, `response_bytes`(상한을 넘어도 전체 크기), `duration_ms`, `client_ip`. 캡처 상한을 넘으면 `truncated_capture: true`가 붙습니다.
+`timestamp`, `token_id`(토큰 SHA-256 앞 12자; 토큰/이름 아님), `method`(알려진 MCP 메서드만, 그 외 `<unknown>`), `tool_name`(등록된 도구만, 그 외 `<unknown>`), 해당 도구 스키마에 선언된 인자 **키 이름**(값 없음; 선언되지 않은 키는 개수만 `unknown_arg_keys`), `status`(ok/error), `error_code`, `http_status`, `response_bytes`(상한을 넘어도 전체 크기), `duration_ms`, `client_ip`. 캡처 상한을 넘으면 `truncated_capture: true`가 붙습니다.
 
 - 인자 값, 결과 본문, `Authorization` 헤더, 토큰은 기본으로 기록되지 않습니다.
-- `LEXLINK_LOG_BODIES=true`는 사용자의 법률 질의 내용이 로그에 남을 수 있으므로 개인정보 처리 방침을 확인한 뒤 사용하세요. 이때도 `oc`/`token`/`authorization` 키는 제외되고 OC는 마스킹됩니다.
+- `LEXLINK_LOG_BODIES=true`는 사용자의 법률 질의 내용이 로그에 남을 수 있으므로 개인정보 처리 방침을 확인한 뒤 사용하세요. 이때도 `oc`/`token`/`authorization` 계열 키는 중첩된 dict/list 및 `result` 안에서도 재귀적으로 제거되고 OC는 마스킹됩니다.
 - 쓰기는 별도 백그라운드 스레드가 큐로 처리하며(이벤트 루프 비차단), 종료 시 flush 됩니다.
-- 보존 기간 정리는 기록 스레드 시작 시와 날짜가 바뀔 때 실행됩니다.
+- 보존 기간 정리는 기록 스레드 시작 시(첫 기록을 기다리지 않음)와 날짜가 바뀔 때 실행됩니다.
+- 로그 파일은 권한 `0600`, 디렉터리는 `0700`으로 생성됩니다(이미 존재하는 디렉터리/파일의 권한은 바꾸지 않음).
+- 큐(10000건)가 가득 차면 항목이 버려지며, 개수를 세어 최대 1분에 한 번 경고 로그를 남깁니다.
+
+### 알려진 한계
+
+- 세션은 토큰에 묶이지 않습니다. 다른 토큰이라도 `Mcp-Session-Id`(추측 불가능한 값)를 알면 해당 세션을 사용할 수 있습니다.
+- 401 응답은 로그에 남지 않고(인증이 가장 바깥 미들웨어) 속도 제한도 받지 않습니다. uvicorn 액세스 로그에서만 확인할 수 있습니다.
+- 도구 호출이 동기 `httpx` 클라이언트를 사용하므로 업스트림이 느리면 이벤트 루프가 막혀 속도 제한 429 응답도 지연될 수 있습니다.
 - 이전 형식(요청/응답 병합 로그)을 읽는 `log_processor.py`는 새 형식을 처리하지 않습니다.
 
 ## 4. TLS 리버스 프록시

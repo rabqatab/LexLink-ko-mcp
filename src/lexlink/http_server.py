@@ -29,7 +29,7 @@ Usage:
     OC=your_oc LEXLINK_AUTH_TOKENS=name:token TRANSPORT=http uv run serve
 
     # Or as an ASGI factory (single worker)
-    uvicorn --factory lexlink.http_server:create_app
+    uvicorn --factory --no-proxy-headers lexlink.http_server:create_app
 
     # Run with SSE transport (legacy)
     OC=your_oc uv run serve
@@ -85,13 +85,35 @@ def create_app(transport: str = "http"):
     ``uvicorn --factory lexlink.http_server:create_app`` (single worker only:
     rate limits and log writer are in-process).
 
+    Note: the factory serves plain HTTP only (no TLS); put a reverse proxy in
+    front. The ``TRANSPORT``/``HOST``/``PORT`` env vars are ignored by the
+    factory (it always serves Streamable HTTP; use uvicorn flags for the
+    rest). Run uvicorn with ``--no-proxy-headers`` so that
+    LEXLINK_TRUSTED_PROXIES is the only X-Forwarded-For authority.
+
+    Side effect: the HTTP-mode "ignore the tool-argument oc" switch
+    (``params.set_ignore_oc_override(True)``) is per-process, not per-app:
+    after create_app() every tool call in this process uses the server's OC,
+    including other servers or stdio sessions embedded in the same process.
+
     Args:
         transport: "http" (Streamable HTTP, /mcp) or "sse" (legacy, /sse)
     """
     tokens = load_auth_tokens()  # fail closed before anything else
     set_ignore_oc_override(True)  # HTTP callers must not choose the OC
 
+    if transport == "sse":
+        logger.warning(
+            "TRANSPORT=sse: results travel on the GET /sse stream, so per-request "
+            "log status/error_code and the concurrency limit cannot observe tool "
+            "results (POST /messages returns 202 immediately). Prefer TRANSPORT=http. "
+            "See docs/OPERATIONS.md."
+        )
     fastmcp = create_server(transport_security=build_transport_security())
+    tool_schemas = {
+        t.name: set((t.parameters or {}).get("properties", {}))
+        for t in fastmcp._tool_manager.list_tools()
+    }
     if transport == "sse":
         inner = fastmcp.sse_app()
     else:
@@ -110,7 +132,7 @@ def create_app(transport: str = "http"):
 
     starlette_app = Starlette(routes=[Mount("/", app=inner)], lifespan=lifespan)
     app = RateLimitMiddleware(starlette_app)
-    app = LoggingMiddleware(app)
+    app = LoggingMiddleware(app, tool_schemas=tool_schemas)
     return BearerAuthMiddleware(app, tokens)
 
 
@@ -130,7 +152,7 @@ def run_sse_server(host: str = "0.0.0.0", port: int = 8000):
     logger.info(f"Starting LexLink MCP server (SSE) on {host}:{port}")
     logger.info(f"Endpoint: http://{host}:{port}/sse")
 
-    uvicorn.run(create_app("sse"), host=host, port=port)
+    uvicorn.run(create_app("sse"), host=host, port=port, proxy_headers=False)
 
 
 def run_http_server(host: str = "0.0.0.0", port: int = 8000):
@@ -149,7 +171,7 @@ def run_http_server(host: str = "0.0.0.0", port: int = 8000):
     logger.info(f"Starting LexLink MCP server (HTTP) on {host}:{port}")
     logger.info(f"Endpoint: http://{host}:{port}/mcp")
 
-    uvicorn.run(create_app("http"), host=host, port=port)
+    uvicorn.run(create_app("http"), host=host, port=port, proxy_headers=False)
 
 
 def main():

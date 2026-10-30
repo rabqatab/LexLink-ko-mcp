@@ -7,8 +7,8 @@ Provides:
     - build_transport_security(): Host/Origin validation settings for FastMCP
     - resolve_client_ip(): X-Forwarded-For handling for trusted proxies
 
-All middlewares only act on ``scope["type"] == "http"``; lifespan (and any
-other scope type) is passed straight through, and no response body is ever
+All middlewares only act on ``scope["type"] == "http"``; lifespan is passed
+straight through, websocket scopes are closed with 1008 by the auth middleware, and no response body is ever
 buffered, so streaming (SSE) works unchanged.
 
 Environment variables:
@@ -119,6 +119,11 @@ def build_transport_security():
     Protection is never disabled.
     """
     hosts = _csv_env("LEXLINK_ALLOWED_HOSTS")
+    if not hosts and _csv_env("LEXLINK_ALLOWED_ORIGINS"):
+        raise RuntimeError(
+            "LEXLINK_ALLOWED_ORIGINS requires LEXLINK_ALLOWED_HOSTS to be set "
+            "(origins are not enforced without host validation settings)"
+        )
     if not hosts:
         logger.warning(
             "LEXLINK_ALLOWED_HOSTS is not set: FastMCP's default only accepts "
@@ -195,8 +200,13 @@ class BearerAuthMiddleware:
         )
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http":
+        if scope["type"] == "lifespan":
             await self.app(scope, receive, send)
+            return
+        if scope["type"] != "http":
+            # websocket (or unknown) scopes are never authorised here
+            if scope["type"] == "websocket":
+                await send({"type": "websocket.close", "code": 1008})
             return
         state = scope.setdefault("state", {})
         if self._tokens is None:

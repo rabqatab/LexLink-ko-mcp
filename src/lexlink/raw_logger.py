@@ -6,8 +6,8 @@ keeping capped copies of the request/response bytes. One JSONL entry per MCP
 call is queued to a single background daemon thread, so the event loop never
 blocks on disk I/O and streams are never buffered.
 
-Default entry fields: timestamp, token_id, method, tool_name, argument key
-names (no values), status, error_code, http_status, response_bytes,
+Default entry fields: timestamp, token_id, method, tool_name, declared argument
+key names (no values; unknown ones only as a count), status, error_code, http_status, response_bytes,
 duration_ms, client_ip. With LEXLINK_LOG_BODIES=true, argument values (minus
 oc/token/authorization keys) and the result body are logged too, with the OC
 credential redacted.
@@ -41,7 +41,20 @@ logger = logging.getLogger(__name__)
 LOG_DIR = Path(__file__).parent.parent.parent / "logs" / "playmcp"
 
 _DATED_FILE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})\.jsonl$")
-_SENSITIVE_KEYS = {"oc", "token", "authorization"}
+_SENSITIVE_KEYS = {"oc", "apikey", "api_key", "password", "secret"}
+_SENSITIVE_SUBSTRINGS = ("token", "authorization")
+UNKNOWN = "<unknown>"
+# Fixed set of MCP methods that may appear in default-mode logs. Anything else
+# (client-controlled free text) is logged as "<unknown>".
+KNOWN_METHODS = frozenset({
+    "initialize", "ping", "tools/list", "tools/call", "prompts/list",
+    "prompts/get", "resources/list", "resources/templates/list",
+    "resources/read", "resources/subscribe", "resources/unsubscribe",
+    "completion/complete", "logging/setLevel", "notifications/initialized",
+    "notifications/cancelled", "notifications/progress",
+    "notifications/roots/list_changed",
+})
+_DROP_WARN_INTERVAL = 60.0
 _RESPONSE_KEY_RE = re.compile(r'error_code\\*"\s*:\s*\\*"([A-Za-z0-9_]+)')
 
 
@@ -62,6 +75,9 @@ class LogWriter:
         self.retention_days = retention_days
         self._queue: queue.Queue = queue.Queue(maxsize=maxsize)
         self._current_day: Optional[date] = None
+        self.dropped = 0
+        self._dropped_reported = 0
+        self._last_drop_warn = float("-inf")
         self._thread = threading.Thread(
             target=self._run, name="lexlink-log-writer", daemon=True
         )
@@ -72,13 +88,31 @@ class LogWriter:
         try:
             self._queue.put_nowait(entry)
         except queue.Full:
-            pass
+            self.dropped += 1
+            self._maybe_warn_drops()
+
+    def _maybe_warn_drops(self) -> None:
+        """Warn about dropped entries at most once per minute."""
+        now = time.monotonic()
+        if now - self._last_drop_warn < _DROP_WARN_INTERVAL:
+            return
+        self._last_drop_warn = now
+        logger.warning(
+            "log queue full: %d entries dropped so far (%d since last warning)",
+            self.dropped, self.dropped - self._dropped_reported,
+        )
+        self._dropped_reported = self.dropped
 
     def flush(self) -> None:
         """Block until everything queued so far is written."""
         self._queue.join()
 
     def _run(self) -> None:
+        try:  # retention runs at writer start, not only at the first write
+            self._current_day = datetime.now().date()
+            self.apply_retention(self._current_day)
+        except Exception as e:
+            logger.warning("log retention failed: %s", type(e).__name__)
         while True:
             entry = self._queue.get()
             try:
@@ -90,12 +124,13 @@ class LogWriter:
 
     def _write_entry(self, entry: dict) -> None:
         today = datetime.now().date()
-        self.log_dir.mkdir(parents=True, exist_ok=True)
+        self.log_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         if today != self._current_day:
             self._current_day = today
             self.apply_retention(today)
         path = self.log_dir / f"{today.isoformat()}.jsonl"
-        with open(path, "a", encoding="utf-8") as f:
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        with os.fdopen(fd, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
 
     def apply_retention(self, today: Optional[date] = None) -> None:
@@ -158,11 +193,27 @@ atexit.register(flush_all)
 # Parsing and entry building
 # ---------------------------------------------------------------------------
 
+def _is_sensitive_key(key: Any) -> bool:
+    k = str(key).strip().lower()
+    return k in _SENSITIVE_KEYS or any(sub in k for sub in _SENSITIVE_SUBSTRINGS)
+
+
 def _redact_values(obj: Any) -> Any:
+    """Redact OC in strings and drop oc/token/authorization-like keys, recursively."""
     if isinstance(obj, str):
+        stripped = obj.lstrip()
+        if stripped[:1] in ("{", "["):  # JSON embedded in a string (MCP text content)
+            try:
+                parsed = json.loads(obj)
+            except ValueError:
+                parsed = None
+            if isinstance(parsed, (dict, list)):
+                return json.dumps(_redact_values(parsed), ensure_ascii=False)
         return redact_oc(obj)
     if isinstance(obj, dict):
-        return {k: _redact_values(v) for k, v in obj.items()}
+        return {
+            k: _redact_values(v) for k, v in obj.items() if not _is_sensitive_key(k)
+        }
     if isinstance(obj, list):
         return [_redact_values(v) for v in obj]
     return obj
@@ -233,8 +284,15 @@ def build_entry(
     client_ip: Optional[str],
     truncated_capture: bool,
     log_bodies: bool,
+    tool_schemas: Optional[dict] = None,
 ) -> Optional[dict]:
-    """Build one log entry, or None if this request should not be logged."""
+    """Build one log entry, or None if this request should not be logged.
+
+    ``tool_schemas`` maps registered tool name -> iterable of declared argument
+    names. Client-controlled strings (method, tool name, argument keys) are only
+    logged in default mode when they match these known values.
+    """
+    tool_schemas = tool_schemas or {}
     rpc_id = None
     method = None
     tool_name = None
@@ -253,6 +311,8 @@ def build_entry(
             method = m.group(1).decode("utf-8", "replace") if m else None
         if not isinstance(method, str) or not method:
             return None
+        if method not in KNOWN_METHODS:
+            method = UNKNOWN
     elif http_method == "GET":
         method = "GET"
     else:
@@ -287,12 +347,26 @@ def build_entry(
         if m:
             error_code, is_error = m.group(1), True
 
+    arg_keys: Optional[list] = None
+    unknown_arg_keys: Optional[int] = None
+    if method == "tools/call":
+        known_tool = isinstance(tool_name, str) and tool_name in tool_schemas
+        declared = set(tool_schemas[tool_name]) if known_tool else set()
+        if not known_tool:
+            tool_name = UNKNOWN
+        if isinstance(arguments, dict):
+            arg_keys = sorted(k for k in arguments if isinstance(k, str) and k in declared)
+            unknown_arg_keys = len(arguments) - len(arg_keys) or None
+    else:
+        tool_name = None
+
     entry: dict = {
         "timestamp": datetime.now().isoformat(),
         "token_id": token_id,
         "method": method,
         "tool_name": tool_name,
-        "arguments_keys": sorted(arguments) if isinstance(arguments, dict) else None,
+        "arguments_keys": arg_keys,
+        "unknown_arg_keys": unknown_arg_keys,
         "status": "error" if is_error else "ok",
         "error_code": error_code,
         "http_status": http_status,
@@ -303,9 +377,7 @@ def build_entry(
     }
     if log_bodies:
         if isinstance(arguments, dict):
-            entry["arguments"] = _redact_values(
-                {k: v for k, v in arguments.items() if str(k).lower() not in _SENSITIVE_KEYS}
-            )
+            entry["arguments"] = _redact_values(arguments)
         if result is not None:
             entry["result"] = _redact_values(result)
         elif error is not None:
@@ -327,8 +399,10 @@ class LoggingMiddleware:
         log_bodies: Optional[bool] = None,
         capture_max_bytes: Optional[int] = None,
         trusted_proxies: Optional[frozenset] = None,
+        tool_schemas: Optional[dict] = None,
     ):
         self.app = app
+        self.tool_schemas = tool_schemas or {}
         self.writer = writer if writer is not None else get_writer()
         self.log_bodies = (
             os.getenv("LEXLINK_LOG_BODIES", "").strip().lower() == "true"
@@ -391,6 +465,7 @@ class LoggingMiddleware:
                     client_ip=resolve_client_ip(scope, self.trusted_proxies),
                     truncated_capture=info["truncated"],
                     log_bodies=self.log_bodies,
+                    tool_schemas=self.tool_schemas,
                 )
                 if entry is not None:
                     self.writer.write(entry)

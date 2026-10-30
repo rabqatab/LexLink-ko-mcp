@@ -99,7 +99,11 @@ def tool_call_body(args=None):
                       ).encode()
 
 
+SCHEMAS = {"law_search": {"query", "oc", "display"}}
+
+
 def run_logged(app, body, tmp_path, **kw):
+    kw.setdefault("tool_schemas", SCHEMAS)
     writer = LogWriter(tmp_path / "w")
     mw = LoggingMiddleware(app, writer=writer, **kw)
     scope = make_scope(headers=[("authorization", f"Bearer {TOKEN}")])
@@ -437,3 +441,142 @@ def test_tools_list_over_http(monkeypatch):
         c.post("/mcp", json={"jsonrpc": "2.0", "method": "notifications/initialized"}, headers=h)
         r = c.post("/mcp", json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"}, headers=h)
         assert r.status_code == 200 and "law_search" in r.text
+
+
+# ------------------------------------------------- hardening round 2 (PR #8)
+
+def test_default_log_never_contains_client_controlled_strings(tmp_path):
+    def body(name, args, method="tools/call"):
+        return json.dumps({"jsonrpc": "2.0", "id": 7, "method": method,
+                           "params": {"name": name, "arguments": args}}).encode()
+
+    app = json_app(tool_result({"status": "ok"}))
+    e, text = run_logged(app, body("my secret 900101-1234567", {"SECRETKEY-abc": "v", "query": "q"}),
+                         tmp_path / "a")
+    assert e[0]["tool_name"] == "<unknown>"
+    assert e[0].get("arguments_keys") == [] and e[0]["unknown_arg_keys"] == 2
+    e, text = run_logged(app, body({"leak": "SECRETNAME-dict"}, {}), tmp_path / "b")
+    assert e[0]["tool_name"] == "<unknown>" and "SECRETNAME" not in text
+    e, text = run_logged(app, body("law_search", {"query": "x", "BADKEY": 1}), tmp_path / "c")
+    assert e[0]["tool_name"] == "law_search"
+    assert e[0]["arguments_keys"] == ["query"] and e[0]["unknown_arg_keys"] == 1
+    assert "BADKEY" not in text
+    e, text = run_logged(app, body("x", {}, method="SECRETMETHOD"), tmp_path / "d")
+    assert e[0]["method"] == "<unknown>" and "SECRETMETHOD" not in text
+    e, text = run_logged(app, b'{"method":"BADJSON-METHOD" oops', tmp_path / "e")
+    assert e[0]["method"] == "<unknown>" and "BADJSON" not in text
+    e, _ = run_logged(app, body("x", {}, method="tools/list"), tmp_path / "f")
+    assert e[0]["method"] == "tools/list" and "tool_name" not in e[0]
+
+
+def test_create_app_passes_registered_tools_to_logger(monkeypatch):
+    monkeypatch.setenv("LEXLINK_AUTH_TOKENS", f"a:{TOKEN}")
+    app = http_server.create_app()
+    logger_mw = app.app
+    assert isinstance(logger_mw, LoggingMiddleware)
+    assert "oc" in logger_mw.tool_schemas["law_search"]
+    assert "query" in logger_mw.tool_schemas["law_search"]
+    assert len(logger_mw.tool_schemas) >= 50
+
+
+def test_log_bodies_scrubs_nested_sensitive_keys(monkeypatch, tmp_path):
+    monkeypatch.setenv("LEXLINK_LOG_BODIES", "true")
+    args = {"query": "q", "filters": {"oc": "NESTEDOC123456"},
+            "nested": {"authorization": "Bearer SECRETTOK", "Token": "TOK2", "ok": 1},
+            "list": [{"OC": "INLIST"}, {"api_token": "T3", "keep": "yes"}]}
+    res = tool_result({"status": "ok", "inner": {"oc": "RESOC", "x": [{"authorization": "A"}]}})
+    entries, text = run_logged(json_app(res), tool_call_body(args), tmp_path)
+    for secret in ("NESTEDOC123456", "SECRETTOK", "TOK2", "INLIST", "T3", "RESOC", '"A"'):
+        assert secret not in text, secret
+    assert entries[0]["arguments"]["nested"] == {"ok": 1}
+    assert entries[0]["arguments"]["list"][1] == {"keep": "yes"}
+
+
+def test_uvicorn_run_disables_proxy_headers(monkeypatch):
+    monkeypatch.setenv("LEXLINK_AUTH_TOKENS", f"a:{TOKEN}")
+    import uvicorn
+    for fn in (http_server.run_http_server, http_server.run_sse_server):
+        with patch.object(uvicorn, "run") as run:
+            fn(host="127.0.0.1", port=1)
+        assert run.call_args.kwargs["proxy_headers"] is False
+
+
+def test_sse_startup_warning(monkeypatch, caplog):
+    monkeypatch.setenv("LEXLINK_AUTH_TOKENS", f"a:{TOKEN}")
+    with caplog.at_level("WARNING"):
+        http_server.create_app("sse")
+    assert any("TRANSPORT=sse" in r.message for r in caplog.records)
+    caplog.clear()
+    with caplog.at_level("WARNING"):
+        http_server.create_app("http")
+    assert not any("TRANSPORT=sse" in r.message for r in caplog.records)
+
+
+def test_websocket_scope_closed_unless_authorised():
+    seen = []
+
+    async def inner(scope, receive, send):
+        seen.append(scope["type"])
+
+    mw = BearerAuthMiddleware(inner, [TOKEN])
+    sent = []
+
+    async def send(m):
+        sent.append(m)
+
+    asyncio.run(mw({"type": "websocket", "headers": [], "path": "/x"}, None, send))
+    assert sent == [{"type": "websocket.close", "code": 1008}] and seen == []
+    asyncio.run(mw({"type": "lifespan"}, None, send))
+    assert seen == ["lifespan"]
+
+
+def test_origins_without_hosts_fails_startup(monkeypatch):
+    monkeypatch.setenv("LEXLINK_AUTH_TOKENS", f"a:{TOKEN}")
+    monkeypatch.setenv("LEXLINK_ALLOWED_ORIGINS", "https://mcp.example.test")
+    with pytest.raises(RuntimeError, match="ALLOWED_HOSTS"):
+        http_server.create_app()
+
+
+def test_retention_runs_at_writer_start_without_writes(tmp_path):
+    d = tmp_path / "r2"
+    d.mkdir()
+    old = (datetime.now() - timedelta(days=40)).strftime("%Y-%m-%d.jsonl")
+    (d / old).write_text("x")
+    w = LogWriter(d, retention_days=30)
+    for _ in range(100):
+        if not (d / old).exists():
+            break
+        import time as _t; _t.sleep(0.02)
+    assert not (d / old).exists()
+    w.flush()
+
+
+def test_log_file_and_dir_permissions(tmp_path):
+    import stat
+    old_umask = os.umask(0o022)
+    try:
+        d = tmp_path / "perm" / "logs"
+        w = LogWriter(d)
+        w.write({"a": 1})
+        w.flush()
+    finally:
+        os.umask(old_umask)
+    f = next(d.glob("*.jsonl"))
+    assert stat.S_IMODE(f.stat().st_mode) == 0o600
+    assert stat.S_IMODE(d.stat().st_mode) == 0o700
+
+
+def test_dropped_entries_counted_and_warned_once_a_minute(tmp_path, caplog):
+    import threading
+    w = LogWriter(tmp_path / "drop", maxsize=1)
+    gate = threading.Event()
+    orig = w._write_entry
+    w._write_entry = lambda e: gate.wait(5) or orig(e)
+    with caplog.at_level("WARNING"):
+        for i in range(30):
+            w.write({"i": i})
+    gate.set()
+    w.flush()
+    assert w.dropped >= 20
+    warns = [r for r in caplog.records if "entries dropped" in r.message]
+    assert len(warns) == 1

@@ -8,6 +8,15 @@ All notable changes to LexLink are documented here in both English and Korean.
 
 ### Unreleased
 
+#### HTTP hardening follow-up
+- Default logs no longer contain client-controlled strings: `tool_name` only for registered tools (else `<unknown>`), argument keys only if declared in the tool schema (others counted in `unknown_arg_keys`), `method` limited to known MCP methods. `create_app` passes tool names/schemas to `LoggingMiddleware`.
+- `LEXLINK_LOG_BODIES` now drops oc/token/authorization-like keys recursively (dicts, lists, JSON inside `result` text).
+- `uvicorn.run(..., proxy_headers=False)`; documented factory command uses `--no-proxy-headers` so `LEXLINK_TRUSTED_PROXIES` is the only X-Forwarded-For authority.
+- `BearerAuthMiddleware` closes websocket scopes with 1008; only lifespan passes unchecked.
+- `LEXLINK_ALLOWED_ORIGINS` without `LEXLINK_ALLOWED_HOSTS` raises at startup.
+- Log retention runs at writer start; log files 0600, directory 0700; dropped log entries are counted and warned about at most once a minute.
+- SSE transport logs a startup warning (per-request log status and concurrency cannot see results on the GET stream). Docs: DEPLOYMENT_GUIDE commands now include tokens, allowed hosts, Authorization and Host headers; OPERATIONS.md documents SSE limits, per-process oc override, http-only factory, unbound sessions, unlogged 401s, delayed 429s.
+
 #### Security
 - HTTP/SSE mode is now authenticated and fail-closed: `LEXLINK_AUTH_TOKENS="name:token,..."` (Bearer, constant-time compare, 401 + `WWW-Authenticate: Bearer`). Startup raises without tokens unless `LEXLINK_ALLOW_NO_AUTH=true` (PlayMCP no-auth registration only; loud warning). In HTTP mode the tool `oc` argument is ignored (`params.set_ignore_oc_override`); stdio is unchanged.
 - New `http_security.py` (pure ASGI): per-token concurrency (`LEXLINK_MAX_CONCURRENCY`, default 8) and per-minute (`LEXLINK_RATE_LIMIT_PER_MIN`, default 60) limits with 429 + `Retry-After`; Host/Origin validation via `LEXLINK_ALLOWED_HOSTS`/`LEXLINK_ALLOWED_ORIGINS` (DNS-rebinding protection is never disabled).
@@ -538,6 +547,12 @@ All notable changes to LexLink are documented here in both English and Korean.
 ## 한국어 (Korean)
 
 ### 미배포 (Unreleased)
+
+#### HTTP 보강
+- 기본 로그에 클라이언트가 제어하는 문자열이 남지 않음: 등록된 도구만 `tool_name`, 스키마에 선언된 인자 키만 기록(나머지는 `unknown_arg_keys` 개수), 알려진 MCP 메서드만 `method`.
+- `LEXLINK_LOG_BODIES`가 oc/token/authorization 계열 키를 중첩 구조와 `result` 안에서도 제거.
+- `uvicorn.run(..., proxy_headers=False)`, 팩토리 명령에 `--no-proxy-headers`. 웹소켓 스코프는 1008로 종료. `LEXLINK_ALLOWED_ORIGINS`만 설정하면 기동 실패.
+- 로그 보존 정리를 기록 스레드 시작 시 실행, 파일 0600/디렉터리 0700, 버려진 로그 개수 집계 및 분당 1회 경고. SSE 전송 시작 경고 및 한계 문서화. DEPLOYMENT_GUIDE 명령에 토큰/호스트/Authorization/Host 헤더 반영.
 
 #### 보안
 - HTTP/SSE 모드에 인증 추가 및 fail-closed 적용: `LEXLINK_AUTH_TOKENS="이름:토큰,..."` (Bearer, 상수 시간 비교, 401 + `WWW-Authenticate: Bearer`). 토큰이 없으면 `LEXLINK_ALLOW_NO_AUTH=true`(PlayMCP 인증 없음 등록 전용, 강한 경고 로그)가 아닌 한 기동 시 오류. HTTP 모드에서는 도구의 `oc` 인자를 무시(`params.set_ignore_oc_override`)하며 stdio는 변경 없음.

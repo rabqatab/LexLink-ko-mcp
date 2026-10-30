@@ -19,6 +19,12 @@ This guide explains how to deploy LexLink as an HTTP server for Kakao PlayMCP.
 OC=your_oc LEXLINK_AUTH_TOKENS=local:change-me-token TRANSPORT=http uv run serve
 
 # Server will start at: http://localhost:8000/mcp
+# Test it (Host localhost:8000 is accepted by default; the token is sent as Bearer):
+curl -X POST http://localhost:8000/mcp \
+  -H "Authorization: Bearer change-me-token" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}'
 ```
 
 ---
@@ -39,7 +45,7 @@ OC=your_oc LEXLINK_AUTH_TOKENS=local:change-me-token TRANSPORT=http uv run serve
 
 *PlayMCP requires Streamable HTTP transport (`TRANSPORT=http`), not SSE.
 
-**Or `LEXLINK_ALLOW_NO_AUTH=true`. In HTTP mode the tool `oc` argument is ignored; run a single process/worker (`uvicorn --factory lexlink.http_server:create_app` is also supported).
+**Or `LEXLINK_ALLOW_NO_AUTH=true`. In HTTP mode the tool `oc` argument is ignored; run a single process/worker (`uvicorn --factory --no-proxy-headers lexlink.http_server:create_app` is also supported; it serves plain HTTP on `/mcp` only and ignores `TRANSPORT`/`HOST`/`PORT`).
 
 ---
 
@@ -124,7 +130,12 @@ uv sync
 
 ```bash
 # Test if server starts correctly (use TRANSPORT=http!)
-OC=your_oc TRANSPORT=http uv run serve
+# LEXLINK_AUTH_TOKENS is required (the server refuses to start without it);
+# LEXLINK_ALLOWED_HOSTS lists the Host headers the server will accept.
+OC=your_oc \
+LEXLINK_AUTH_TOKENS=playmcp:change-me-long-random \
+LEXLINK_ALLOWED_HOSTS=your-domain.example,localhost:8000 \
+TRANSPORT=http uv run serve
 
 # You should see:
 # Starting LexLink MCP server (HTTP) on 0.0.0.0:8000
@@ -170,7 +181,6 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 
         # Pass through custom headers
-        proxy_set_header OC $http_oc;
     }
 }
 ```
@@ -215,6 +225,7 @@ Environment="PORT=8000"
 Environment="TRANSPORT=http"
 Environment="LEXLINK_AUTH_TOKENS=playmcp:change-me-long-random"
 Environment="LEXLINK_ALLOWED_HOSTS=your-domain.example"
+Environment="LEXLINK_TRUSTED_PROXIES=127.0.0.1"
 Environment="SLIM_RESPONSE=true"
 ExecStart=/home/ubuntu/.local/bin/uv run serve
 Restart=always
@@ -239,6 +250,7 @@ Environment="PORT=8000"
 Environment="TRANSPORT=http"
 Environment="LEXLINK_AUTH_TOKENS=playmcp:change-me-long-random"
 Environment="LEXLINK_ALLOWED_HOSTS=your-domain.example"
+Environment="LEXLINK_TRUSTED_PROXIES=127.0.0.1"
 Environment="SLIM_RESPONSE=true"
 ExecStart=/home/ec2-user/.local/bin/uv run serve
 Restart=always
@@ -287,14 +299,19 @@ sudo systemctl status lexlink
 ### Step 9: Verify Setup
 
 ```bash
-# Test locally (should return MCP response)
+# Test locally through Nginx (should return MCP response).
+# LEXLINK_ALLOWED_HOSTS only lists your domain, so send that Host header
+# (otherwise the server answers 421). Use the token from your service file.
 curl -X POST http://localhost/mcp \
+  -H "Host: your-domain.example" \
+  -H "Authorization: Bearer change-me-long-random" \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}'
 
 # Test from outside using sslip.io domain
 curl -X POST http://YOUR-IP-WITH-DASHES.sslip.io/mcp \
+  -H "Authorization: Bearer change-me-long-random" \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}'
@@ -393,15 +410,17 @@ PlayMCP rejects raw IP addresses. Use sslip.io:
    ```bash
    grep TRANSPORT /etc/systemd/system/lexlink.service
    # Should show: Environment="TRANSPORT=http"
-Environment="LEXLINK_AUTH_TOKENS=playmcp:change-me-long-random"
-Environment="LEXLINK_ALLOWED_HOSTS=your-domain.example"
+   # Should also have LEXLINK_AUTH_TOKENS and LEXLINK_ALLOWED_HOSTS set
    ```
 
 2. **Check endpoint:** Must be `/mcp` (not `/sse`)
 
 3. **Test the endpoint manually:**
    ```bash
+   # Direct to the app (port 8000): Host must be in LEXLINK_ALLOWED_HOSTS, token must match
    curl -X POST http://localhost:8000/mcp \
+     -H "Host: your-domain.example" \
+     -H "Authorization: Bearer change-me-long-random" \
      -H "Content-Type: application/json" \
      -H "Accept: application/json, text/event-stream" \
      -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}'
