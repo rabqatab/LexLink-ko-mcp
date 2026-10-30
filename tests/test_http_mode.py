@@ -644,9 +644,9 @@ def test_session_binding_table_released_on_delete_and_404():
     asyncio.run(call(mw, scope("DELETE", "s1")))
     assert mw._bindings == {}
     asyncio.run(call(mw, scope("POST")))
-    mw.app = fake(lambda s: 404)  # session crashed/terminated inside the app
+    mw.app = fake(lambda s: 404)  # an app 404 never frees a binding
     asyncio.run(call(mw, scope("POST", "s1")))
-    assert mw._bindings == {}
+    assert mw._bindings == {"s1": "A"}
 
 
 def test_session_unknown_and_foreign_bodies_identical(monkeypatch):
@@ -750,7 +750,7 @@ def test_sse_session_bound_to_token_and_released_on_close():
     assert post_dup[0]["status"] == 404 and post_up[0]["status"] == 404
     assert post_a[0]["status"] == 202
     assert post_u[0]["status"] == 202  # unknown id passes through to the app
-    assert after[0]["status"] == 202  # binding gone once the stream ended
+    assert after[0]["status"] == 404  # stream ended: tombstoned, 404 for every token
 
 
 def test_noauth_sessions_unaffected(monkeypatch):
@@ -933,8 +933,11 @@ def test_failed_terminate_keeps_binding_and_retries():
         clock.t += 101
         assert await mw.sweep() == 0 and mw._bindings == {"s1": "A"}   # 500
         assert not mw._meta["s1"].expiring
+        assert await mw.sweep() == 0   # still backing off: no attempt
+        clock.t += 26
         assert await mw.sweep() == 0 and mw._bindings == {"s1": "A"}   # exception
         assert released == []
+        clock.t += 51
         assert await mw.sweep() == 1 and mw._bindings == {}            # 404 counts
         assert calls == ["s1"] * 3 and released == ["s1"]
     asyncio.run(run())
@@ -978,8 +981,7 @@ def test_ttl_zero_disables_expiry(monkeypatch):
     with TestClient(http_server.create_app(clock=clock)) as c:
         sid = _new_session(c)
         clock.t += 10**7
-        assert c.app.session_binding.sweep_task is None
-        assert c.portal.call(c.app.session_binding.sweep) == 0
+        assert c.portal.call(c.app.session_binding.sweep) == 0  # nothing idles out
         assert c.post("/mcp", json=LIST, headers=_hdr(sid)).status_code == 200
 
 
@@ -1025,3 +1027,304 @@ def test_sweep_task_runs_and_is_cancelled_on_shutdown(monkeypatch):
             _t.sleep(0.05)
         assert sid not in app.session_binding._bindings
     assert task.done() and task.cancelled()
+
+
+# ------------------------------------------------ session hardening (round 4)
+
+def _creator_app(status=200, sid=b"s1", log=None):
+    """Fake app: any request without mcp-session-id creates session ``sid``."""
+    async def app(scope, receive, send):
+        if log is not None:
+            log.append((scope["method"], scope["path"]))
+        hdrs = [] if any(k == b"mcp-session-id" for k, _ in scope["headers"]) \
+            else [(b"mcp-session-id", sid)]
+        await send({"type": "http.response.start", "status": status, "headers": hdrs})
+        await send({"type": "http.response.body", "body": b""})
+    return app
+
+
+def _sc(method="POST", sid=None, token="A", path="/mcp", query=b"", host="h"):
+    h = [("host", host)] + ([("mcp-session-id", sid)] if sid else [])
+    s = make_scope(method=method, headers=h, state={"token_id": token})
+    s.update(path=path, query_string=query)
+    return s
+
+
+@pytest.mark.parametrize("method", ["PUT", "PATCH", "OPTIONS", "DELETE", "HEAD", "POST", "GET"])
+def test_any_method_without_session_header_binds_created_session(method):
+    mw = SessionBindingMiddleware(_creator_app(), 10)
+    asyncio.run(call(mw, _sc(method)))
+    assert mw._bindings == {"s1": "A"} and "s1" in mw._meta
+
+
+def test_post_with_query_session_id_on_mcp_path_is_bound_and_enforced():
+    mw = SessionBindingMiddleware(_creator_app(), 10)
+    asyncio.run(call(mw, _sc("POST", query=b"session_id=x")))
+    assert mw._bindings == {"s1": "A"}
+    out = asyncio.run(call(mw, _sc("POST", sid="s1", token="B")))
+    assert out[0]["status"] == 404
+
+
+def test_unusable_creating_response_is_terminated_and_released():
+    async def run():
+        term, rel = [], []
+
+        async def terminate(sid, host):
+            term.append(sid)
+            return 204
+        mw = SessionBindingMiddleware(_creator_app(status=405), 10, idle_ttl=0,
+                                      terminate=terminate, release=rel.append)
+        out = await call(mw, _sc("PUT"))
+        assert out[0]["status"] == 405  # forwarded unchanged
+        assert term == ["s1"] and rel == ["s1"]
+        assert mw._bindings == {} and mw._meta == {}
+        assert mw._count() == 0
+    asyncio.run(run())
+
+
+def test_unusable_session_terminate_failure_keeps_binding_for_sweeper():
+    async def run():
+        clock = FakeClock()
+        outcomes = iter([500, 204])
+        rel = []
+
+        async def terminate(sid, host):
+            return next(outcomes)
+        mw = SessionBindingMiddleware(_creator_app(status=400), 10, idle_ttl=0, clock=clock,
+                                      terminate=terminate, release=rel.append)
+        await call(mw, _sc("OPTIONS"))
+        assert mw._bindings == {"s1": "A"} and rel == []
+        clock.t += 61
+        assert await mw.sweep() == 1  # swept although TTL is 0
+        assert mw._bindings == {} and rel == ["s1"]
+    asyncio.run(run())
+
+
+def test_cap_applies_to_every_session_creating_request_and_reserves_slots():
+    async def run():
+        started = asyncio.Event()
+        gate = asyncio.Event()
+        n = 0
+
+        async def app(scope, receive, send):
+            nonlocal n
+            n += 1
+            sid = f"s{n}".encode()
+            started.set()
+            await gate.wait()
+            await send({"type": "http.response.start", "status": 200,
+                        "headers": [(b"mcp-session-id", sid)]})
+            await send({"type": "http.response.body", "body": b""})
+        mw = SessionBindingMiddleware(app, 2)
+        tasks = [asyncio.create_task(call(mw, _sc(m))) for m in
+                 ["POST", "PUT", "PATCH", "DELETE", "GET"]]
+        await asyncio.sleep(0.05)
+        assert mw._reserved == 2  # exactly cap reserved while apps are in flight
+        gate.set()
+        outs = await asyncio.gather(*tasks)
+        codes = sorted(o[0]["status"] for o in outs)
+        assert codes == [200, 200, 503, 503, 503]
+        assert len(mw._bindings) == 2 and mw._reserved == 0
+    asyncio.run(run())
+
+
+def test_reservation_released_on_app_error():
+    async def run():
+        async def boom(scope, receive, send):
+            raise RuntimeError("x")
+        mw = SessionBindingMiddleware(boom, 1)
+        with pytest.raises(RuntimeError):
+            await call(mw, _sc("POST"))
+        assert mw._reserved == 0
+    asyncio.run(run())
+
+
+def test_rate_limited_requests_consume_no_slot():
+    async def run():
+        gate = asyncio.Event()
+
+        async def app(scope, receive, send):
+            await gate.wait()
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b""})
+        mw = SessionBindingMiddleware(app, 5)
+        rl = RateLimitMiddleware(mw, max_concurrency=1, per_minute=100)
+        t1 = asyncio.create_task(call(rl, _sc("POST")))
+        await asyncio.sleep(0.02)
+        out = await call(rl, _sc("POST"))
+        assert out[0]["status"] == 429 and mw._reserved == 1
+        gate.set()
+        await t1
+        assert mw._reserved == 0
+    asyncio.run(run())
+
+
+def test_app_404_does_not_drop_binding_or_release():
+    async def run():
+        rel = []
+        mw = SessionBindingMiddleware(_creator_app(), 10, release=rel.append)
+        await call(mw, _sc("POST"))
+        mw.app = _creator_app(status=404)
+        for _ in range(3):
+            await call(mw, _sc("GET", sid="s1"))
+        assert mw._bindings == {"s1": "A"} and rel == []
+    asyncio.run(run())
+
+
+def test_delete_release_uses_only_the_accepted_id_and_multiple_ids_rejected():
+    async def run():
+        rel = []
+        mw = SessionBindingMiddleware(_creator_app(sid=b"s1"), 10, release=rel.append)
+        await call(mw, _sc("POST"))
+        mw.app = _creator_app(sid=b"s2")
+        await call(mw, _sc("POST"))
+        assert set(mw._bindings) == {"s1", "s2"}
+        seen = []
+        mw.app = _creator_app(status=200, log=seen)
+        s = _sc("DELETE", sid="s1")
+        s["headers"].append((b"mcp-session-id", b"s2"))
+        out = await call(mw, s)
+        assert out[0]["status"] == 404 and seen == []  # never reaches the app
+        assert set(mw._bindings) == {"s1", "s2"} and rel == []
+        out = await call(mw, _sc("DELETE", sid="s1"))
+        assert out[0]["status"] == 200 and rel == ["s1"] and set(mw._bindings) == {"s2"}
+    asyncio.run(run())
+
+
+def test_host_only_stored_after_non_421_and_default_is_first_allowed(monkeypatch):
+    async def run():
+        monkeypatch.setenv("LEXLINK_ALLOWED_HOSTS", "good.test:8801,other.test")
+        hosts = []
+
+        async def terminate(sid, host):
+            hosts.append(host)
+            return 500
+        clock = FakeClock()
+        mw = SessionBindingMiddleware(_creator_app(), 10, idle_ttl=100, clock=clock,
+                                      terminate=terminate)
+        await call(mw, _sc("POST", host="good.test:8801"))
+        statuses = {"s": 421}
+
+        async def app(scope, receive, send):
+            await send({"type": "http.response.start", "status": statuses["s"], "headers": []})
+            await send({"type": "http.response.body", "body": b""})
+        mw.app = app
+        await call(mw, _sc("POST", sid="s1", host="bad.test"))   # 421: not stored
+        statuses["s"] = 404
+        await call(mw, _sc("POST", sid="s1", host="bad404.test"))  # unvalidated: not stored
+        clock.t += 101
+        await mw.sweep()
+        assert hosts == [b"good.test:8801"]
+        # created by a 421/unknown-host request: falls back to first allowed host
+        mw2 = SessionBindingMiddleware(_creator_app(status=200), 10)
+        assert mw2._validated_host(b"evil", 421) == b"good.test:8801"
+    asyncio.run(run())
+
+
+def test_sse_foreign_404_matches_real_unknown_404_exactly():
+    from starlette.responses import Response
+    real = []
+
+    async def rsend(m):
+        real.append(m)
+
+    async def rcv():
+        return {"type": "http.disconnect"}
+    asyncio.run(Response("Could not find session", status_code=404)(
+        {"type": "http", "method": "POST", "headers": []}, rcv, rsend))
+
+    async def run():
+        mw = SessionBindingMiddleware(sse_app(asyncio.Event()), 10)
+        mw._bindings[f"sse:{SSE_SID}"] = "A"
+        return await call(mw, _sc("POST", token="B", path="/messages/",
+                                  query=f"session_id={SSE_SID}".encode()))
+    ours = asyncio.run(run())
+    assert ours[0]["status"] == real[0]["status"]
+    assert sorted(ours[0]["headers"]) == sorted(real[0]["headers"])
+    assert ours[1]["body"] == real[1]["body"]
+
+
+def test_ended_sse_stream_is_tombstoned_for_every_token():
+    async def run():
+        release = asyncio.Event()
+        mw = SessionBindingMiddleware(sse_app(release), 10)
+        got = asyncio.Event()
+
+        async def rcv():
+            await asyncio.sleep(3600)
+
+        async def snd(m):
+            if m["type"] == "http.response.body":
+                got.set()
+        s = _sc("GET", path="/sse")
+        task = asyncio.create_task(mw(s, rcv, snd))
+        await asyncio.wait_for(got.wait(), 2)
+        q = f"session_id={SSE_SID}".encode()
+        assert mw._count() == 1
+        release.set()
+        await task
+        outs = [await call(mw, _sc("POST", token=t, path="/messages/", query=q))
+                for t in ("A", "B")]
+        assert [o[0]["status"] for o in outs] == [404, 404]
+    asyncio.run(run())
+
+
+def test_failed_terminate_backoff_is_exponential_capped_and_log_is_clean(caplog):
+    async def run():
+        clock = FakeClock()
+        calls = []
+
+        async def terminate(sid, host):
+            calls.append(clock.t)
+            raise RuntimeError("secret-detail")
+        mw = SessionBindingMiddleware(_creator_app(sid=b"sess-id-xyz"), 10, idle_ttl=100,
+                                      clock=clock, terminate=terminate)
+        await call(mw, _sc("POST"))
+        clock.t += 101
+        gaps = []
+        for _ in range(12):
+            before = len(calls)
+            await mw.sweep()
+            clock.t += 1
+            if len(calls) > before:
+                gaps.append(mw._meta["sess-id-xyz"].backoff)
+            # an immediate second sweep must not retry
+            await mw.sweep()
+            assert len(calls) <= before + 1
+            clock.t = max(clock.t, mw._meta["sess-id-xyz"].next_try)
+        assert gaps[:3] == [25.0, 50.0, 100.0] and max(gaps) == 900.0
+    with caplog.at_level("WARNING", logger="lexlink.http_security"):
+        asyncio.run(run())
+    lines = [r for r in caplog.records if "terminate failed" in r.getMessage()]
+    assert lines and all(r.exc_info is None for r in lines)
+    assert all("sess-id-xyz" not in r.getMessage() and "secret" not in r.getMessage()
+               for r in lines)
+
+
+def test_mcp_session_id_loggers_quieted_by_create_app(monkeypatch):
+    import logging
+    for n in ("mcp.server.streamable_http_manager", "mcp.server.streamable_http",
+              "mcp.server.sse"):
+        logging.getLogger(n).setLevel(logging.INFO)
+    monkeypatch.setenv("LEXLINK_ALLOW_NO_AUTH", "true")
+    http_server.create_app()
+    assert logging.getLogger("mcp.server.streamable_http_manager").level >= logging.WARNING
+    assert logging.getLogger("mcp.server.streamable_http").level >= logging.WARNING
+    assert logging.getLogger("mcp.server.sse").level >= logging.WARNING
+
+
+def test_real_stack_put_requests_cannot_create_unbound_sessions(monkeypatch):
+    _two_token_env(monkeypatch, LEXLINK_MAX_SESSIONS="3", LEXLINK_SESSION_IDLE_TTL_SEC="100")
+    box = _capture_manager(monkeypatch)
+    with TestClient(http_server.create_app(clock=FakeClock())) as c:
+        codes = [c.put("/mcp", headers=auth_headers()).status_code for _ in range(10)]
+        mgr = box["mcp"].session_manager
+        b = c.app.session_binding
+        assert len(mgr._server_instances) == 0  # unusable sessions are terminated+released
+        assert b._count() == 0
+        r = c.post("/mcp?session_id=x", json=INIT, headers=auth_headers())
+        sid = r.headers["mcp-session-id"]
+        assert sid in b._bindings
+        rb = c.post("/mcp", json=LIST, headers=_hdr(sid, TOKEN2))
+        assert rb.status_code == 404
+        assert codes  # all answered

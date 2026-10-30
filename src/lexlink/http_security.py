@@ -334,7 +334,8 @@ _STREAMABLE_NOT_FOUND = (
     b'{"jsonrpc":"2.0","id":"server-error",'
     b'"error":{"code":-32600,"message":"Session not found"}}'
 )
-# Same for SSE POST /messages/ (starlette Response default text/plain).
+# Same for SSE POST /messages/ (starlette Response without media_type: no
+# content-type header at all).
 _SSE_NOT_FOUND = b"Could not find session"
 _SSE_ENDPOINT_RE = re.compile(rb"session_id=([0-9A-Za-z-]{32,36})")
 _SSE_SCAN_LIMIT = 4096
@@ -353,57 +354,74 @@ class _SessionMeta:
     """Activity record of one bound Streamable HTTP session."""
     last: float
     active: int = 0           # requests (incl. open GET streams) in flight
-    expiring: bool = False    # idle expiry in progress; requests get the 404
+    expiring: bool = False    # terminate in progress; requests get the 404
     host: bytes = b"localhost"  # last Host header that passed validation
+    doomed: bool = False      # unusable (creating response was not 2xx): terminate ASAP
+    backoff: float = 0.0      # current retry delay after failed terminates
+    next_try: float = 0.0     # no terminate attempt before this clock value
 
 
 _EXPIRED_MEMORY = 4096  # tombstones of expired ids (bounded, oldest dropped)
+_MAX_BACKOFF = 900.0    # failed-terminate retry delay cap (15 minutes)
+
+
+def _default_host() -> bytes:
+    """Host header for internal DELETEs when no validated one is known."""
+    hosts = _csv_env("LEXLINK_ALLOWED_HOSTS")
+    if not hosts:
+        return b"localhost"
+    first = hosts[0]
+    if first.endswith(":*"):
+        first = first[:-2] + ":80"
+    return first.encode("latin-1", "replace")
+
+
+def _is_sse_messages(scope: dict) -> bool:
+    return scope.get("path", "").rstrip("/") == "/messages"
 
 
 class SessionBindingMiddleware:
     """Bind MCP session ids to the token that created them.
 
-    Streamable HTTP: the ``mcp-session-id`` response header of a request that
-    carried none is recorded against ``scope["state"]["token_id"]`` before the
-    response is forwarded. Later requests naming a session bound to another
-    token get the app's own "unknown session" 404 and never reach the app.
+    Streamable HTTP: any request without an ``mcp-session-id`` header may make
+    mcp create a session (whatever the method, path or query), so every such
+    request reserves a cap slot before the app runs (503 at the cap; the
+    reservation is released in ``finally`` or when it turns into a binding).
+    If the response carries ``mcp-session-id`` the id is bound to
+    ``scope["state"]["token_id"]`` before the response is forwarded. When
+    that response is not 2xx the session is unusable: it is terminated right
+    after the response (``terminate`` + ``release``); on failure the binding
+    stays and the sweeper retries. Later requests naming a session bound to
+    another token get the app's own "unknown session" 404 and never reach the
+    app; a request naming several different ids gets that 404 too, so the id
+    the app uses is the one that was checked.
     SSE: the ``session_id`` in the first ``endpoint`` event of ``GET /sse`` is
-    bound the same way (recorded before the chunk is forwarded, so the client
-    cannot POST before the binding exists) and enforced on the
-    ``session_id`` query parameter; removed when the stream ends.
+    bound the same way (recorded before the chunk is forwarded) and enforced
+    on the ``session_id`` query of ``/messages/`` only. When the stream ends
+    the binding is removed and the id is tombstoned, so later POSTs get the
+    unknown-session 404 for every token.
 
-    Memory: at most ``max_sessions`` bindings. Entries are never evicted while
-    the session may still exist (an evicted binding would turn into an
-    unbound session any token could use); at the cap new sessions are
-    refused with 503 instead. Bindings are removed on owner DELETE (2xx), when
-    the app answers 404 for a bound id (terminated/crashed session), on idle
-    expiry and when an SSE stream ends. Ids unknown to the binding table pass
-    to the app, which answers 404 itself.
+    Memory: at most ``max_sessions`` bindings plus reservations. Entries are
+    never evicted while the session may still exist; at the cap new sessions
+    are refused with 503. Bindings are removed only after a confirmed
+    terminate (idle expiry / unusable session) or an owner DELETE answered
+    2xx. A 404 never frees a binding: dead sessions are freed by idle expiry
+    or terminate (which treats 404 as gone).
 
     Idle expiry (``idle_ttl`` seconds, 0/None disables; needs ``terminate``):
-    Streamable HTTP sessions otherwise live until the client DELETEs them.
-    Per session we track the last activity (request start and end) and a
-    counter of requests in flight; a session with a request in flight or an
-    open GET stream is never idle. A background sweep (``run_sweeper``,
-    started by create_app's lifespan) and a lazy check on every request for an
-    idle session expire it. Expiry first marks the session ``expiring``
-    (requests meanwhile get the standard unknown-session 404, whatever the
-    token, and never reach the app), then ``await terminate(id, host)`` which
-    must end the real session (create_app sends an internal DELETE to the
-    inner app). Only when that returned 2xx/404 is the binding removed and
-    ``release(id)`` called; on failure the mark is cleared, the binding kept
-    (so an unbound live session cannot exist) and the next sweep retries.
-    Expired ids are remembered (bounded) so every later request, owner
-    included, gets the byte-identical standard 404 and the client opens a
-    new session. Works in no-auth mode too (bindings are tracked there, only
-    their enforcement is a no-op).
-    SSE sessions need no expiry: the GET /sse stream *is* the session (mcp
-    frees it when the stream ends, and the binding ends with the stream), so
-    a connected client is alive by definition and POSTs to /messages/ do not
-    need to count as liveness.
+    per session we track last activity and requests in flight; a session with
+    a request in flight or an open GET stream is never idle. A background
+    sweep (``run_sweeper``) and a lazy check expire idle sessions. Expiry
+    marks the session ``expiring`` (requests get the standard 404), then
+    ``await terminate(id, host)``; only after 2xx/404 is the binding removed
+    and ``release(id)`` called. On failure the binding is kept and the retry
+    is delayed exponentially per session (sweep interval, doubling, capped at
+    15 minutes) with one concise warning line (no traceback, no session id).
+    ``host`` is only taken from requests whose response was not 421/404, and
+    defaults to the first LEXLINK_ALLOWED_HOSTS entry.
+    Expired ids are remembered (bounded). Works in no-auth mode too.
 
-    In-memory, single process; no awaits between table reads and writes
-    except around ``terminate``, which is guarded by the ``expiring`` mark.
+    In-memory, single process.
     """
 
     def __init__(self, app, max_sessions: Optional[int] = None,
@@ -419,14 +437,25 @@ class SessionBindingMiddleware:
         self._clock = clock
         self._terminate = terminate
         self._release = release
+        self._default_host = _default_host()
         self._bindings: dict[str, str] = {}
         self._meta: dict[str, _SessionMeta] = {}
+        self._reserved = 0
         self._expired: "OrderedDict[str, None]" = OrderedDict()
         self.sweep_task: Optional[asyncio.Task] = None
 
     @property
     def expiry_enabled(self) -> bool:
         return bool(self.idle_ttl) and self.idle_ttl > 0 and self._terminate is not None
+
+    @property
+    def sweeper_enabled(self) -> bool:
+        """Sweeping is needed for idle expiry and for retrying failed terminates."""
+        return self._terminate is not None
+
+    @property
+    def sweep_interval(self) -> float:
+        return min(self.idle_ttl / 4, 60.0) if self.idle_ttl and self.idle_ttl > 0 else 60.0
 
     def _foreign(self, key: str, token_id: str) -> bool:
         owner = self._bindings.get(key)
@@ -442,36 +471,55 @@ class SessionBindingMiddleware:
             except Exception:
                 logger.warning("session release hook failed", exc_info=True)
 
+    def _tombstone(self, key: str) -> None:
+        self._expired[key] = None
+        while len(self._expired) > _EXPIRED_MEMORY:
+            self._expired.popitem(last=False)
+
+    def _is_gone(self, key: str) -> bool:
+        m = self._meta.get(key)
+        return key in self._expired or (m is not None and m.expiring)
+
     def _is_idle(self, m: _SessionMeta, now: float) -> bool:
-        return m.active == 0 and not m.expiring and now - m.last >= self.idle_ttl
+        if m.active != 0 or m.expiring or now < m.next_try:
+            return False
+        if m.doomed:
+            return True
+        return bool(self.idle_ttl) and self.idle_ttl > 0 and now - m.last >= self.idle_ttl
 
     async def _expire(self, sid: str) -> bool:
-        """Terminate an idle session; True when it is gone (binding removed)."""
+        """Terminate a session; True when it is gone (binding removed)."""
         m = self._meta.get(sid)
         if m is None or m.expiring or self._terminate is None:
             return False
         m.expiring = True
         done = False
+        problem = ""
         try:
             status = await self._terminate(sid, m.host)
             done = status is not None and (200 <= status < 300 or status == 404)
             if not done:
-                logger.warning("idle session terminate returned %s; will retry", status)
-        except Exception:
-            logger.warning("idle session terminate failed; will retry", exc_info=True)
+                problem = f"status {status}"
+        except Exception as exc:
+            problem = type(exc).__name__
         finally:
             if done:
                 self._drop(sid)
-                self._expired[sid] = None
-                while len(self._expired) > _EXPIRED_MEMORY:
-                    self._expired.popitem(last=False)
+                self._tombstone(sid)
             else:
-                m.expiring = False  # keep the binding; next sweep retries
+                m.expiring = False  # keep the binding; retry after backoff
+                m.backoff = min(
+                    max(m.backoff * 2, self.sweep_interval), _MAX_BACKOFF)
+                m.next_try = self._clock() + m.backoff
+                if problem:
+                    logger.warning(
+                        "session terminate failed (%s); retry in %.0fs",
+                        problem, m.backoff)
         return done
 
     async def sweep(self) -> int:
-        """Expire every idle session once; returns how many were removed."""
-        if not self.expiry_enabled:
+        """Terminate every idle/unusable session once; returns how many were removed."""
+        if not self.sweeper_enabled:
             return 0
         now = self._clock()
         removed = 0
@@ -482,9 +530,8 @@ class SessionBindingMiddleware:
 
     async def run_sweeper(self) -> None:
         """Periodic sweep (interval min(ttl/4, 60) s) until cancelled."""
-        interval = min(self.idle_ttl / 4, 60.0)
         while True:
-            await asyncio.sleep(interval)
+            await asyncio.sleep(self.sweep_interval)
             try:
                 await self.sweep()
             except Exception:
@@ -496,29 +543,38 @@ class SessionBindingMiddleware:
             return
         token_id = scope.get("state", {}).get("token_id", NO_AUTH_TOKEN_ID)
         method = scope.get("method")
+        sse_messages = _is_sse_messages(scope)
 
         header_ids = [
             v.decode("latin-1") for k, v in scope.get("headers", [])
             if k == b"mcp-session-id"
         ]
+        # query session_id is only meaningful (and enforced) on SSE /messages/
         query_ids = [
             v for k, v in parse_qsl(
                 scope.get("query_string", b"").decode("latin-1"), keep_blank_values=True)
             if k == "session_id"
-        ]
+        ] if sse_messages else []
 
         async def reject():
             if query_ids and not header_ids:
-                await self._reject(send, b"text/plain; charset=utf-8", _SSE_NOT_FOUND)
+                await self._reject(send, None, _SSE_NOT_FOUND)
             else:
                 await self._reject(send, b"application/json", _STREAMABLE_NOT_FOUND)
 
-        # expired / being expired: standard 404 for every token, owner included
-        if any(i in self._expired or (i in self._meta and self._meta[i].expiring)
-               for i in header_ids):
+        distinct = list(dict.fromkeys(header_ids))
+        # several different ids: the app would use the first, we cannot be sure
+        # which one is meant -> standard 404, nothing is checked against a wrong id
+        if len(distinct) > 1:
             await reject()
             return
-        if any(self._foreign(i, token_id) for i in header_ids) or any(
+
+        # expired / being expired / ended SSE: standard 404 for every token
+        if any(self._is_gone(i) for i in distinct) or any(
+                _sse_key(i) in self._expired for i in query_ids):
+            await reject()
+            return
+        if any(self._foreign(i, token_id) for i in distinct) or any(
                 self._foreign(_sse_key(i), token_id) for i in query_ids):
             await reject()
             return
@@ -526,53 +582,68 @@ class SessionBindingMiddleware:
         # lazy expiry: do not depend on the sweep's timing
         if self.expiry_enabled:
             now = self._clock()
-            for i in dict.fromkeys(header_ids):
+            for i in distinct:
                 m = self._meta.get(i)
                 if m is not None and self._is_idle(m, now):
                     await self._expire(i)
-            if any(i in self._expired or (i in self._meta and self._meta[i].expiring)
-                   for i in header_ids):
+            if any(self._is_gone(i) for i in distinct):
                 await reject()
                 return
 
-        creating = not header_ids and method in ("POST", "GET") and not query_ids
-        if creating and len(self._bindings) >= self.max_sessions and self.expiry_enabled:
-            await self.sweep()  # idle sessions may free slots right now
-        if creating and len(self._bindings) >= self.max_sessions:
-            await _json_response(
-                send, 503,
-                {"error": "too_many_sessions", "message": "Session limit reached"},
-                [(b"retry-after", b"30")],
-            )
-            return
+        # Every request without a session header may create a session in mcp.
+        creating = not header_ids and not sse_messages
+        reserved = False
+
+        def unreserve():
+            nonlocal reserved
+            if reserved:
+                reserved = False
+                self._reserved -= 1
+
+        if creating:
+            if self._count() >= self.max_sessions and self.sweeper_enabled:
+                await self.sweep()  # idle sessions may free slots right now
+            if self._count() >= self.max_sessions:
+                await _json_response(
+                    send, 503,
+                    {"error": "too_many_sessions", "message": "Session limit reached"},
+                    [(b"retry-after", b"30")],
+                )
+                return
+            self._reserved += 1
+            reserved = True
 
         host = _header(scope, b"host")
         now = self._clock()
-        tracked = [i for i in dict.fromkeys(header_ids) if i in self._meta]
+        tracked = [i for i in distinct if i in self._meta]
         for i in tracked:
-            m = self._meta[i]
-            m.active += 1
-            m.last = now
-            if host:
-                m.host = host
+            self._meta[i].active += 1
+            self._meta[i].last = now
         created: Optional[str] = None
+        doomed: Optional[str] = None
 
         status = 0
         sse_buf: Optional[bytearray] = bytearray() if (creating and method == "GET") else None
         sse_key: Optional[str] = None
 
         async def wrapped_send(message):
-            nonlocal status, sse_buf, sse_key, created
+            nonlocal status, sse_buf, sse_key, created, doomed
             if message["type"] == "http.response.start":
                 status = message["status"]
                 if creating:
                     for k, v in message.get("headers", []):
                         if k.lower() == b"mcp-session-id":
                             sid = v.decode("latin-1")
-                            self._bindings[sid] = token_id
-                            self._meta[sid] = _SessionMeta(
-                                last=self._clock(), active=1, host=host or b"localhost")
-                            created = sid
+                            if sid not in self._bindings:
+                                self._bindings[sid] = token_id
+                                self._meta[sid] = _SessionMeta(
+                                    last=self._clock(), active=1,
+                                    host=self._validated_host(host, status),
+                                    doomed=not 200 <= status < 300)
+                                unreserve()
+                                created = sid
+                                if not 200 <= status < 300:
+                                    doomed = sid
                             break
                 if sse_buf is not None and status != 200:
                     sse_buf = None
@@ -582,6 +653,7 @@ class SessionBindingMiddleware:
                 if m is not None and b"\n" in sse_buf[m.end():]:
                     sse_key = _sse_key(m.group(1).decode("ascii"))
                     self._bindings[sse_key] = token_id
+                    unreserve()
                     sse_buf = None
                 elif len(sse_buf) > _SSE_SCAN_LIMIT:
                     sse_buf = None  # not an SSE endpoint stream; stop scanning
@@ -590,23 +662,38 @@ class SessionBindingMiddleware:
         try:
             await self.app(scope, receive, wrapped_send)
         finally:
+            unreserve()
             end = self._clock()
             for i in [*tracked, *([created] if created else [])]:
                 m = self._meta.get(i)
                 if m is not None:
                     m.active = max(0, m.active - 1)
                     m.last = end
+                    # host is only trusted after the app accepted the request
+                    if host and i in tracked and status not in (0, 404, 421):
+                        m.host = host
             if sse_key is not None:
                 self._bindings.pop(sse_key, None)
-        for i in header_ids:
-            if self._bindings.get(i) == token_id and (
-                    status == 404 or (method == "DELETE" and 200 <= status < 300)):
-                self._drop(i)
+                self._tombstone(sse_key)
+        # Owner DELETE answered 2xx: the app terminated the id it was given.
+        if (method == "DELETE" and 200 <= status < 300 and distinct
+                and self._bindings.get(distinct[0]) == token_id):
+            self._drop(distinct[0])
+        if doomed is not None and doomed in self._meta:
+            await self._expire(doomed)
+
+    def _count(self) -> int:
+        return len(self._bindings) + self._reserved
+
+    def _validated_host(self, host: Optional[bytes], status: int) -> bytes:
+        if host and status not in (404, 421):
+            return host
+        return self._default_host
 
     @staticmethod
-    async def _reject(send, ctype: bytes, body: bytes) -> None:
-        await send({"type": "http.response.start", "status": 404, "headers": [
-            (b"content-length", str(len(body)).encode()),
-            (b"content-type", ctype),
-        ]})
+    async def _reject(send, ctype: Optional[bytes], body: bytes) -> None:
+        headers = [(b"content-length", str(len(body)).encode())]
+        if ctype is not None:
+            headers.append((b"content-type", ctype))
+        await send({"type": "http.response.start", "status": 404, "headers": headers})
         await send({"type": "http.response.body", "body": body})

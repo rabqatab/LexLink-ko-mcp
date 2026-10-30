@@ -110,6 +110,13 @@ def create_app(transport: str = "http", *, clock=time.monotonic):
     its instance table, so the entry is dropped afterwards (see _release).
     """
     tokens = load_auth_tokens()  # fail closed before anything else
+    # mcp logs session ids (INFO/WARNING); keep them out of the logs
+    for name, level in (
+        ("mcp.server.streamable_http_manager", logging.WARNING),
+        ("mcp.server.streamable_http", logging.WARNING),
+        ("mcp.server.sse", logging.ERROR),
+    ):
+        logging.getLogger(name).setLevel(level)
     set_ignore_oc_override(True)  # HTTP callers must not choose the OC
 
     if transport == "sse":
@@ -188,7 +195,7 @@ def create_app(transport: str = "http", *, clock=time.monotonic):
                 yield
             else:
                 async with fastmcp.session_manager.run():
-                    if binding.expiry_enabled:
+                    if binding.sweeper_enabled:
                         sweeper = asyncio.create_task(binding.run_sweeper())
                         binding.sweep_task = sweeper
                     try:
