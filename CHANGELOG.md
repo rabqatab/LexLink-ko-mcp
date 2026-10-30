@@ -8,6 +8,16 @@ All notable changes to LexLink are documented here in both English and Korean.
 
 ### Unreleased
 
+#### Security
+- HTTP/SSE mode is now authenticated and fail-closed: `LEXLINK_AUTH_TOKENS="name:token,..."` (Bearer, constant-time compare, 401 + `WWW-Authenticate: Bearer`). Startup raises without tokens unless `LEXLINK_ALLOW_NO_AUTH=true` (PlayMCP no-auth registration only; loud warning). In HTTP mode the tool `oc` argument is ignored (`params.set_ignore_oc_override`); stdio is unchanged.
+- New `http_security.py` (pure ASGI): per-token concurrency (`LEXLINK_MAX_CONCURRENCY`, default 8) and per-minute (`LEXLINK_RATE_LIMIT_PER_MIN`, default 60) limits with 429 + `Retry-After`; Host/Origin validation via `LEXLINK_ALLOWED_HOSTS`/`LEXLINK_ALLOWED_ORIGINS` (DNS-rebinding protection is never disabled).
+- Traffic log is now privacy-preserving by default (argument key names only, no values/results/tokens; `LEXLINK_LOG_BODIES=true` opts in, OC redacted), written by a background thread, with `LEXLINK_LOG_RETENTION_DAYS` (default 30) retention. `X-Forwarded-For` is honoured only from `LEXLINK_TRUSTED_PROXIES`.
+
+#### Changed
+- `RawLoggingMiddleware` (BaseHTTPMiddleware that buffered whole responses, hung GET streams and dropped multi-value headers) replaced by pure ASGI `LoggingMiddleware` that forwards every message immediately. `log_mcp_call`/`log_raw` removed.
+- Module-level `_server`/`_sse_app`/`app` removed; use `create_app(transport)` (single `create_server()` call; `uvicorn --factory lexlink.http_server:create_app`, single worker). `create_server(transport_security=None)` accepts FastMCP transport security settings.
+- New Korean operations guide: `docs/OPERATIONS.md`.
+
 #### Fixed
 - `prec_service` / `detc_service` / `expc_service`: an upstream "일치하는 … 없습니다" answer (unknown id, or a case whose body the API does not provide, e.g. 국세법령정보시스템 precedents) now returns the new `NOT_FOUND` error instead of `status: ok`. Errors are never cached.
 - `prec_service(sections="summary")` falls back to including 판례내용 (`sections: "summary_fallback"` plus a warning) when both 판시사항 and 판결요지 are empty.
@@ -528,6 +538,16 @@ All notable changes to LexLink are documented here in both English and Korean.
 ## 한국어 (Korean)
 
 ### 미배포 (Unreleased)
+
+#### 보안
+- HTTP/SSE 모드에 인증 추가 및 fail-closed 적용: `LEXLINK_AUTH_TOKENS="이름:토큰,..."` (Bearer, 상수 시간 비교, 401 + `WWW-Authenticate: Bearer`). 토큰이 없으면 `LEXLINK_ALLOW_NO_AUTH=true`(PlayMCP 인증 없음 등록 전용, 강한 경고 로그)가 아닌 한 기동 시 오류. HTTP 모드에서는 도구의 `oc` 인자를 무시(`params.set_ignore_oc_override`)하며 stdio는 변경 없음.
+- 신규 `http_security.py`(순수 ASGI): 토큰별 동시 요청(`LEXLINK_MAX_CONCURRENCY`, 기본 8) 및 분당(`LEXLINK_RATE_LIMIT_PER_MIN`, 기본 60) 제한(429 + `Retry-After`), `LEXLINK_ALLOWED_HOSTS`/`LEXLINK_ALLOWED_ORIGINS` 기반 Host/Origin 검증(DNS 리바인딩 보호는 끄지 않음).
+- 트래픽 로그는 기본적으로 개인정보 최소화(인자 키 이름만 기록, 값/결과/토큰 없음; `LEXLINK_LOG_BODIES=true`로 선택 기록, OC 마스킹), 백그라운드 스레드로 기록, `LEXLINK_LOG_RETENTION_DAYS`(기본 30) 보존 정책 적용. `X-Forwarded-For`는 `LEXLINK_TRUSTED_PROXIES`의 피어에서만 신뢰.
+
+#### 변경
+- 응답 전체를 버퍼링하고 GET 스트림을 멈추게 하며 다중 값 헤더를 잃던 `RawLoggingMiddleware`(BaseHTTPMiddleware)를 모든 메시지를 즉시 전달하는 순수 ASGI `LoggingMiddleware`로 교체. `log_mcp_call`/`log_raw` 제거.
+- 모듈 수준 `_server`/`_sse_app`/`app` 제거. `create_app(transport)` 사용(`create_server()` 1회 호출, `uvicorn --factory lexlink.http_server:create_app`, 워커 1개). `create_server(transport_security=None)`가 FastMCP 전송 보안 설정을 받음.
+- 한국어 운영 가이드 `docs/OPERATIONS.md` 추가.
 
 #### 수정
 - `prec_service` / `detc_service` / `expc_service`: 업스트림이 "일치하는 … 없습니다"로 답하는 경우(존재하지 않는 ID, 또는 국세법령정보시스템 판례처럼 API가 본문을 제공하지 않는 경우) `status: ok` 대신 새 `NOT_FOUND` 오류를 반환. 오류는 캐시되지 않음.

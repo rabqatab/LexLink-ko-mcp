@@ -1,180 +1,405 @@
 """
-PlayMCP traffic logger with dashboard-compatible format.
+HTTP-mode traffic logger (pure ASGI, privacy-preserving by default).
 
-Captures MCP request/response pairs and logs in a format compatible
-with the Smithery dashboard for filtering and analysis.
+LoggingMiddleware forwards every ASGI message immediately and unchanged while
+keeping capped copies of the request/response bytes. One JSONL entry per MCP
+call is queued to a single background daemon thread, so the event loop never
+blocks on disk I/O and streams are never buffered.
+
+Default entry fields: timestamp, token_id, method, tool_name, argument key
+names (no values), status, error_code, http_status, response_bytes,
+duration_ms, client_ip. With LEXLINK_LOG_BODIES=true, argument values (minus
+oc/token/authorization keys) and the result body are logged too, with the OC
+credential redacted.
+
+Environment variables:
+    LEXLINK_LOG_DIR             log directory (default: <repo>/logs/playmcp)
+    LEXLINK_LOG_RETENTION_DAYS  delete YYYY-MM-DD.jsonl older than N days (default 30; 0 = keep)
+    LEXLINK_LOG_BODIES          "true" to log argument values and result bodies
+    LEXLINK_LOG_CAPTURE_MAX_BYTES  per-direction capture cap (default 1048576)
+    LEXLINK_TRUSTED_PROXIES     exact peer IPs allowed to set X-Forwarded-For
 """
 
+import atexit
 import json
-import uuid
-from datetime import datetime
+import logging
+import os
+import queue
+import re
+import threading
+import time
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
-# Log directory
+from .client import redact_oc
+from .http_security import NO_AUTH_TOKEN_ID, resolve_client_ip
+
+logger = logging.getLogger(__name__)
+
+# Default log directory
 LOG_DIR = Path(__file__).parent.parent.parent / "logs" / "playmcp"
 
-
-def ensure_log_dir():
-    """Create log directory if not exists."""
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-
-
-def get_log_file() -> Path:
-    """Get today's log file path."""
-    ensure_log_dir()
-    today = datetime.now().strftime("%Y-%m-%d")
-    return LOG_DIR / f"{today}.jsonl"
+_DATED_FILE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})\.jsonl$")
+_SENSITIVE_KEYS = {"oc", "token", "authorization"}
+_RESPONSE_KEY_RE = re.compile(r'error_code\\*"\s*:\s*\\*"([A-Za-z0-9_]+)')
 
 
-def generate_request_id() -> str:
-    """Generate unique request ID."""
-    return str(uuid.uuid4())[:8]
+def get_log_dir() -> Path:
+    raw = os.getenv("LEXLINK_LOG_DIR", "").strip()
+    return Path(raw) if raw else LOG_DIR
 
 
-def log_raw(
-    request_id: str,
-    phase: str,  # "request" or "response"
-    data: Any,
-    extra: Optional[dict] = None
-):
-    """
-    Log raw data to JSONL file (legacy format).
+# ---------------------------------------------------------------------------
+# Background writer
+# ---------------------------------------------------------------------------
 
-    Args:
-        request_id: Unique ID for correlating request/response
-        phase: "request" or "response"
-        data: Raw data (will be JSON serialized)
-        extra: Additional metadata
-    """
-    log_entry = {
-        "timestamp": datetime.now().isoformat(),
-        "request_id": request_id,
-        "phase": phase,
-        "data": data,
-        **(extra or {})
-    }
+class LogWriter:
+    """Single daemon thread appending JSONL lines; applies retention."""
 
-    try:
-        log_file = get_log_file()
-        with open(log_file, "a", encoding="utf-8") as f:
-            f.write(json.dumps(log_entry, ensure_ascii=False, default=str) + "\n")
-    except Exception as e:
-        # Don't crash on logging errors
-        print(f"[RAW_LOGGER] Error writing log: {e}")
+    def __init__(self, log_dir: Path, retention_days: int = 30, maxsize: int = 10000):
+        self.log_dir = Path(log_dir)
+        self.retention_days = retention_days
+        self._queue: queue.Queue = queue.Queue(maxsize=maxsize)
+        self._current_day: Optional[date] = None
+        self._thread = threading.Thread(
+            target=self._run, name="lexlink-log-writer", daemon=True
+        )
+        self._thread.start()
 
+    def write(self, entry: dict) -> None:
+        """Queue an entry; never blocks (drops if the queue is full)."""
+        try:
+            self._queue.put_nowait(entry)
+        except queue.Full:
+            pass
 
-def log_mcp_call(
-    request_id: str,
-    timestamp: str,
-    duration_ms: float,
-    req_data: Optional[dict],
-    resp_data: Any,
-    headers: dict,
-    status_code: int,
-    client_ip: Optional[str] = None,
-    response_type: Optional[str] = None,
-):
-    """
-    Log MCP call in dashboard-compatible format (merged request+response).
+    def flush(self) -> None:
+        """Block until everything queued so far is written."""
+        self._queue.join()
 
-    This is the primary logging function for PlayMCP traffic.
-    Format matches the Smithery dashboard schema.
-    """
-    if not req_data or not isinstance(req_data, dict):
-        return  # Skip non-JSON requests
+    def _run(self) -> None:
+        while True:
+            entry = self._queue.get()
+            try:
+                self._write_entry(entry)
+            except Exception as e:  # never crash the writer
+                logger.warning("log write failed: %s", type(e).__name__)
+            finally:
+                self._queue.task_done()
 
-    method = req_data.get('method')
-    if not method:
-        return
-
-    # Extract result from SSE events
-    result = None
-    error = None
-    is_error = False
-
-    if resp_data and isinstance(resp_data, dict):
-        sse_events = resp_data.get('_sse_events', [])
-        if sse_events:
-            event_data = sse_events[0].get('data', {})
-            result = event_data.get('result')
-            error = event_data.get('error')
-            if error:
-                is_error = True
-
-    # Check result.isError flag
-    if result and isinstance(result, dict) and result.get('isError'):
-        is_error = True
-
-    # Determine status
-    if status_code >= 400 or is_error or error:
-        status = 'error'
-    else:
-        status = 'success'
-
-    # Extract client info
-    params = req_data.get('params', {})
-    client_info = params.get('clientInfo', {})
-    client = client_info.get('name') or headers.get('user-agent', '').split('/')[0]
-    client_version = client_info.get('version')
-    protocol_version = params.get('protocolVersion')
-
-    # Extract tool info
-    tool_name = None
-    arguments = None
-    if method == 'tools/call':
-        tool_name = params.get('name')
-        arguments = params.get('arguments')
-        if isinstance(arguments, dict):
-            arguments = {k: v for k, v in arguments.items() if k.lower() != "oc"}
-
-    # Build dashboard entry
-    entry = {
-        # Identifiers
-        'rpc_id': str(req_data.get('id', request_id)),
-        'request_id': request_id,
-        'session_id': headers.get('mcp-session-id'),
-
-        # Timing
-        'timestamp': timestamp,
-        'duration_ms': round(duration_ms, 2),
-
-        # Request info
-        'method': method,
-        'tool_name': tool_name,
-        'params': {
-            'arguments': arguments,
-            'clientInfo': client_info if client_info else None,
-            'protocolVersion': protocol_version,
-        },
-
-        # Client info
-        'client': client,
-        'client_version': client_version,
-        'protocol_version': protocol_version,
-        'client_ip': headers.get('x-forwarded-for') or client_ip,
-        'has_oc': bool(headers.get('oc') or headers.get('OC')),
-
-        # Response info
-        'status': status,
-        'status_code': status_code,
-        'result': result,
-        'error': error,
-
-        # Metadata
-        'response_type': response_type,
-    }
-
-    # Clean up None values
-    entry = {k: v for k, v in entry.items() if v is not None}
-
-    # Also clean params
-    if 'params' in entry:
-        entry['params'] = {k: v for k, v in entry['params'].items() if v is not None}
-
-    try:
-        log_file = get_log_file()
-        with open(log_file, "a", encoding="utf-8") as f:
+    def _write_entry(self, entry: dict) -> None:
+        today = datetime.now().date()
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        if today != self._current_day:
+            self._current_day = today
+            self.apply_retention(today)
+        path = self.log_dir / f"{today.isoformat()}.jsonl"
+        with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
-    except Exception as e:
-        print(f"[MCP_LOGGER] Error writing log: {e}")
+
+    def apply_retention(self, today: Optional[date] = None) -> None:
+        """Delete only YYYY-MM-DD.jsonl files older than retention_days."""
+        if self.retention_days <= 0:
+            return
+        today = today or datetime.now().date()
+        cutoff = today - timedelta(days=self.retention_days)
+        try:
+            names = os.listdir(self.log_dir)
+        except OSError:
+            return
+        for name in names:
+            m = _DATED_FILE_RE.match(name)
+            if not m:
+                continue
+            try:
+                day = date(int(m[1]), int(m[2]), int(m[3]))
+            except ValueError:
+                continue
+            if day < cutoff:
+                try:
+                    (self.log_dir / name).unlink()
+                except OSError:
+                    pass
+
+
+_writers: dict[str, LogWriter] = {}
+_writers_lock = threading.Lock()
+
+
+def get_writer(log_dir: Optional[Path] = None, retention_days: Optional[int] = None) -> LogWriter:
+    """Shared writer per log directory."""
+    log_dir = Path(log_dir) if log_dir else get_log_dir()
+    if retention_days is None:
+        try:
+            retention_days = int(os.getenv("LEXLINK_LOG_RETENTION_DAYS", "30"))
+        except ValueError:
+            retention_days = 30
+    key = str(log_dir)
+    with _writers_lock:
+        w = _writers.get(key)
+        if w is None:
+            w = _writers[key] = LogWriter(log_dir, retention_days)
+        return w
+
+
+def flush_all() -> None:
+    """Flush every writer (shutdown / tests)."""
+    with _writers_lock:
+        writers = list(_writers.values())
+    for w in writers:
+        w.flush()
+
+
+atexit.register(flush_all)
+
+
+# ---------------------------------------------------------------------------
+# Parsing and entry building
+# ---------------------------------------------------------------------------
+
+def _redact_values(obj: Any) -> Any:
+    if isinstance(obj, str):
+        return redact_oc(obj)
+    if isinstance(obj, dict):
+        return {k: _redact_values(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_redact_values(v) for v in obj]
+    return obj
+
+
+def _parse_request(body: bytes) -> Optional[dict]:
+    try:
+        data = json.loads(body)
+    except (ValueError, UnicodeDecodeError):
+        return None
+    if isinstance(data, list):
+        data = next((d for d in data if isinstance(d, dict)), None)
+    return data if isinstance(data, dict) else None
+
+
+def _parse_response_messages(body: bytes, content_type: str) -> list[dict]:
+    """JSON-RPC messages from a plain JSON or SSE response capture."""
+    text = body.decode("utf-8", errors="replace")
+    msgs: list[Any] = []
+    if "text/event-stream" in content_type or text.lstrip().startswith(("event:", "data:", "id:")):
+        for block in re.split(r"\r?\n\r?\n", text):
+            data_lines = [
+                ln[5:].lstrip() for ln in block.splitlines() if ln.startswith("data:")
+            ]
+            if not data_lines:
+                continue
+            try:
+                msgs.append(json.loads("\n".join(data_lines)))
+            except ValueError:
+                pass
+    else:
+        try:
+            msgs.append(json.loads(text))
+        except ValueError:
+            pass
+    flat: list[dict] = []
+    for m in msgs:
+        flat.extend(m if isinstance(m, list) else [m])
+    return [m for m in flat if isinstance(m, dict)]
+
+
+def _tool_payload(result: dict) -> Optional[dict]:
+    """The LexLink tool response dict inside an MCP tools/call result."""
+    sc = result.get("structuredContent")
+    if isinstance(sc, dict):
+        return sc.get("result") if isinstance(sc.get("result"), dict) else sc
+    for item in result.get("content") or []:
+        if isinstance(item, dict) and item.get("type") == "text":
+            try:
+                parsed = json.loads(item.get("text", ""))
+            except (ValueError, TypeError):
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+    return None
+
+
+def build_entry(
+    *,
+    req_body: bytes,
+    resp_body: bytes,
+    content_type: str,
+    http_method: str,
+    http_status: int,
+    response_bytes: int,
+    duration_ms: float,
+    token_id: str,
+    client_ip: Optional[str],
+    truncated_capture: bool,
+    log_bodies: bool,
+) -> Optional[dict]:
+    """Build one log entry, or None if this request should not be logged."""
+    rpc_id = None
+    method = None
+    tool_name = None
+    arguments: Any = None
+    if http_method == "POST":
+        req = _parse_request(req_body)
+        if req is not None:
+            method = req.get("method")
+            rpc_id = req.get("id")
+            params = req.get("params")
+            if method == "tools/call" and isinstance(params, dict):
+                tool_name = params.get("name")
+                arguments = params.get("arguments")
+        else:
+            m = re.search(rb'"method"\s*:\s*"([^"]+)"', req_body)
+            method = m.group(1).decode("utf-8", "replace") if m else None
+        if not isinstance(method, str) or not method:
+            return None
+    elif http_method == "GET":
+        method = "GET"
+    else:
+        return None
+
+    error = None
+    result = None
+    for msg in _parse_response_messages(resp_body, content_type):
+        if "result" not in msg and "error" not in msg:
+            continue
+        if rpc_id is not None and msg.get("id") != rpc_id and msg.get("id") is not None:
+            continue
+        result, error = msg.get("result"), msg.get("error")
+        break
+
+    is_error = http_status >= 400 or bool(error)
+    error_code: Optional[str] = None
+    payload = None
+    if isinstance(error, dict) and error.get("code") is not None:
+        error_code = str(error["code"])
+    if isinstance(result, dict):
+        if result.get("isError"):
+            is_error = True
+        payload = _tool_payload(result)
+        if payload is not None:
+            if payload.get("status") == "error":
+                is_error = True
+            if payload.get("error_code"):
+                error_code = str(payload["error_code"])
+    if error_code is None and resp_body and method == "tools/call":
+        m = _RESPONSE_KEY_RE.search(resp_body.decode("utf-8", errors="replace"))
+        if m:
+            error_code, is_error = m.group(1), True
+
+    entry: dict = {
+        "timestamp": datetime.now().isoformat(),
+        "token_id": token_id,
+        "method": method,
+        "tool_name": tool_name,
+        "arguments_keys": sorted(arguments) if isinstance(arguments, dict) else None,
+        "status": "error" if is_error else "ok",
+        "error_code": error_code,
+        "http_status": http_status,
+        "response_bytes": response_bytes,
+        "duration_ms": round(duration_ms, 2),
+        "client_ip": client_ip,
+        "truncated_capture": True if truncated_capture else None,
+    }
+    if log_bodies:
+        if isinstance(arguments, dict):
+            entry["arguments"] = _redact_values(
+                {k: v for k, v in arguments.items() if str(k).lower() not in _SENSITIVE_KEYS}
+            )
+        if result is not None:
+            entry["result"] = _redact_values(result)
+        elif error is not None:
+            entry["result"] = _redact_values(error)
+    return {k: v for k, v in entry.items() if v is not None}
+
+
+# ---------------------------------------------------------------------------
+# ASGI middleware
+# ---------------------------------------------------------------------------
+
+class LoggingMiddleware:
+    """Pure ASGI logger: forwards messages untouched, keeps capped copies."""
+
+    def __init__(
+        self,
+        app,
+        writer: Optional[LogWriter] = None,
+        log_bodies: Optional[bool] = None,
+        capture_max_bytes: Optional[int] = None,
+        trusted_proxies: Optional[frozenset] = None,
+    ):
+        self.app = app
+        self.writer = writer if writer is not None else get_writer()
+        self.log_bodies = (
+            os.getenv("LEXLINK_LOG_BODIES", "").strip().lower() == "true"
+            if log_bodies is None else log_bodies
+        )
+        if capture_max_bytes is None:
+            try:
+                capture_max_bytes = int(os.getenv("LEXLINK_LOG_CAPTURE_MAX_BYTES", "1048576"))
+            except ValueError:
+                capture_max_bytes = 1048576
+        self.capture_max = capture_max_bytes
+        if trusted_proxies is None:
+            trusted_proxies = frozenset(
+                p.strip() for p in os.getenv("LEXLINK_TRUSTED_PROXIES", "").split(",") if p.strip()
+            )
+        self.trusted_proxies = trusted_proxies
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        start = time.perf_counter()
+        http_method = scope.get("method", "")
+        req_buf = bytearray()
+        resp_buf = bytearray()
+        info = {"status": 500, "ctype": "", "total": 0, "truncated": False}
+
+        async def wrapped_receive():
+            message = await receive()
+            if message["type"] == "http.request" and http_method == "POST":
+                self._capture(req_buf, message.get("body", b""), info)
+            return message
+
+        async def wrapped_send(message):
+            if message["type"] == "http.response.start":
+                info["status"] = message["status"]
+                for k, v in message.get("headers", []):
+                    if k.lower() == b"content-type":
+                        info["ctype"] = v.decode("latin-1").lower()
+            elif message["type"] == "http.response.body":
+                body = message.get("body", b"")
+                info["total"] += len(body)
+                self._capture(resp_buf, body, info)
+            await send(message)
+
+        try:
+            await self.app(scope, wrapped_receive, wrapped_send)
+        finally:
+            try:
+                entry = build_entry(
+                    req_body=bytes(req_buf),
+                    resp_body=bytes(resp_buf),
+                    content_type=info["ctype"],
+                    http_method=http_method,
+                    http_status=info["status"],
+                    response_bytes=info["total"],
+                    duration_ms=(time.perf_counter() - start) * 1000,
+                    token_id=scope.get("state", {}).get("token_id", NO_AUTH_TOKEN_ID),
+                    client_ip=resolve_client_ip(scope, self.trusted_proxies),
+                    truncated_capture=info["truncated"],
+                    log_bodies=self.log_bodies,
+                )
+                if entry is not None:
+                    self.writer.write(entry)
+            except Exception as e:  # logging must never break a request
+                logger.warning("log build failed: %s", type(e).__name__)
+
+    def _capture(self, buf: bytearray, chunk: bytes, info: dict) -> None:
+        room = self.capture_max - len(buf)
+        if len(chunk) > room:
+            info["truncated"] = True
+        if room > 0:
+            buf.extend(chunk[:room])

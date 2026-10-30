@@ -7,6 +7,7 @@ This guide explains how to deploy LexLink as an HTTP server for Kakao PlayMCP.
 > 2. **Streamable HTTP transport** - Set `TRANSPORT=http` (not SSE)
 > 3. **Port 80/443 only** - Use Nginx as reverse proxy
 > 4. **Server OC must have server IP registered** at open.law.go.kr
+> 5. **Authentication is required to start**: set `LEXLINK_AUTH_TOKENS` (or `LEXLINK_ALLOW_NO_AUTH=true` for PlayMCP's "no auth" registration). See [OPERATIONS.md](OPERATIONS.md) (Korean) for hardening, logging, rate limits and TLS proxy setup.
 
 ---
 
@@ -14,10 +15,8 @@ This guide explains how to deploy LexLink as an HTTP server for Kakao PlayMCP.
 
 ```bash
 # Run with Streamable HTTP transport (required for PlayMCP)
-TRANSPORT=http uv run serve
-
-# With your registered OC
-OC=your_oc TRANSPORT=http uv run serve
+# (refuses to start without LEXLINK_AUTH_TOKENS or LEXLINK_ALLOW_NO_AUTH=true)
+OC=your_oc LEXLINK_AUTH_TOKENS=local:change-me-token TRANSPORT=http uv run serve
 
 # Server will start at: http://localhost:8000/mcp
 ```
@@ -32,9 +31,15 @@ OC=your_oc TRANSPORT=http uv run serve
 | `OC` | **Yes** | - | Server's OC for law.go.kr API (must have server IP registered) |
 | `PORT` | No | 8000 | Server port |
 | `HOST` | No | 0.0.0.0 | Server host |
+| `LEXLINK_AUTH_TOKENS` | **Yes**** | - | `name:token,name2:token2`; clients send `Authorization: Bearer <token>` |
+| `LEXLINK_ALLOW_NO_AUTH` | No | - | Exactly `true` to start without tokens (PlayMCP "no auth" only; logs a warning) |
+| `LEXLINK_ALLOWED_HOSTS` | Recommended | - | Allowed Host header(s), e.g. your domain. Without it only localhost Hosts are accepted |
+| `LEXLINK_ALLOWED_ORIGINS`, `LEXLINK_TRUSTED_PROXIES`, `LEXLINK_MAX_CONCURRENCY`, `LEXLINK_RATE_LIMIT_PER_MIN`, `LEXLINK_LOG_DIR`, `LEXLINK_LOG_RETENTION_DAYS`, `LEXLINK_LOG_BODIES`, `LEXLINK_LOG_CAPTURE_MAX_BYTES` | No | see OPERATIONS.md | Hardening and logging options |
 | `SLIM_RESPONSE` | No | - | Set to `true` to remove redundant raw XML from responses when parsed data exists (for PlayMCP size limits) |
 
 *PlayMCP requires Streamable HTTP transport (`TRANSPORT=http`), not SSE.
+
+**Or `LEXLINK_ALLOW_NO_AUTH=true`. In HTTP mode the tool `oc` argument is ignored; run a single process/worker (`uvicorn --factory lexlink.http_server:create_app` is also supported).
 
 ---
 
@@ -208,6 +213,8 @@ WorkingDirectory=/home/ubuntu/lexlink-ko-mcp
 Environment="OC=your_registered_oc"
 Environment="PORT=8000"
 Environment="TRANSPORT=http"
+Environment="LEXLINK_AUTH_TOKENS=playmcp:change-me-long-random"
+Environment="LEXLINK_ALLOWED_HOSTS=your-domain.example"
 Environment="SLIM_RESPONSE=true"
 ExecStart=/home/ubuntu/.local/bin/uv run serve
 Restart=always
@@ -230,6 +237,8 @@ WorkingDirectory=/home/ec2-user/lexlink-ko-mcp
 Environment="OC=your_registered_oc"
 Environment="PORT=8000"
 Environment="TRANSPORT=http"
+Environment="LEXLINK_AUTH_TOKENS=playmcp:change-me-long-random"
+Environment="LEXLINK_ALLOWED_HOSTS=your-domain.example"
 Environment="SLIM_RESPONSE=true"
 ExecStart=/home/ec2-user/.local/bin/uv run serve
 Restart=always
@@ -384,6 +393,8 @@ PlayMCP rejects raw IP addresses. Use sslip.io:
    ```bash
    grep TRANSPORT /etc/systemd/system/lexlink.service
    # Should show: Environment="TRANSPORT=http"
+Environment="LEXLINK_AUTH_TOKENS=playmcp:change-me-long-random"
+Environment="LEXLINK_ALLOWED_HOSTS=your-domain.example"
    ```
 
 2. **Check endpoint:** Must be `/mcp` (not `/sse`)

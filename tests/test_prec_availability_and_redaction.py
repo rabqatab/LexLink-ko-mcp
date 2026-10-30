@@ -8,7 +8,6 @@ import re
 import httpx
 import pytest
 
-from lexlink import raw_logger
 from lexlink._helpers import annotate_prec_body_availability, run_service
 from lexlink.cache import get_cache
 from lexlink.client import LawAPIClient, detect_upstream_body_error, redact_oc
@@ -225,23 +224,6 @@ def test_annotate_list_and_single_dict():
 
 
 # --- logging ----------------------------------------------------------------
-
-@pytest.mark.unit
-def test_log_mcp_call_writes_no_oc(monkeypatch, tmp_path):
-    log_file = tmp_path / "log.jsonl"
-    monkeypatch.setattr(raw_logger, "get_log_file", lambda: log_file)
-    raw_logger.log_mcp_call(
-        request_id="r", timestamp="2026-01-01T00:00:00", duration_ms=1.0,
-        req_data={"method": "tools/call", "id": 1,
-                  "params": {"name": "prec_search", "arguments": {"query": "q", "OC": FAKE_OC, "oc": FAKE_OC}}},
-        resp_data={}, headers={"oc": FAKE_OC, "OC": FAKE_OC}, status_code=200,
-    )
-    text = log_file.read_text(encoding="utf-8")
-    assert FAKE_OC not in text
-    entry = json.loads(text.splitlines()[0])
-    assert entry["has_oc"] is True
-    assert entry["params"]["arguments"] == {"query": "q"}
-
 
 @pytest.mark.unit
 def test_httpx_logger_not_verbose():

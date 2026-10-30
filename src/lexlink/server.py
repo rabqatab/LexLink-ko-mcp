@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 
 
-def create_server() -> FastMCP:
+def create_server(transport_security=None) -> FastMCP:
     """
     Create and configure the LexLink MCP server.
 
@@ -189,7 +189,11 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
 - Article format: "000300" = 제3조, "001102" = 제11조의2
 """
 
-    server = FastMCP("LexLink - Korean Law API", instructions=SERVER_INSTRUCTIONS)
+    server = FastMCP(
+        "LexLink - Korean Law API",
+        instructions=SERVER_INSTRUCTIONS,
+        transport_security=transport_security,
+    )
     # FastMCP has no version argument; set it on the low-level server so that
     # `initialize` reports LexLink's own version instead of the mcp library's.
     server._mcp_server.version = __version__

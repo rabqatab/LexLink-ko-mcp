@@ -12,6 +12,19 @@ from typing import Optional
 from urllib.parse import quote
 
 
+_IGNORE_OC_OVERRIDE = False
+
+
+def set_ignore_oc_override(value: bool) -> None:
+    """Ignore the tool-argument OC and always use the server's OC env var.
+
+    Enabled by the HTTP app (callers must not choose the credential); stdio
+    keeps the default (False) and honours the tool argument.
+    """
+    global _IGNORE_OC_OVERRIDE
+    _IGNORE_OC_OVERRIDE = bool(value)
+
+
 def resolve_oc(override_oc: Optional[str] = None) -> str:
     """
     Resolve OC parameter with priority order.
@@ -38,7 +51,7 @@ def resolve_oc(override_oc: Optional[str] = None) -> str:
         'env_value'
     """
     # Priority 1: Tool argument override
-    if override_oc and override_oc.strip():
+    if override_oc and override_oc.strip() and not _IGNORE_OC_OVERRIDE:
         return override_oc.strip()
 
     # Priority 2: Environment variable
