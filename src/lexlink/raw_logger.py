@@ -125,6 +125,8 @@ def log_mcp_call(
     if method == 'tools/call':
         tool_name = params.get('name')
         arguments = params.get('arguments')
+        if isinstance(arguments, dict):
+            arguments = {k: v for k, v in arguments.items() if k.lower() != "oc"}
 
     # Build dashboard entry
     entry = {
@@ -151,7 +153,7 @@ def log_mcp_call(
         'client_version': client_version,
         'protocol_version': protocol_version,
         'client_ip': headers.get('x-forwarded-for') or client_ip,
-        'oc': headers.get('oc') or headers.get('OC'),
+        'has_oc': bool(headers.get('oc') or headers.get('OC')),
 
         # Response info
         'status': status,

@@ -134,6 +134,8 @@ def transform_to_dashboard_format(req_id: str, req: dict, resp: dict) -> Optiona
     if method == 'tools/call':
         tool_name = params.get('name')
         arguments = params.get('arguments')
+        if isinstance(arguments, dict):
+            arguments = {k: v for k, v in arguments.items() if k.lower() != "oc"}
 
     # Build dashboard entry
     entry = {
@@ -160,7 +162,7 @@ def transform_to_dashboard_format(req_id: str, req: dict, resp: dict) -> Optiona
         'client_version': client_version,
         'protocol_version': protocol_version,
         'client_ip': headers.get('x-forwarded-for') or req.get('client'),
-        'oc': headers.get('oc'),
+        'has_oc': bool(headers.get('oc') or headers.get('OC')),
 
         # Response info
         'status': status,

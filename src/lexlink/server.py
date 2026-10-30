@@ -29,7 +29,7 @@ from .ranking import detect_query_language, should_apply_ranking, rank_search_re
 from .resolver import get_resolver
 from ._helpers import (
     TOOL_ANNOTATIONS, stringify_id, handle_tool_error, ToolValidationError,
-    slim_response, run_search, run_service,
+    slim_response, run_search, run_service, annotate_prec_body_availability,
     extract_outcome, extract_key_factors, extract_legal_terms, compute_text_diff,
 )
 
@@ -1363,7 +1363,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             pop_yn: Popup flag ("Y" or "N")
 
         Returns:
-            Search results with precedent list or error
+            Search results with precedent list or error.
+            국세법령정보시스템 항목은 본문제공="API 미제공"; dat_src_nm 으로 출처 필터 가능.
 
         Examples:
             Search for precedents mentioning "담보권":
@@ -1390,12 +1391,12 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         if nb: snake_params["nb"] = nb
         if dat_src_nm: snake_params["dat_src_nm"] = dat_src_nm
         if pop_yn: snake_params["pop_yn"] = pop_yn
-        return run_search(
+        return annotate_prec_body_availability(run_search(
             get_client=_get_client, target="prec", query=query,
             snake_params=snake_params, response_type=type, display=display,
             ranking_field="판례명", list_type="items", item_category="prec",
             over_fetch_key="display",
-        )
+        ))
 
     # ==================== TOOL 17: prec_service ====================
     @server.tool(annotations=TOOL_ANNOTATIONS)
@@ -1423,7 +1424,10 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             type: Response format - "JSON" (default), "XML", or "HTML"
 
         Returns:
-            Full precedent text with details or error
+            Full precedent text with details or error. Error NOT_FOUND when the
+            body is unavailable (unknown id or source not served by the API).
+            sections="summary" falls back to including 판례내용 when both 판시사항
+            and 판결요지 are empty (sections="summary_fallback").
 
         Examples:
             >>> prec_service(id="228541")
@@ -1438,7 +1442,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         return run_service(get_client=_get_client, target="prec",
                           snake_params=snake_params, response_type=type,
                           sections=sections,
-                          full_text_fields=["판례내용"])
+                          full_text_fields=["판례내용"],
+                          summary_required_fields=["판시사항", "판결요지"])
 
     # ==================== TOOL 18: detc_search ====================
     @server.tool(annotations=TOOL_ANNOTATIONS)
@@ -1870,7 +1875,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         # but we validate it for consistency with other tools
         try:
             resolved_oc = resolve_oc(override_oc=oc)
-            logger.debug(f"article_citation called with OC: {resolved_oc[:4]}...")
+            logger.debug("article_citation called with OC")
         except ValueError:
             # OC not required for citation extraction
             logger.debug("article_citation called without OC (not required)")
@@ -3249,6 +3254,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         outcomes = {}
         all_factors = []
         cases = []
+        unavailable = 0
 
         seen_case_numbers: set = set()
         for item in prec_list:
@@ -3273,6 +3279,11 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 snake_params=svc_params, response_type=type,
                 sections="summary", full_text_fields=["판례내용"],
             )
+
+            # Body unavailable (NOT_FOUND etc.): skip, try the next candidate
+            if svc_result.get("status") != "ok":
+                unavailable += 1
+                continue
 
             # Parse the response to extract 판시사항 and 판결요지
             raw = svc_result.get("raw_content", "")
@@ -3331,6 +3342,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             "query": query,
             "total_found": total_found,
             "analyzed": len(cases),
+            "unavailable_cases": unavailable,
             "outcome_summary": outcomes,
             "key_factors": unique_factors[:10],
             "search_mode": search_mode,
