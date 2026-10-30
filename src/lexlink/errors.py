@@ -36,6 +36,10 @@ class ErrorCode:
     ARTICLE_NOT_FOUND = "ARTICLE_NOT_FOUND"
     """The requested article (jo) is not present in the upstream response."""
 
+    NOT_FOUND = "NOT_FOUND"
+    """law.go.kr answered HTTP 200 with '일치하는 …가 없습니다': the id does not
+    exist or its body is not provided."""
+
 
 def create_error_response(
     error_code: str,

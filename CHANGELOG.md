@@ -6,6 +6,20 @@ All notable changes to LexLink are documented here in both English and Korean.
 
 ## English
 
+### Unreleased
+
+#### Fixed
+- `prec_service` / `detc_service` / `expc_service`: an upstream "일치하는 … 없습니다" answer (unknown id, or a case whose body the API does not provide, e.g. 국세법령정보시스템 precedents) now returns the new `NOT_FOUND` error instead of `status: ok`. Errors are never cached.
+- `prec_service(sections="summary")` falls back to including 판례내용 (`sections: "summary_fallback"` plus a warning) when both 판시사항 and 판결요지 are empty.
+- `prec_search` marks 국세법령정보시스템 items with `본문제공: "API 미제공"`; use `dat_src_nm="대법원"` to search only sources whose body is served.
+- Section filtering (`sections="summary"`) no longer mutates the cached full response, which a later full call used to return stripped.
+- `check_precedent_odds` skips cases without a body, moves on to the next candidate, and reports `unavailable_cases`.
+
+#### Security
+- The OC credential is removed from upstream response bodies (e.g. `판례상세링크`), error messages, and debug/request logs (`has_oc` flag only); the `httpx` logger is limited to WARNING.
+
+---
+
 ### v2.2.0 (2026-10-25)
 
 #### Fixed (P0)
@@ -512,6 +526,20 @@ All notable changes to LexLink are documented here in both English and Korean.
 ---
 
 ## 한국어 (Korean)
+
+### 미배포 (Unreleased)
+
+#### 수정
+- `prec_service` / `detc_service` / `expc_service`: 업스트림이 "일치하는 … 없습니다"로 답하는 경우(존재하지 않는 ID, 또는 국세법령정보시스템 판례처럼 API가 본문을 제공하지 않는 경우) `status: ok` 대신 새 `NOT_FOUND` 오류를 반환. 오류는 캐시되지 않음.
+- `prec_service(sections="summary")`에서 판시사항·판결요지가 모두 비어 있으면 판례내용을 포함해 반환(`sections: "summary_fallback"` 및 경고).
+- `prec_search`가 국세법령정보시스템 항목에 `본문제공: "API 미제공"`을 표시. `dat_src_nm="대법원"`으로 본문 제공 출처만 검색 가능.
+- `sections="summary"` 필터링이 캐시된 전체 응답을 변형하여, 이후 전체 조회가 잘린 본문을 반환하던 문제 수정.
+- `check_precedent_odds`가 본문이 없는 판례를 건너뛰고 다음 후보로 넘어가며 `unavailable_cases`를 보고.
+
+#### 보안
+- 업스트림 응답 본문(`판례상세링크` 등), 오류 메시지, 디버그/요청 로그에서 OC 인증값을 제거(로그에는 `has_oc` 플래그만 기록). `httpx` 로거는 WARNING 이상으로 제한.
+
+---
 
 ### v2.2.0 (2026-10-25)
 

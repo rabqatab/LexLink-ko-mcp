@@ -20,6 +20,44 @@ from .errors import ErrorCode, create_error_response, get_http_error_hints
 # Set up module logger
 logger = logging.getLogger(__name__)
 
+# httpx logs full request URLs (including OC) at INFO.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
+
+# ---------------------------------------------------------------------------
+# OC redaction
+# ---------------------------------------------------------------------------
+
+_OC_SEP = r"\?|&amp;|&|\\u0026"
+_OC_PARAM_RE = re.compile(
+    rf'(?P<sep>{_OC_SEP})OC=[^&"\'<>\s\\]*(?P<after>(?:&amp;|&|\\u0026)(?=[^&\s]))?',
+    re.I,
+)
+
+
+def _oc_sub(m: "re.Match[str]") -> str:
+    sep, after = m.group("sep"), m.group("after")
+    if sep == "?":
+        # keep "?" only when another param follows
+        return "?" if after else ""
+    # &OC=x (&next) -> &next ; &OC=x (end) -> removed
+    return sep if after else ""
+
+
+def redact_oc(text: str, oc: str | None = None) -> str:
+    """Remove the OC query parameter from any URL in ``text`` (case-insensitive).
+
+    Handles ``?``, ``&``, ``&amp;`` and literal backslash separators. If ``oc`` is
+    given and at least 6 chars long, remaining literal occurrences become ``***``
+    (shorter values would corrupt legal text).
+    """
+    if not text:
+        return text
+    text = _OC_PARAM_RE.sub(_oc_sub, text)
+    if oc and len(oc) >= 6:
+        text = text.replace(oc, "***")
+    return text
+
 
 # ---------------------------------------------------------------------------
 # Upstream body error detection (HTTP 200 with an error inside the body)
@@ -30,6 +68,7 @@ NOT_SUBSCRIBED_MARKER = "미신청된 목록/본문에 대한 접근입니다"
 ERROR_PAGE_MARKER_RE = re.compile(r'id\s*=\s*["\']error\d{3}["\']', re.I)
 _HTML_START_RE = re.compile(r"^\s*(?:<!doctype\s+html|<html)", re.I)
 _TAG_RE = re.compile(r"<[^>]+>")
+NO_MATCH_RE = re.compile(r"일치하는 (?!법령이)\S+ 없습니다")
 
 
 def _html_headline(body: str) -> str | None:
@@ -166,6 +205,34 @@ def detect_upstream_body_error(
             upstream_headline=headline,
         )
 
+    # 6) "일치하는 …가 없습니다" on a service (본문) call: id missing or body not provided.
+    # Length bound keeps real judgments that quote the phrase from tripping this.
+    if endpoint == "/DRF/lawService.do" and len(text) < 500 and NO_MATCH_RE.search(text):
+        if target == "prec":
+            message = (
+                "해당 판례의 본문을 가져올 수 없습니다. 존재하지 않는 판례일련번호이거나, "
+                "국가법령정보센터 API가 본문을 제공하지 않는 판례일 수 있습니다"
+                "(예: 데이터출처명 국세법령정보시스템)."
+            )
+            hints = [
+                "업스트림은 '존재하지 않는 ID'와 '본문 미제공 판례'를 구분하지 않습니다",
+                "prec_search 결과의 데이터출처명을 확인하세요",
+                'prec_search(dat_src_nm="대법원")으로 본문 제공 출처만 검색할 수 있습니다',
+            ]
+        else:
+            message = f"일치하는 자료가 없습니다 (target={target}). ID를 확인하세요."
+            hints = [
+                "업스트림은 '존재하지 않는 ID'와 '본문 미제공'을 구분하지 않습니다",
+                f"{target}_search 결과의 ID를 다시 확인하세요",
+            ]
+        return create_error_response(
+            error_code=ErrorCode.NOT_FOUND,
+            message=message,
+            hints=hints,
+            request_id=request_id,
+            upstream_target=target,
+        )
+
     return None
 
 
@@ -279,6 +346,7 @@ class LawAPIClient:
             return self._passthrough_response(
                 response, request_id, response_type,
                 target=params.get("target"), endpoint=endpoint,
+                oc=params.get("OC"),
             )
 
         except httpx.TimeoutException:
@@ -322,7 +390,7 @@ class LawAPIClient:
             )
             return create_error_response(
                 error_code=ErrorCode.INTERNAL_ERROR,
-                message=f"Unexpected error: {str(e)}",
+                message=f"Unexpected error: {redact_oc(str(e), params.get('OC'))}",
                 hints=[
                     "This is an internal server error",
                     "Check server logs for details",
@@ -399,6 +467,7 @@ class LawAPIClient:
         format_type: str,
         target: str | None = None,
         endpoint: str | None = None,
+        oc: str | None = None,
     ) -> dict:
         """
         Return response content, detecting upstream errors in the body.
@@ -417,7 +486,7 @@ class LawAPIClient:
         Returns:
             Response with raw content, or error if upstream body contains error
         """
-        body = response.text
+        body = redact_oc(response.text, oc)
         error = detect_upstream_body_error(
             body, format_type, request_id=request_id, target=target, endpoint=endpoint
         )

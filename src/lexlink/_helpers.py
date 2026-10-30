@@ -259,6 +259,45 @@ def run_search(
     return slim_response(response)
 
 
+def _fields_empty(raw: str, response_type: str, fields: list[str]) -> bool:
+    """True when every field in ``fields`` is missing or blank in the body."""
+    if response_type == "JSON":
+        try:
+            import json as _json
+            data = _json.loads(raw)
+            root = list(data.values())[0] if isinstance(data, dict) and data else {}
+            if not isinstance(root, dict):
+                return False
+        except Exception:
+            return False
+        return all(not str(root.get(f) or "").strip() for f in fields)
+    if response_type == "XML":
+        for f in fields:
+            fe = re.escape(f)
+            for m in re.finditer(rf'<{fe}>(.*?)</{fe}>', raw, flags=re.DOTALL):
+                inner = re.sub(r'<!\[CDATA\[(.*?)\]\]>', r'\1', m.group(1), flags=re.DOTALL)
+                if inner.strip():
+                    return False
+        return True
+    return False
+
+
+# Precedent 데이터출처명 values whose body the law.go.kr API does not provide
+PREC_NO_BODY_SOURCES = {"국세법령정보시스템"}
+
+
+def annotate_prec_body_availability(response: dict) -> dict:
+    """Mark prec search items whose body is not served by the API."""
+    ranked = response.get("ranked_data") if isinstance(response, dict) else None
+    items = ranked.get("prec") if isinstance(ranked, dict) else None
+    if isinstance(items, dict):
+        items = [items]
+    for item in items or []:
+        if isinstance(item, dict) and item.get("데이터출처명") in PREC_NO_BODY_SOURCES:
+            item["본문제공"] = "API 미제공"
+    return response
+
+
 def run_service(
     *,
     get_client,
@@ -267,6 +306,7 @@ def run_service(
     response_type: str = "XML",
     sections: Optional[str] = None,
     full_text_fields: Optional[list[str]] = None,
+    summary_required_fields: Optional[list[str]] = None,
 ) -> dict:
     """Common service tool logic. Handles: param mapping, API call, section filtering.
 
@@ -275,6 +315,9 @@ def run_service(
                   PlayMCP 20KB limit), "full" or None for complete response.
         full_text_fields: List of field names to strip when sections="summary".
                          These are the verbose prose fields (판례내용, 전문, 이유, etc.)
+        summary_required_fields: Fields that make a summary useful (e.g. 판시사항,
+                         판결요지). If all are empty, full_text_fields are kept and
+                         sections="summary_fallback" is reported.
     """
     upstream_params = map_params_to_upstream(snake_params)
 
@@ -291,10 +334,22 @@ def run_service(
     # Cache the full response before section filtering
     cache.put(target, upstream_params, response)
 
+    # Section filtering must not mutate the cached full response
+    response = dict(response)
+
     # Section filtering: strip full-text fields when sections="summary"
     if sections == "summary" and full_text_fields and response.get("status") == "ok":
         raw = response.get("raw_content", "")
-        if raw and response_type == "XML":
+        if (
+            raw and summary_required_fields
+            and _fields_empty(raw, response_type, summary_required_fields)
+        ):
+            response["sections"] = "summary_fallback"
+            response["warning"] = (
+                "판시사항·판결요지가 비어 있어 판례내용을 포함함 "
+                "(sections=summary 요청이지만 본문 전체를 반환합니다)."
+            )
+        elif raw and response_type == "XML":
             # Strip XML tags for full-text fields
             for field in full_text_fields:
                 raw = re.sub(
