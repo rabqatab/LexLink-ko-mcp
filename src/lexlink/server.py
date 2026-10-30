@@ -3524,6 +3524,14 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                             )
                         )
                         api_calls += 1
+                        if cit_result.get("success") is False:
+                            errs = "; ".join(
+                                redact_oc(str(x), resolved_oc)
+                                for x in (cit_result.get("errors") or ["unknown error"])
+                            )
+                            resolver_warnings.append(
+                                f"인용 관계 추출에 실패했습니다 ({errs})"
+                            )
                         for c in cit_result.get("citations", [])[:10]:
                             citations.append({
                                 "from_law": top["law_name"],

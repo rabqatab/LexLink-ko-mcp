@@ -140,6 +140,7 @@ def slim_response(response: dict) -> dict:
     result = response.copy()
     if "ranked_data" in result:
         result.pop("raw_content", None)
+        result.pop("id_note", None)  # the note explains raw_content ids
     return result
 
 
