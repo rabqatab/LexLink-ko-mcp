@@ -21,8 +21,11 @@ Environment variables:
     LEXLINK_MAX_CONCURRENCY   concurrent POST requests per token (default 8)
     LEXLINK_RATE_LIMIT_PER_MIN  POST requests per minute per token (default 60)
     LEXLINK_MAX_SESSIONS      bound MCP sessions kept in memory (default 10000)
+    LEXLINK_SESSION_IDLE_TTL_SEC  idle Streamable HTTP sessions are terminated after
+                              this many seconds without activity (default 3600, 0 disables)
 """
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -31,7 +34,8 @@ import math
 import os
 import re
 import time
-from collections import deque
+from collections import OrderedDict, deque
+from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import parse_qsl
 from uuid import UUID
@@ -57,6 +61,19 @@ def _int_env(name: str, default: int) -> int:
         return int(raw)
     except ValueError:
         raise RuntimeError(f"{name} must be an integer, got {raw!r}") from None
+
+
+def _float_env(name: str, default: float) -> float:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        raise RuntimeError(f"{name} must be a number, got {raw!r}") from None
+    if not math.isfinite(value) or value < 0:
+        raise RuntimeError(f"{name} must be a finite number >= 0, got {raw!r}")
+    return value
 
 
 def token_id_for(token: str) -> str:
@@ -331,6 +348,18 @@ def _sse_key(raw: str) -> str:
         return "sse:" + raw
 
 
+@dataclass
+class _SessionMeta:
+    """Activity record of one bound Streamable HTTP session."""
+    last: float
+    active: int = 0           # requests (incl. open GET streams) in flight
+    expiring: bool = False    # idle expiry in progress; requests get the 404
+    host: bytes = b"localhost"  # last Host header that passed validation
+
+
+_EXPIRED_MEMORY = 4096  # tombstones of expired ids (bounded, oldest dropped)
+
+
 class SessionBindingMiddleware:
     """Bind MCP session ids to the token that created them.
 
@@ -347,25 +376,119 @@ class SessionBindingMiddleware:
     the session may still exist (an evicted binding would turn into an
     unbound session any token could use); at the cap new sessions are
     refused with 503 instead. Bindings are removed on owner DELETE (2xx), when
-    the app answers 404 for a bound id (terminated/crashed session) and when
-    an SSE stream ends. Ids unknown to the binding table pass to the app,
-    which answers 404 itself.
+    the app answers 404 for a bound id (terminated/crashed session), on idle
+    expiry and when an SSE stream ends. Ids unknown to the binding table pass
+    to the app, which answers 404 itself.
 
-    No-auth mode: every request has token_id "noauth", so binding is a no-op.
-    In-memory, single process; no awaits between table reads and writes.
+    Idle expiry (``idle_ttl`` seconds, 0/None disables; needs ``terminate``):
+    Streamable HTTP sessions otherwise live until the client DELETEs them.
+    Per session we track the last activity (request start and end) and a
+    counter of requests in flight; a session with a request in flight or an
+    open GET stream is never idle. A background sweep (``run_sweeper``,
+    started by create_app's lifespan) and a lazy check on every request for an
+    idle session expire it. Expiry first marks the session ``expiring``
+    (requests meanwhile get the standard unknown-session 404, whatever the
+    token, and never reach the app), then ``await terminate(id, host)`` which
+    must end the real session (create_app sends an internal DELETE to the
+    inner app). Only when that returned 2xx/404 is the binding removed and
+    ``release(id)`` called; on failure the mark is cleared, the binding kept
+    (so an unbound live session cannot exist) and the next sweep retries.
+    Expired ids are remembered (bounded) so every later request, owner
+    included, gets the byte-identical standard 404 and the client opens a
+    new session. Works in no-auth mode too (bindings are tracked there, only
+    their enforcement is a no-op).
+    SSE sessions need no expiry: the GET /sse stream *is* the session (mcp
+    frees it when the stream ends, and the binding ends with the stream), so
+    a connected client is alive by definition and POSTs to /messages/ do not
+    need to count as liveness.
+
+    In-memory, single process; no awaits between table reads and writes
+    except around ``terminate``, which is guarded by the ``expiring`` mark.
     """
 
-    def __init__(self, app, max_sessions: Optional[int] = None):
+    def __init__(self, app, max_sessions: Optional[int] = None,
+                 idle_ttl: Optional[float] = None, clock=time.monotonic,
+                 terminate=None, release=None):
         self.app = app
         self.max_sessions = (
             _int_env("LEXLINK_MAX_SESSIONS", 10000) if max_sessions is None else max_sessions
         )
+        self.idle_ttl = (
+            _float_env("LEXLINK_SESSION_IDLE_TTL_SEC", 3600.0) if idle_ttl is None else idle_ttl
+        )
+        self._clock = clock
+        self._terminate = terminate
+        self._release = release
         self._bindings: dict[str, str] = {}
+        self._meta: dict[str, _SessionMeta] = {}
+        self._expired: "OrderedDict[str, None]" = OrderedDict()
+        self.sweep_task: Optional[asyncio.Task] = None
+
+    @property
+    def expiry_enabled(self) -> bool:
+        return bool(self.idle_ttl) and self.idle_ttl > 0 and self._terminate is not None
 
     def _foreign(self, key: str, token_id: str) -> bool:
         owner = self._bindings.get(key)
         return owner is not None and not hmac.compare_digest(
             owner.encode("utf-8"), token_id.encode("utf-8"))
+
+    def _drop(self, sid: str) -> None:
+        self._bindings.pop(sid, None)
+        self._meta.pop(sid, None)
+        if self._release is not None:
+            try:
+                self._release(sid)
+            except Exception:
+                logger.warning("session release hook failed", exc_info=True)
+
+    def _is_idle(self, m: _SessionMeta, now: float) -> bool:
+        return m.active == 0 and not m.expiring and now - m.last >= self.idle_ttl
+
+    async def _expire(self, sid: str) -> bool:
+        """Terminate an idle session; True when it is gone (binding removed)."""
+        m = self._meta.get(sid)
+        if m is None or m.expiring or self._terminate is None:
+            return False
+        m.expiring = True
+        done = False
+        try:
+            status = await self._terminate(sid, m.host)
+            done = status is not None and (200 <= status < 300 or status == 404)
+            if not done:
+                logger.warning("idle session terminate returned %s; will retry", status)
+        except Exception:
+            logger.warning("idle session terminate failed; will retry", exc_info=True)
+        finally:
+            if done:
+                self._drop(sid)
+                self._expired[sid] = None
+                while len(self._expired) > _EXPIRED_MEMORY:
+                    self._expired.popitem(last=False)
+            else:
+                m.expiring = False  # keep the binding; next sweep retries
+        return done
+
+    async def sweep(self) -> int:
+        """Expire every idle session once; returns how many were removed."""
+        if not self.expiry_enabled:
+            return 0
+        now = self._clock()
+        removed = 0
+        for sid, m in list(self._meta.items()):
+            if self._is_idle(m, now) and await self._expire(sid):
+                removed += 1
+        return removed
+
+    async def run_sweeper(self) -> None:
+        """Periodic sweep (interval min(ttl/4, 60) s) until cancelled."""
+        interval = min(self.idle_ttl / 4, 60.0)
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                await self.sweep()
+            except Exception:
+                logger.warning("session sweep failed", exc_info=True)
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -383,15 +506,38 @@ class SessionBindingMiddleware:
                 scope.get("query_string", b"").decode("latin-1"), keep_blank_values=True)
             if k == "session_id"
         ]
-        if any(self._foreign(i, token_id) for i in header_ids) or any(
-                self._foreign(_sse_key(i), token_id) for i in query_ids):
+
+        async def reject():
             if query_ids and not header_ids:
                 await self._reject(send, b"text/plain; charset=utf-8", _SSE_NOT_FOUND)
             else:
                 await self._reject(send, b"application/json", _STREAMABLE_NOT_FOUND)
+
+        # expired / being expired: standard 404 for every token, owner included
+        if any(i in self._expired or (i in self._meta and self._meta[i].expiring)
+               for i in header_ids):
+            await reject()
+            return
+        if any(self._foreign(i, token_id) for i in header_ids) or any(
+                self._foreign(_sse_key(i), token_id) for i in query_ids):
+            await reject()
             return
 
+        # lazy expiry: do not depend on the sweep's timing
+        if self.expiry_enabled:
+            now = self._clock()
+            for i in dict.fromkeys(header_ids):
+                m = self._meta.get(i)
+                if m is not None and self._is_idle(m, now):
+                    await self._expire(i)
+            if any(i in self._expired or (i in self._meta and self._meta[i].expiring)
+                   for i in header_ids):
+                await reject()
+                return
+
         creating = not header_ids and method in ("POST", "GET") and not query_ids
+        if creating and len(self._bindings) >= self.max_sessions and self.expiry_enabled:
+            await self.sweep()  # idle sessions may free slots right now
         if creating and len(self._bindings) >= self.max_sessions:
             await _json_response(
                 send, 503,
@@ -400,18 +546,33 @@ class SessionBindingMiddleware:
             )
             return
 
+        host = _header(scope, b"host")
+        now = self._clock()
+        tracked = [i for i in dict.fromkeys(header_ids) if i in self._meta]
+        for i in tracked:
+            m = self._meta[i]
+            m.active += 1
+            m.last = now
+            if host:
+                m.host = host
+        created: Optional[str] = None
+
         status = 0
         sse_buf: Optional[bytearray] = bytearray() if (creating and method == "GET") else None
         sse_key: Optional[str] = None
 
         async def wrapped_send(message):
-            nonlocal status, sse_buf, sse_key
+            nonlocal status, sse_buf, sse_key, created
             if message["type"] == "http.response.start":
                 status = message["status"]
                 if creating:
                     for k, v in message.get("headers", []):
                         if k.lower() == b"mcp-session-id":
-                            self._bindings[v.decode("latin-1")] = token_id
+                            sid = v.decode("latin-1")
+                            self._bindings[sid] = token_id
+                            self._meta[sid] = _SessionMeta(
+                                last=self._clock(), active=1, host=host or b"localhost")
+                            created = sid
                             break
                 if sse_buf is not None and status != 200:
                     sse_buf = None
@@ -429,12 +590,18 @@ class SessionBindingMiddleware:
         try:
             await self.app(scope, receive, wrapped_send)
         finally:
+            end = self._clock()
+            for i in [*tracked, *([created] if created else [])]:
+                m = self._meta.get(i)
+                if m is not None:
+                    m.active = max(0, m.active - 1)
+                    m.last = end
             if sse_key is not None:
                 self._bindings.pop(sse_key, None)
         for i in header_ids:
             if self._bindings.get(i) == token_id and (
                     status == 404 or (method == "DELETE" and 200 <= status < 300)):
-                del self._bindings[i]
+                self._drop(i)
 
     @staticmethod
     async def _reject(send, ctype: bytes, body: bytes) -> None:

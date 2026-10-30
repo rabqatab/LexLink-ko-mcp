@@ -8,6 +8,9 @@ All notable changes to LexLink are documented here in both English and Korean.
 
 ### Unreleased
 
+#### Idle session expiry
+- `LEXLINK_SESSION_IDLE_TTL_SEC` (default 3600, `0` disables): Streamable HTTP sessions with no activity for that long are terminated by the server (internal DELETE sent straight to the inner app) and their binding removed, freeing the `LEXLINK_MAX_SESSIONS` slot (also after a 503 at the cap). Sessions with a request in flight or an open GET stream are never idle. Expiry is done by a sweep task (interval min(ttl/4, 60) s, started and cancelled with the app lifespan) and lazily on a request for an idle session. The session is marked expiring first (requests get the standard unknown-session 404), the binding is removed only after the terminate succeeded (2xx/404), otherwise it is kept and retried at the next sweep. Requests for an expired id get the byte-identical unknown-session 404 for every token, so clients open a new session. Works in no-auth mode. SSE sessions end with their stream. mcp 1.26 keeps terminated transports in its session table, so the entry is dropped via one guarded `_server_instances.pop` (also on explicit owner DELETE).
+
 #### Session binding
 - New pure ASGI `SessionBindingMiddleware` (order Auth > Logging > RateLimit > SessionBinding > app): MCP sessions (Streamable HTTP `mcp-session-id`, SSE `session_id` from the `endpoint` event) are bound to the creating token. Another token gets the same 404 an unknown session gets and never reaches the app; owner DELETE / SSE close removes the binding. `LEXLINK_MAX_SESSIONS` (default 10000) caps bindings; at the cap new sessions get 503 rather than evicting (eviction would leave an unbound, usable session). No-auth mode shares one id, so binding is a no-op.
 
@@ -550,6 +553,9 @@ All notable changes to LexLink are documented here in both English and Korean.
 ## 한국어 (Korean)
 
 ### 미배포 (Unreleased)
+
+#### 유휴 세션 만료
+- `LEXLINK_SESSION_IDLE_TTL_SEC`(기본 3600, `0`이면 끔): Streamable HTTP 세션이 해당 시간 동안 활동이 없으면 서버가 세션을 종료(내부 앱에 직접 DELETE)하고 바인딩을 제거해 `LEXLINK_MAX_SESSIONS` 슬롯을 반환(상한 503 이후에도 새 세션 허용). 처리 중인 요청이나 열린 GET 스트림이 있는 세션은 유휴가 아님. 스윕 태스크(간격 min(ttl/4, 60)초, 앱 lifespan과 함께 시작/취소)와 유휴 세션에 요청이 올 때의 지연 만료로 처리. 먼저 `expiring`으로 표시(그동안 요청은 표준 unknown-session 404)하고, 종료가 성공(2xx/404)한 뒤에만 바인딩을 제거하며 실패하면 유지하고 다음 스윕에서 재시도. 만료된 id는 모든 토큰(소유자 포함)에게 바이트 단위로 동일한 unknown-session 404이므로 클라이언트는 새 세션을 엽니다. 인증 없음 모드에서도 동작. SSE 세션은 스트림과 함께 종료. mcp 1.26은 종료된 transport를 세션 테이블에 남기므로 보호된 `_server_instances.pop` 한 곳에서 제거(소유자 DELETE 시에도).
 
 #### 세션 바인딩
 - 순수 ASGI `SessionBindingMiddleware` 추가(순서 Auth > Logging > RateLimit > SessionBinding > app): MCP 세션(Streamable HTTP `mcp-session-id`, SSE `endpoint` 이벤트의 `session_id`)을 만든 토큰에 묶음. 다른 토큰은 존재하지 않는 세션과 같은 404를 받고 앱까지 도달하지 못하며, 소유자 DELETE/SSE 종료 시 바인딩 제거. `LEXLINK_MAX_SESSIONS`(기본 10000) 상한에서는 오래된 항목을 쫓아내지 않고(바인딩 없는 세션이 생기므로) 새 세션을 503으로 거절. 인증 없음 모드는 모든 요청이 같은 id라 효과 없음.

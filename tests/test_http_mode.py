@@ -762,3 +762,266 @@ def test_noauth_sessions_unaffected(monkeypatch):
         h = {**MCP_HEADERS, "mcp-session-id": sid}
         c.post("/mcp", json={"jsonrpc": "2.0", "method": "notifications/initialized"}, headers=h)
         assert c.post("/mcp", json=LIST, headers=h).status_code == 200
+
+
+# ------------------------------------------------------- idle session expiry
+class FakeClock:
+    def __init__(self):
+        self.t = 1000.0
+
+    def __call__(self):
+        return self.t
+
+
+def _capture_manager(monkeypatch):
+    """Capture the FastMCP instance create_app builds (to inspect its manager)."""
+    box = {}
+    real = http_server.create_server
+
+    def wrapper(*a, **kw):
+        box["mcp"] = real(*a, **kw)
+        return box["mcp"]
+
+    monkeypatch.setattr(http_server, "create_server", wrapper)
+    return box
+
+
+def _idle_env(monkeypatch, ttl="100", **extra):
+    _two_token_env(monkeypatch, LEXLINK_SESSION_IDLE_TTL_SEC=ttl, **extra)
+
+
+def _hdr(sid, token=TOKEN):
+    return {**auth_headers(token), "mcp-session-id": sid}
+
+
+def test_idle_session_expires_owner_gets_unknown_404_then_new_session(monkeypatch):
+    _idle_env(monkeypatch)
+    box = _capture_manager(monkeypatch)
+    clock = FakeClock()
+    with TestClient(http_server.create_app(clock=clock)) as c:
+        mgr = box["mcp"].session_manager
+        sid = _new_session(c)
+        assert sid in mgr._server_instances
+        clock.t += 101
+        unknown = c.post("/mcp", json=LIST, headers=_hdr("0" * 32))
+        r = c.post("/mcp", json=LIST, headers=_hdr(sid))
+        assert r.status_code == unknown.status_code == 404
+        assert r.content == unknown.content
+        assert r.headers["content-type"] == unknown.headers["content-type"]
+        # the underlying session is gone and memory is released
+        assert sid not in mgr._server_instances
+        assert c.app.session_binding._bindings == {}
+        assert c.app.session_binding._meta == {}
+        # repeated requests, GET and DELETE too, stay identical 404s
+        for call in (lambda: c.get("/mcp", headers=_hdr(sid)),
+                     lambda: c.delete("/mcp", headers=_hdr(sid))):
+            again = call()
+            assert again.status_code == 404
+        assert c.post("/mcp", json=LIST, headers=_hdr(sid)).content == unknown.content
+        # client flow: new initialize works and the new session is usable
+        sid2 = _new_session(c)
+        assert sid2 != sid
+        assert "law_search" in c.post("/mcp", json=LIST, headers=_hdr(sid2)).text
+
+
+def test_idle_expired_session_foreign_token_same_404(monkeypatch):
+    _idle_env(monkeypatch)
+    clock = FakeClock()
+    with TestClient(http_server.create_app(clock=clock)) as c:
+        sid = _new_session(c)
+        clock.t += 101
+        c.portal.call(c.app.session_binding.sweep)
+        owner = c.post("/mcp", json=LIST, headers=_hdr(sid))
+        other = c.post("/mcp", json=LIST, headers=_hdr(sid, TOKEN2))
+        unknown = c.post("/mcp", json=LIST, headers=_hdr("1" * 32, TOKEN2))
+        assert owner.status_code == other.status_code == unknown.status_code == 404
+        assert owner.content == other.content == unknown.content
+
+
+def test_active_session_not_expired(monkeypatch):
+    _idle_env(monkeypatch)
+    clock = FakeClock()
+    with TestClient(http_server.create_app(clock=clock)) as c:
+        sid = _new_session(c)
+        for _ in range(3):  # each request resets the idle timer
+            clock.t += 60
+            assert c.post("/mcp", json=LIST, headers=_hdr(sid)).status_code == 200
+            c.portal.call(c.app.session_binding.sweep)
+        assert sid in c.app.session_binding._bindings
+
+
+def _blocking_stack(release, terminated, status=204):
+    async def app(scope, receive, send):
+        if scope["method"] == "POST" and not any(
+                k == b"mcp-session-id" for k, _ in scope["headers"]):
+            await send({"type": "http.response.start", "status": 200,
+                        "headers": [(b"mcp-session-id", b"s1")]})
+            await send({"type": "http.response.body", "body": b""})
+            return
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"", "more_body": True})
+        await release.wait()
+        await send({"type": "http.response.body", "body": b""})
+
+    async def terminate(sid, host):
+        terminated.append(sid)
+        return status
+
+    return app, terminate
+
+
+def test_in_flight_request_and_open_stream_not_expired():
+    async def run():
+        clock = FakeClock()
+        release, terminated = asyncio.Event(), []
+        app, terminate = _blocking_stack(release, terminated)
+        mw = SessionBindingMiddleware(app, 10, idle_ttl=100, clock=clock, terminate=terminate)
+        await call(mw, make_scope("POST", state={"token_id": "A"}))
+        assert "s1" in mw._bindings and mw._meta["s1"].active == 0
+        for method in ("POST", "GET"):  # in-flight request / open GET stream
+            sc = make_scope(method, headers=[("mcp-session-id", "s1")], state={"token_id": "A"})
+            task = asyncio.create_task(call(mw, sc))
+            await asyncio.sleep(0.01)
+            assert mw._meta["s1"].active == 1
+            clock.t += 1000
+            assert await mw.sweep() == 0 and terminated == []
+            release.set()
+            await task
+            release.clear()
+            assert mw._meta["s1"].active == 0
+            clock.t += 1  # activity at request end restarts the timer
+            assert await mw.sweep() == 0
+        clock.t += 101
+        assert await mw.sweep() == 1 and terminated == ["s1"]
+    asyncio.run(run())
+
+
+def test_active_counter_decremented_when_app_raises():
+    async def run():
+        async def boom(scope, receive, send):
+            raise RuntimeError("x")
+
+        mw = SessionBindingMiddleware(boom, 10, idle_ttl=100, terminate=None)
+        mw._bindings["s1"] = "A"
+        from lexlink.http_security import _SessionMeta
+        mw._meta["s1"] = _SessionMeta(last=0.0)
+        mw.idle_ttl = 100
+        with pytest.raises(RuntimeError):
+            await call(mw, make_scope("POST", headers=[("mcp-session-id", "s1")],
+                                      state={"token_id": "A"}))
+        assert mw._meta["s1"].active == 0
+    asyncio.run(run())
+
+
+def test_failed_terminate_keeps_binding_and_retries():
+    async def run():
+        clock = FakeClock()
+        calls, outcomes = [], iter([500, RuntimeError("boom"), 404])
+
+        async def terminate(sid, host):
+            calls.append(sid)
+            o = next(outcomes)
+            if isinstance(o, Exception):
+                raise o
+            return o
+
+        released = []
+        app, _ = _blocking_stack(asyncio.Event(), [])
+        mw = SessionBindingMiddleware(app, 10, idle_ttl=100, clock=clock,
+                                      terminate=terminate, release=released.append)
+        await call(mw, make_scope("POST", state={"token_id": "A"}))
+        clock.t += 101
+        assert await mw.sweep() == 0 and mw._bindings == {"s1": "A"}   # 500
+        assert not mw._meta["s1"].expiring
+        assert await mw.sweep() == 0 and mw._bindings == {"s1": "A"}   # exception
+        assert released == []
+        assert await mw.sweep() == 1 and mw._bindings == {}            # 404 counts
+        assert calls == ["s1"] * 3 and released == ["s1"]
+    asyncio.run(run())
+
+
+def test_requests_during_expiry_get_404_and_never_reach_app():
+    async def run():
+        clock = FakeClock()
+        gate, reached = asyncio.Event(), []
+
+        async def terminate(sid, host):
+            await gate.wait()
+            return 200
+
+        async def app(scope, receive, send):
+            if any(k == b"mcp-session-id" for k, _ in scope["headers"]):
+                reached.append(1)
+            await send({"type": "http.response.start", "status": 200,
+                        "headers": [(b"mcp-session-id", b"s1")]})
+            await send({"type": "http.response.body", "body": b""})
+
+        mw = SessionBindingMiddleware(app, 10, idle_ttl=100, clock=clock, terminate=terminate)
+        await call(mw, make_scope("POST", state={"token_id": "A"}))
+        clock.t += 101
+        sweep = asyncio.create_task(mw.sweep())
+        await asyncio.sleep(0.01)
+        assert mw._meta["s1"].expiring
+        for tok in ("A", "B"):
+            out = await call(mw, make_scope("POST", headers=[("mcp-session-id", "s1")],
+                                            state={"token_id": tok}))
+            assert out[0]["status"] == 404
+        assert reached == []
+        gate.set()
+        assert await sweep == 1
+    asyncio.run(run())
+
+
+def test_ttl_zero_disables_expiry(monkeypatch):
+    _idle_env(monkeypatch, ttl="0")
+    clock = FakeClock()
+    with TestClient(http_server.create_app(clock=clock)) as c:
+        sid = _new_session(c)
+        clock.t += 10**7
+        assert c.app.session_binding.sweep_task is None
+        assert c.portal.call(c.app.session_binding.sweep) == 0
+        assert c.post("/mcp", json=LIST, headers=_hdr(sid)).status_code == 200
+
+
+def test_expiry_frees_slot_at_cap(monkeypatch):
+    _idle_env(monkeypatch, LEXLINK_MAX_SESSIONS="1")
+    clock = FakeClock()
+    with TestClient(http_server.create_app(clock=clock)) as c:
+        _new_session(c)
+        assert c.post("/mcp", json=INIT, headers=auth_headers(TOKEN2)).status_code == 503
+        clock.t += 101
+        r = c.post("/mcp", json=INIT, headers=auth_headers(TOKEN2))
+        assert r.status_code == 200 and "mcp-session-id" in r.headers
+
+
+def test_noauth_session_expires(monkeypatch):
+    monkeypatch.setenv("LEXLINK_ALLOW_NO_AUTH", "true")
+    monkeypatch.setenv("LEXLINK_ALLOWED_HOSTS", "testserver")
+    monkeypatch.setenv("LEXLINK_SESSION_IDLE_TTL_SEC", "100")
+    box = _capture_manager(monkeypatch)
+    clock = FakeClock()
+    with TestClient(http_server.create_app(clock=clock)) as c:
+        r = c.post("/mcp", json=INIT, headers=MCP_HEADERS)
+        sid = r.headers["mcp-session-id"]
+        h = {**MCP_HEADERS, "mcp-session-id": sid}
+        assert c.post("/mcp", json=LIST, headers=h).status_code == 200
+        clock.t += 101
+        assert c.post("/mcp", json=LIST, headers=h).status_code == 404
+        assert sid not in box["mcp"].session_manager._server_instances
+        assert c.post("/mcp", json=INIT, headers=MCP_HEADERS).status_code == 200
+
+
+def test_sweep_task_runs_and_is_cancelled_on_shutdown(monkeypatch):
+    _idle_env(monkeypatch, ttl="0.2")  # interval 0.05 s, real clock
+    app = http_server.create_app()
+    with TestClient(app) as c:
+        task = app.session_binding.sweep_task
+        assert task is not None and not task.done()
+        sid = _new_session(c)
+        for _ in range(40):  # background sweep alone must expire it
+            if sid not in app.session_binding._bindings:
+                break
+            import time as _t
+            _t.sleep(0.05)
+        assert sid not in app.session_binding._bindings
+    assert task.done() and task.cancelled()

@@ -51,8 +51,10 @@ Note:
     3. Port 80/443 (use Nginx as reverse proxy)
 """
 
+import asyncio
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 
 from starlette.applications import Starlette
@@ -77,7 +79,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def create_app(transport: str = "http"):
+def create_app(transport: str = "http", *, clock=time.monotonic):
     """
     Build the ASGI app: Auth > Logging > RateLimit > SessionBinding > FastMCP.
 
@@ -100,6 +102,12 @@ def create_app(transport: str = "http"):
 
     Args:
         transport: "http" (Streamable HTTP, /mcp) or "sse" (legacy, /sse)
+        clock: monotonic clock for idle-session expiry (tests inject a fake)
+
+    Idle sessions (LEXLINK_SESSION_IDLE_TTL_SEC, default 3600, 0 disables) are
+    ended by an internal DELETE sent straight to the inner FastMCP app (no
+    middleware, no auth); the session manager keeps terminated transports in
+    its instance table, so the entry is dropped afterwards (see _release).
     """
     tokens = load_auth_tokens()  # fail closed before anything else
     set_ignore_oc_override(True)  # HTTP callers must not choose the OC
@@ -121,22 +129,85 @@ def create_app(transport: str = "http"):
     else:
         inner = fastmcp.streamable_http_app()
 
+    mcp_path = fastmcp.settings.streamable_http_path
+
+    async def _terminate(session_id: str, host: bytes):
+        """Internal ASGI DELETE for ``session_id`` straight to the inner app.
+
+        Needs only the Host header (transport security) and the session id;
+        DELETE has no Accept/Content-Type requirement and the protocol
+        version header defaults to a supported one in mcp 1.26. Returns the
+        status code; the response is fully consumed.
+        """
+        scope = {
+            "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
+            "method": "DELETE", "scheme": "http", "path": mcp_path,
+            "raw_path": mcp_path.encode(), "root_path": "", "query_string": b"",
+            "headers": [(b"host", host), (b"mcp-session-id", session_id.encode("latin-1"))],
+            "client": ("127.0.0.1", 0), "server": ("127.0.0.1", 0), "state": {},
+        }
+        sent = False
+        result: list = []
+
+        async def receive():
+            nonlocal sent
+            if not sent:
+                sent = True
+                return {"type": "http.request", "body": b"", "more_body": False}
+            await asyncio.sleep(3600)  # no disconnect needed; cancelled by wait_for
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            if message["type"] == "http.response.start":
+                result.append(message["status"])
+
+        await asyncio.wait_for(inner(scope, receive, send), timeout=10)
+        return result[0] if result else None
+
+    def _release(session_id: str) -> None:
+        # mcp 1.26 keeps a terminated transport in the manager's instance
+        # table forever (its cleanup skips terminated sessions). There is no
+        # public API to drop it, so this single guarded pop is the least
+        # invasive fix; if the attribute is gone it degrades to a no-op and
+        # the binding middleware's expired-id memory still answers 404.
+        instances = getattr(fastmcp.session_manager, "_server_instances", None)
+        if isinstance(instances, dict):
+            instances.pop(session_id, None)
+
+    binding = SessionBindingMiddleware(
+        None, clock=clock,
+        terminate=_terminate if transport != "sse" else None,
+        release=_release if transport != "sse" else None,
+    )
+
     @asynccontextmanager
     async def lifespan(app):
+        sweeper = None
         try:
             if transport == "sse":
                 yield
             else:
                 async with fastmcp.session_manager.run():
-                    yield
+                    if binding.expiry_enabled:
+                        sweeper = asyncio.create_task(binding.run_sweeper())
+                        binding.sweep_task = sweeper
+                    try:
+                        yield
+                    finally:
+                        if sweeper is not None:
+                            sweeper.cancel()
+                            await asyncio.gather(sweeper, return_exceptions=True)
         finally:
             flush_all()
 
     starlette_app = Starlette(routes=[Mount("/", app=inner)], lifespan=lifespan)
-    app = SessionBindingMiddleware(starlette_app)
+    binding.app = starlette_app
+    app = binding
     app = RateLimitMiddleware(app)
     app = LoggingMiddleware(app, tool_schemas=tool_schemas)
-    return BearerAuthMiddleware(app, tokens)
+    outer = BearerAuthMiddleware(app, tokens)
+    outer.session_binding = binding  # introspection for tests/ops
+    return outer
 
 
 def run_sse_server(host: str = "0.0.0.0", port: int = 8000):

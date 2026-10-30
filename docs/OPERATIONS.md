@@ -27,6 +27,8 @@ HTTP/SSE 모드(`uv run serve`)를 외부에 노출할 때의 인증, 로깅, �
 | `LEXLINK_TRUSTED_PROXIES` | - | `X-Forwarded-For`를 신뢰할 직접 접속 피어 IP 목록(정확히 일치, 쉼표 구분) |
 | `LEXLINK_MAX_CONCURRENCY` | `8` | 토큰별 동시 POST 요청 수 (`0`이면 제한 없음) |
 | `LEXLINK_RATE_LIMIT_PER_MIN` | `60` | 토큰별 분당 POST 요청 수, 슬라이딩 윈도우 (`0`이면 제한 없음) |
+| `LEXLINK_MAX_SESSIONS` | `10000` | 메모리에 보관하는 바인딩된 MCP 세션 상한. 도달하면 새 세션은 503 |
+| `LEXLINK_SESSION_IDLE_TTL_SEC` | `3600` | Streamable HTTP 세션이 이 시간(초) 동안 활동이 없으면 서버가 세션을 종료하고 슬롯을 반환 (`0`이면 만료 없음) |
 | `LEXLINK_LOG_DIR` | `<repo>/logs/playmcp` | 로그 디렉터리 |
 | `LEXLINK_LOG_RETENTION_DAYS` | `30` | 이 일수보다 오래된 `YYYY-MM-DD.jsonl`만 삭제 (`0`이면 삭제 안 함) |
 | `LEXLINK_LOG_BODIES` | - | `true`면 인자 값과 결과 본문도 기록 (OC는 제거/마스킹) |
@@ -52,7 +54,7 @@ HTTP/SSE 모드(`uv run serve`)를 외부에 노출할 때의 인증, 로깅, �
 ### 알려진 한계
 
 - 세션은 만든 토큰에 묶입니다(`SessionBindingMiddleware`). 다른 토큰이 `Mcp-Session-Id`(Streamable HTTP) 또는 `session_id` 쿼리(SSE `/messages/`)로 남의 세션을 POST/GET/DELETE 하면 앱을 호출하지 않고, 존재하지 않는 세션과 동일한 404를 돌려주므로 세션 존재 여부도 드러나지 않습니다. 소유자의 DELETE(2xx), SSE 스트림 종료 시 바인딩이 제거됩니다.
-- 바인딩은 메모리에 최대 `LEXLINK_MAX_SESSIONS`개(기본 10000)만 보관합니다. 오래된 항목을 쫓아내면 그 세션이 "바인딩 없는 세션"이 되어 다른 토큰이 쓸 수 있으므로, 상한에 도달하면 새 세션 생성을 503(`too_many_sessions`, `Retry-After`)으로 거절합니다(기존 세션은 유지). 세션이 정리되지 않고 쌓이면(클라이언트가 DELETE 없이 사라짐) 재시작 전까지 슬롯이 반환되지 않을 수 있으니 상한을 넉넉히 두세요. 단일 프로세스 한정입니다.
+- 바인딩은 메모리에 최대 `LEXLINK_MAX_SESSIONS`개(기본 10000)만 보관합니다. 오래된 항목을 쫓아내면 그 세션이 "바인딩 없는 세션"이 되어 다른 토큰이 쓸 수 있으므로, 상한에 도달하면 새 세션 생성을 503(`too_many_sessions`, `Retry-After`)으로 거절합니다(기존 세션은 유지). 클라이언트가 DELETE 없이 사라져도 `LEXLINK_SESSION_IDLE_TTL_SEC`(기본 3600초, `0`이면 끔) 동안 활동이 없으면 서버가 세션 자체를 종료(내부 DELETE)한 뒤 바인딩을 제거해 슬롯이 반환됩니다. 진행 중인 요청이나 열린 GET 스트림이 있는 세션은 유휴가 아니며, 종료에 실패하면 바인딩을 유지하고 다음 스윕(간격 min(TTL/4, 60)초)에서 재시도합니다. 만료된 세션 id로 온 요청은 소유자 포함 모든 토큰에 존재하지 않는 세션과 같은 404를 반환하므로 클라이언트는 새 세션을 시작하면 됩니다. 인증 없음 모드에서도 동작합니다. SSE 세션은 GET 스트림이 곧 세션이라 스트림 종료 시 정리되며 별도 만료가 없습니다. 단일 프로세스 한정입니다.
 - 인증 없음 모드(`LEXLINK_ALLOW_NO_AUTH=true`)에서는 모든 요청의 token_id가 `noauth`로 같으므로 세션 바인딩은 아무 효과가 없습니다(세션 ID를 아는 누구나 사용 가능).
 - 401 응답은 로그에 남지 않고(인증이 가장 바깥 미들웨어) 속도 제한도 받지 않습니다. uvicorn 액세스 로그에서만 확인할 수 있습니다.
 - 도구 호출이 동기 `httpx` 클라이언트를 사용하므로 업스트림이 느리면 이벤트 루프가 막혀 속도 제한 429 응답도 지연될 수 있습니다.
