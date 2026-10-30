@@ -5,15 +5,19 @@ Extracts common patterns from server.py to reduce duplication.
 All helpers preserve exact existing behavior.
 """
 
+import asyncio
+import concurrent.futures
 import functools
 import inspect
 import logging
 import os
 import re
+import traceback
 from typing import Optional, Union
 
 from mcp.types import ToolAnnotations
 
+from .client import redact_oc
 from .errors import ErrorCode, create_error_response
 
 logger = logging.getLogger(__name__)
@@ -41,6 +45,23 @@ class ToolValidationError(ValueError):
         self.hints = hints
 
 
+def run_coroutine_sync(coro):
+    """Run ``coro`` to completion from sync code and return its result.
+
+    Uses ``asyncio.run`` inside a dedicated worker thread, so it works both
+    with and without an already running event loop (FastMCP runs sync tools on
+    its loop; ``run_until_complete`` there raises RuntimeError). Exceptions from
+    the coroutine propagate to the caller.
+    """
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, coro).result()
+
+
+def _redacted_error_text(e: BaseException, kwargs: dict) -> str:
+    """str(e) with the OC credential removed (argument or OC env var)."""
+    return redact_oc(str(e), kwargs.get("oc") or os.getenv("OC"))
+
+
 def handle_tool_error(func):
     """Decorator wrapping tool functions with standardized error handling.
     Catches ToolValidationError (with hints), ValueError (without hints),
@@ -52,23 +73,29 @@ def handle_tool_error(func):
             try:
                 return await func(*args, **kwargs)
             except ToolValidationError as e:
-                logger.warning(f"Validation error in {func.__name__}: {e}")
+                msg = _redacted_error_text(e, kwargs)
+                logger.warning(f"Validation error in {func.__name__}: {msg}")
                 return create_error_response(
                     error_code=ErrorCode.VALIDATION_ERROR,
-                    message=str(e),
+                    message=msg,
                     hints=e.hints,
                 )
             except ValueError as e:
-                logger.warning(f"Validation error in {func.__name__}: {e}")
+                msg = _redacted_error_text(e, kwargs)
+                logger.warning(f"Validation error in {func.__name__}: {msg}")
                 return create_error_response(
                     error_code=ErrorCode.VALIDATION_ERROR,
-                    message=str(e),
+                    message=msg,
                 )
             except Exception as e:
-                logger.exception(f"Unexpected error in {func.__name__}: {e}")
+                msg = _redacted_error_text(e, kwargs)
+                logger.error(
+                    f"Unexpected error in {func.__name__}: {msg}\n"
+                    + "".join(traceback.format_tb(e.__traceback__))
+                )
                 return create_error_response(
                     error_code=ErrorCode.INTERNAL_ERROR,
-                    message=f"Unexpected error: {str(e)}",
+                    message=f"Unexpected error: {msg}",
                 )
         return async_wrapper
     else:
@@ -77,23 +104,29 @@ def handle_tool_error(func):
             try:
                 return func(*args, **kwargs)
             except ToolValidationError as e:
-                logger.warning(f"Validation error in {func.__name__}: {e}")
+                msg = _redacted_error_text(e, kwargs)
+                logger.warning(f"Validation error in {func.__name__}: {msg}")
                 return create_error_response(
                     error_code=ErrorCode.VALIDATION_ERROR,
-                    message=str(e),
+                    message=msg,
                     hints=e.hints,
                 )
             except ValueError as e:
-                logger.warning(f"Validation error in {func.__name__}: {e}")
+                msg = _redacted_error_text(e, kwargs)
+                logger.warning(f"Validation error in {func.__name__}: {msg}")
                 return create_error_response(
                     error_code=ErrorCode.VALIDATION_ERROR,
-                    message=str(e),
+                    message=msg,
                 )
             except Exception as e:
-                logger.exception(f"Unexpected error in {func.__name__}: {e}")
+                msg = _redacted_error_text(e, kwargs)
+                logger.error(
+                    f"Unexpected error in {func.__name__}: {msg}\n"
+                    + "".join(traceback.format_tb(e.__traceback__))
+                )
                 return create_error_response(
                     error_code=ErrorCode.INTERNAL_ERROR,
-                    message=f"Unexpected error: {str(e)}",
+                    message=f"Unexpected error: {msg}",
                 )
         return sync_wrapper
 
@@ -115,6 +148,39 @@ from .parser import parse_xml_response, extract_law_list, update_law_list, extra
 from .cache import get_cache
 from .resolver import get_resolver
 from .ranking import rank_search_results, should_apply_ranking
+
+
+ID_NOTE = (
+    "raw_content의 id는 행 번호입니다. service 호출에는 판례일련번호·법령ID·"
+    "법령일련번호(MST) 등 실제 키를 쓰세요."
+)
+
+
+def rename_row_ids_to_rank(response: dict) -> dict:
+    """Rename each ranked_data row's ``id`` (upstream row index 1,2,3) to ``rank``.
+
+    Upstream search rows carry ``id`` = row number, not a key usable in service
+    calls. Only ``ranked_data`` is touched (raw_content stays as returned);
+    rows without ``id`` are left alone. Handles list and single-dict rows.
+    Adds ``id_note`` only when raw_content is kept and some row had an ``id``.
+    Call after ranking, hooks and any raw_content rewrite.
+    """
+    ranked = response.get("ranked_data") if isinstance(response, dict) else None
+    if not isinstance(ranked, dict):
+        return response
+    renamed = False
+    for value in ranked.values():
+        rows = value if isinstance(value, list) else [value]
+        for row in rows:
+            if isinstance(row, dict) and "id" in row:
+                # rebuild so "rank" keeps the position of "id"
+                items = [("rank" if k == "id" else k, v) for k, v in row.items()]
+                row.clear()
+                row.update(items)
+                renamed = True
+    if renamed and response.get("raw_content"):
+        response["id_note"] = ID_NOTE
+    return response
 
 
 def detect_items_key(parsed_data: dict) -> Optional[str]:
@@ -154,6 +220,7 @@ def run_search(
     over_fetch_key: str = "numOfRows",
     over_fetch: bool = True,
     post_rank_hook=None,
+    finalize_ids: bool = True,
 ) -> dict:
     """Common search tool logic.
     Handles: law name resolution, caching, param mapping, API call, XML/JSON parsing,
@@ -256,6 +323,8 @@ def run_search(
                 else:
                     response["ranked_data"] = parsed_data
 
+    if finalize_ids:
+        rename_row_ids_to_rank(response)
     return slim_response(response)
 
 

@@ -5,6 +5,7 @@ This module provides a robust HTTP client with timeout handling,
 error normalization, and request logging.
 """
 
+import json
 import logging
 import re
 import time
@@ -44,18 +45,58 @@ def _oc_sub(m: "re.Match[str]") -> str:
     return sep if after else ""
 
 
-def redact_oc(text: str, oc: str | None = None) -> str:
-    """Remove the OC query parameter from any URL in ``text`` (case-insensitive).
+# Structural OC removal (independent of the OC value and its length).
+_TAG_WITH_OC_NAME_RE = re.compile(
+    r"""<[^<>]*(?<![\w-])name\s*=\s*(?:"OC"|'OC'|OC(?![\w-]))[^<>]*>""", re.I
+)
+_VALUE_ATTR_RE = re.compile(
+    r"""(?<![\w-])value\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'<>=`]+)""", re.I
+)
+_OC_ASSIGN_RE = re.compile(
+    r"""(?<![\w-])(?P<key>(?P<kq>["']?)OC(?P=kq)\s*[:=]\s*)(?P<q>["'])(?:(?!(?P=q)).)*(?P=q)""",
+    re.I,
+)
 
-    Handles ``?``, ``&``, ``&amp;`` and literal backslash separators. If ``oc`` is
-    given and at least 6 chars long, remaining literal occurrences become ``***``
-    (shorter values would corrupt legal text).
+
+def _blank_value_attr(m: "re.Match[str]") -> str:
+    return _VALUE_ATTR_RE.sub('value=""', m.group(0))
+
+
+def _blank_oc_assign(m: "re.Match[str]") -> str:
+    q = m.group("q")
+    return f"{m.group('key')}{q}{q}"
+
+
+def redact_oc(text: str, oc: str | None = None) -> str:
+    """Remove the OC credential from ``text`` (HTML, JSON, JS or URLs).
+
+    Structural removal runs first and does not depend on ``oc``:
+      * HTML fields with ``name="OC"`` (any quote style, ``value`` before or
+        after ``name``): the value is blanked, the tag is kept;
+      * JS/JSON assignments such as ``OC = 'x'``, ``"OC":"x"``, ``oc: "x"``
+        (value blanked; ``DOC="x"`` and similar are untouched);
+      * the ``OC=`` query parameter in URLs (``?``, ``&``, ``&amp;``, ``\\u0026``).
+
+    Then, if ``oc`` is given, remaining literal occurrences become ``***``:
+      * ``len(oc) >= 6``: plain replacement;
+      * shorter values are replaced only when delimited by a quote, ``=`` or
+        ``&`` on the left and a quote, ``&``, ``<``, ``>`` or whitespace on the
+        right. A short value inside prose is left alone on purpose, so that
+        e.g. oc="law" never alters the word "law" in English statute text and
+        oc="g4c" never alters Korean prose.
     """
     if not text:
         return text
+    text = _TAG_WITH_OC_NAME_RE.sub(_blank_value_attr, text)
+    text = _OC_ASSIGN_RE.sub(_blank_oc_assign, text)
     text = _OC_PARAM_RE.sub(_oc_sub, text)
-    if oc and len(oc) >= 6:
-        text = text.replace(oc, "***")
+    if oc:
+        if len(oc) >= 6:
+            text = text.replace(oc, "***")
+        else:
+            text = re.sub(
+                rf"""(?<=["'=&]){re.escape(oc)}(?=["'&<>\s])""", "***", text
+            )
     return text
 
 
@@ -68,7 +109,7 @@ NOT_SUBSCRIBED_MARKER = "미신청된 목록/본문에 대한 접근입니다"
 ERROR_PAGE_MARKER_RE = re.compile(r'id\s*=\s*["\']error\d{3}["\']', re.I)
 _HTML_START_RE = re.compile(r"^\s*(?:<!doctype\s+html|<html)", re.I)
 _TAG_RE = re.compile(r"<[^>]+>")
-NO_MATCH_RE = re.compile(r"일치하는 (?!법령이)\S+ 없습니다")
+NO_MATCH_RE = re.compile(r"일치하는 \S+ 없습니다")
 
 
 def _html_headline(body: str) -> str | None:
@@ -103,6 +144,32 @@ def _not_subscribed_hints(target: str | None) -> list[str]:
     return hints
 
 
+def _service_not_found(request_id: str | None, target: str | None, message: str) -> dict:
+    """NOT_FOUND for a bodyless success on lawService.do (wrong id / unknown target)."""
+    return create_error_response(
+        error_code=ErrorCode.NOT_FOUND,
+        message=message,
+        hints=[
+            "ID(일련번호 등)가 잘못되었을 수 있습니다. 검색 도구 결과의 실제 키(일련번호 등)를 사용하세요",
+            "target 이름이 업스트림에서 알 수 없는 값일 수 있습니다",
+            *([f"요청 target: {target}"] if target else []),
+        ],
+        request_id=request_id,
+        upstream_target=target,
+    )
+
+
+def _json_body_is_empty(text: str) -> bool:
+    """True when ``text`` is a JSON object that is {} or has only empty values."""
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return False
+    if not isinstance(data, dict):
+        return False
+    return all(v in ("", None, [], {}) for v in data.values())
+
+
 def detect_upstream_body_error(
     body: str | None,
     format_type: str,
@@ -129,6 +196,12 @@ def detect_upstream_body_error(
     text = body or ""
 
     # 1) Empty body with HTTP 200 → upstream did not recognise the target
+    if text.strip() == "" and endpoint == "/DRF/lawService.do":
+        return _service_not_found(
+            request_id, target,
+            "법제처 API가 본문 조회에 빈 응답을 반환했습니다. ID가 잘못되었거나 "
+            "해당 target을 알 수 없습니다. law.go.kr returned an empty body for a service call.",
+        )
     if text.strip() == "":
         return create_error_response(
             error_code=ErrorCode.EMPTY_RESPONSE,
@@ -208,7 +281,16 @@ def detect_upstream_body_error(
     # 6) "일치하는 …가 없습니다" on a service (본문) call: id missing or body not provided.
     # Length bound keeps real judgments that quote the phrase from tripping this.
     if endpoint == "/DRF/lawService.do" and len(text) < 500 and NO_MATCH_RE.search(text):
-        if target == "prec":
+        if "일치하는 법령이 없습니다" in text:
+            message = (
+                "일치하는 법령이 없습니다. MST(법령일련번호)가 최신인지 확인하세요. "
+                "법령 개정 시 MST가 변경됩니다."
+            )
+            hints = [
+                "법령 개정 시 MST(법령일련번호)가 바뀝니다. 검색 도구로 현행 MST를 다시 확인하세요",
+                "업스트림은 '존재하지 않는 ID'와 '본문 미제공'을 구분하지 않습니다",
+            ]
+        elif target == "prec":
             message = (
                 "해당 판례의 본문을 가져올 수 없습니다. 존재하지 않는 판례일련번호이거나, "
                 "국가법령정보센터 API가 본문을 제공하지 않는 판례일 수 있습니다"
@@ -223,7 +305,7 @@ def detect_upstream_body_error(
             message = f"일치하는 자료가 없습니다 (target={target}). ID를 확인하세요."
             hints = [
                 "업스트림은 '존재하지 않는 ID'와 '본문 미제공'을 구분하지 않습니다",
-                f"{target}_search 결과의 ID를 다시 확인하세요",
+                "검색 도구 결과의 실제 키(일련번호 등)를 사용하세요",
             ]
         return create_error_response(
             error_code=ErrorCode.NOT_FOUND,
@@ -231,6 +313,18 @@ def detect_upstream_body_error(
             hints=hints,
             request_id=request_id,
             upstream_target=target,
+        )
+
+    # 7) JSON object with no content on a service call ({} or only empty values)
+    if (
+        endpoint == "/DRF/lawService.do"
+        and (fmt == "JSON" or text.lstrip().startswith("{"))
+        and _json_body_is_empty(text)
+    ):
+        return _service_not_found(
+            request_id, target,
+            "법제처 API가 본문 조회에 빈 JSON 객체를 반환했습니다. ID가 잘못되었거나 "
+            "해당 target을 알 수 없습니다. law.go.kr returned an empty JSON object.",
         )
 
     return None
@@ -498,7 +592,8 @@ class LawAPIClient:
             return error
 
         # Detect "no matching law" (HTTP 200 but body says no match)
-        if "일치하는 법령이 없습니다" in body:
+        # (lawService.do reports this as NOT_FOUND via detect_upstream_body_error)
+        if endpoint != "/DRF/lawService.do" and "일치하는 법령이 없습니다" in body:
             return {
                 "status": "ok",
                 "request_id": request_id,
