@@ -19,6 +19,11 @@ All notable changes to LexLink are documented here in both English and Korean.
 - `elaw_service`, `admrul_search`, `admrul_service`, `lnkLs_search`, `lnkLsOrdJo_search`, `lnkDep_search`, `lsDelegated_service` now send `type`, so the cache key includes the response format.
 - `check_precedent_odds` no longer falls back to the search row number when 판례일련번호 is missing.
 - Generic `NOT_FOUND` hint no longer builds a nonexistent `<target>_search` tool name.
+- `article_citation` verifies `mst` / `law_name` / article with one `lawService` call (`target=law`, `MST`, `JO` incl. branch) when an OC is available: a name mismatch returns `VALIDATION_ERROR` naming both laws, a missing article returns `ARTICLE_NOT_FOUND`, upstream `NOT_FOUND` passes through (all with `success: false`). Without an OC it skips verification and adds a `warnings` entry. The lsiSeq cache is keyed by `(mst, law_name)`, no longer by `mst` alone.
+- Ranked searches (over-fetch of 100 rows) returned an empty page 2+. When `page * display <= 100` the first 100 rows are fetched, ranked, and sliced for the requested page (also `elaw_search`); beyond that ranking is skipped, `page`/`display` are forwarded unchanged and `ranking_applied: false` is set.
+- Zero-result searches (`run_search`, `elaw_search`) and empty `legal_resolver` / `check_precedent_odds` / `chain_dispute_prep` results keep `status: ok` but add `warning: "no_results"`, `message` and Korean `hints` (shorten query, use the formal name, `search=2` where the tool has it).
+- `extract_outcome` checks specific outcomes first (일부인용, 일부기각, 파기환송 ...) and requires disposition context for 기각/각하/인용/취소, so "일부인용" is no longer "인용" and "원심판결 인용" / "인용하지" / "인용된" are `불명`. `check_precedent_odds` adds `outcome_note` (heuristic, not a citable result).
+- `ordin_search` `knd` docstring: official codes are 30001 조례, 30002 규칙, 30003 훈령, 30004 예규, 30006 기타, 30010 고시, 30011 의회규칙 (source: open.law.go.kr ordinListGuide); 1/2/3 are not valid.
 
 #### Changed (behaviour)
 - Search responses: in `ranked_data`, each row's `id` (upstream row number 1, 2, 3, not a key) is renamed to `rank`. `raw_content` is unchanged and, when kept, a new `id_note` explains that its `id` is a row number. Use 판례일련번호, 법령ID, 법령일련번호(MST) etc. for service calls.
@@ -552,6 +557,11 @@ All notable changes to LexLink are documented here in both English and Korean.
 - `elaw_service`, `admrul_search`, `admrul_service`, `lnkLs_search`, `lnkLsOrdJo_search`, `lnkDep_search`, `lsDelegated_service`가 `type`을 전달하여 캐시 키에 응답 형식이 포함됨.
 - `check_precedent_odds`가 판례일련번호가 없을 때 검색 행 번호를 대신 쓰지 않음.
 - 일반 `NOT_FOUND` 안내가 존재하지 않는 `<target>_search` 도구 이름을 만들지 않음.
+- `article_citation`: OC가 있으면 `lawService` 1회 호출(`target=law`, `MST`, 가지번호 포함 `JO`)로 `mst`/`law_name`/조문을 검증. 법령명 불일치는 두 법령명을 담은 `VALIDATION_ERROR`, 조문 없음은 `ARTICLE_NOT_FOUND`, 업스트림 `NOT_FOUND`는 그대로 전달(모두 `success: false`). OC가 없으면 검증을 건너뛰고 `warnings`에 안내. lsiSeq 캐시 키를 `mst` 단독에서 `(mst, law_name)`으로 변경.
+- 순위화(100건 over-fetch) 검색에서 2페이지 이상이 비어 있던 문제 수정. `page * display <= 100`이면 상위 100건을 받아 순위화한 뒤 요청 페이지를 잘라 반환(`elaw_search` 포함). 초과하면 순위화를 건너뛰고 `page`/`display`를 그대로 전달하며 `ranking_applied: false` 표시.
+- 결과 0건 검색(`run_search`, `elaw_search`)과 빈 `legal_resolver` / `check_precedent_odds` / `chain_dispute_prep` 결과는 `status: ok`를 유지하되 `warning: "no_results"`, `message`, 한국어 `hints`(검색어 축소, 정식 명칭, 해당 도구는 `search=2` 본문 검색)를 추가.
+- `extract_outcome`이 일부인용·일부기각·파기환송 등 구체적 결과를 먼저 확인하고 기각/각하/인용/취소는 주문 맥락을 요구. "일부인용"이 "인용"으로, "원심판결 인용"/"인용하지"/"인용된"이 인용으로 잡히지 않고 `불명` 처리. `check_precedent_odds`에 `outcome_note`(휴리스틱이며 인용 가능한 결과 아님) 추가.
+- `ordin_search` `knd` docstring 정정: 공식 코드는 30001 조례, 30002 규칙, 30003 훈령, 30004 예규, 30006 기타, 30010 고시, 30011 의회규칙(출처: open.law.go.kr ordinListGuide). 1/2/3은 유효하지 않음.
 
 #### 변경 (동작)
 - 검색 응답의 `ranked_data`에서 각 행의 `id`(키가 아닌 업스트림 행 번호 1, 2, 3)를 `rank`로 이름 변경. `raw_content`는 그대로이며, 유지되는 경우 새 `id_note`가 `id`가 행 번호임을 안내. service 호출에는 판례일련번호·법령ID·법령일련번호(MST) 등을 사용.

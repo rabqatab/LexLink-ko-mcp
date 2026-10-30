@@ -141,7 +141,7 @@ class CitationExtractor:
         """
         self.timeout = timeout
         self.request_delay = request_delay
-        self._lsi_seq_cache: Dict[str, str] = {}  # MST -> lsiSeq mapping
+        self._lsi_seq_cache: Dict[tuple, str] = {}  # (MST, law_name) -> lsiSeq mapping
 
     async def get_lsi_seq(self, law_name: str, mst: str) -> Optional[str]:
         """
@@ -158,8 +158,9 @@ class CitationExtractor:
         Returns:
             lsiSeq if found, None otherwise
         """
-        if mst in self._lsi_seq_cache:
-            return self._lsi_seq_cache[mst]
+        cache_key = (mst, law_name)
+        if cache_key in self._lsi_seq_cache:
+            return self._lsi_seq_cache[cache_key]
 
         # URL-encode Korean law name
         encoded_name = quote(law_name, safe='')
@@ -179,7 +180,7 @@ class CitationExtractor:
                 match = self.LSI_SEQ_PATTERN.search(html)
                 if match:
                     lsi_seq = match.group(1)
-                    self._lsi_seq_cache[mst] = lsi_seq
+                    self._lsi_seq_cache[cache_key] = lsi_seq
                     logger.debug(f"Found lsiSeq={lsi_seq} for MST={mst}")
                     return lsi_seq
 

@@ -206,6 +206,80 @@ def detect_items_key(parsed_data: dict) -> Optional[str]:
     return None
 
 
+OVER_FETCH_WINDOW = 100  # upstream max rows per request
+
+
+def plan_ranking_pages(
+    upstream_params: dict,
+    *,
+    ranking_enabled: bool,
+    over_fetch: bool,
+    display: int,
+    over_fetch_key: str,
+    response_type: str,
+) -> tuple[bool, int, bool]:
+    """Decide how to page a ranked (over-fetched) search.
+
+    Mutates ``upstream_params`` for the over-fetch case. Returns
+    ``(ranking_enabled, offset, ranking_skipped)``:
+
+    - page*display <= 100: force upstream page 1 with 100 rows, rank them all and
+      let the caller slice ``[offset : offset + display]`` (offset = (page-1)*display).
+    - page*display > 100: the window cannot reach this page; skip ranking and
+      forward page/display unchanged (``ranking_skipped`` True).
+    """
+    if not (ranking_enabled and over_fetch and display < OVER_FETCH_WINDOW):
+        return ranking_enabled, 0, False
+    try:
+        page = max(int(upstream_params.get("page") or 1), 1)
+    except (TypeError, ValueError):
+        page = 1
+    if page * display > OVER_FETCH_WINDOW:
+        return False, 0, True
+    upstream_params["page"] = "1"
+    upstream_params[over_fetch_key] = str(OVER_FETCH_WINDOW)
+    # JSON format ignores numOfRows — must also set display for JSON over-fetch
+    if response_type == "JSON":
+        upstream_params["display"] = str(OVER_FETCH_WINDOW)
+    return True, (page - 1) * display, False
+
+
+NO_RESULTS_MESSAGE = "검색 결과가 없습니다."
+NO_RESULTS_HINTS = [
+    "검색어를 줄이거나 핵심 단어만 사용해 보세요",
+    "약칭 대신 정식 명칭으로 검색해 보세요",
+]
+NO_RESULTS_BODY_HINT = "search=2(본문 검색)로 다시 시도해 보세요"
+
+
+def _total_count(response: dict) -> Optional[int]:
+    """totalCnt from ranked_data or raw_content, None when not found."""
+    ranked = response.get("ranked_data")
+    if isinstance(ranked, dict) and ranked.get("totalCnt") not in (None, ""):
+        try:
+            return int(str(ranked["totalCnt"]).strip())
+        except ValueError:
+            pass
+    raw = response.get("raw_content")
+    if isinstance(raw, str):
+        m = re.search(r'totalCnt["\']?\s*[:>=]\s*["\']?\s*(\d+)', raw)
+        if m:
+            return int(m.group(1))
+    return None
+
+
+def add_no_results_guidance(response: dict, *, body_search: bool = False) -> dict:
+    """Add warning/message/hints to an ok search response whose total is 0."""
+    if not isinstance(response, dict) or response.get("status") != "ok":
+        return response
+    if _total_count(response) != 0:
+        return response
+    response["warning"] = "no_results"
+    response["message"] = NO_RESULTS_MESSAGE
+    response["hints"] = list(NO_RESULTS_HINTS) + ([NO_RESULTS_BODY_HINT] if body_search else [])
+    return response
+
+
 def run_search(
     *,
     get_client,
@@ -243,12 +317,13 @@ def run_search(
         and should_apply_ranking(resolved_query)
     )
 
-    if ranking_enabled and over_fetch and original_display < 100:
-        upstream_params[over_fetch_key] = "100"
-        # JSON format ignores numOfRows — must also set display for JSON over-fetch
-        if response_type == "JSON":
-            upstream_params["display"] = "100"
-        logger.debug(f"Ranking enabled: fetching 100 results instead of {original_display}")
+    ranking_enabled, page_offset, ranking_skipped = plan_ranking_pages(
+        upstream_params, ranking_enabled=ranking_enabled, over_fetch=over_fetch,
+        display=original_display, over_fetch_key=over_fetch_key,
+        response_type=response_type,
+    )
+    if ranking_skipped:
+        logger.debug("page*display > 100: ranking skipped, forwarding page/display unchanged")
 
     # Check cache before making API call
     cache = get_cache()
@@ -298,9 +373,9 @@ def run_search(
                     if items:
                         ranked_items = rank_search_results(items, query, ranking_field)
 
-                        if len(ranked_items) > original_display:
-                            ranked_items = ranked_items[:original_display]
-                            logger.debug(f"Trimmed results from {len(items)} to {original_display}")
+                        if len(ranked_items) > original_display or page_offset:
+                            ranked_items = ranked_items[page_offset:page_offset + original_display]
+                            logger.debug(f"Trimmed results from {len(items)} to {len(ranked_items)}")
 
                         if list_type == "law":
                             parsed_data = update_law_list(parsed_data, ranked_items)
@@ -323,6 +398,12 @@ def run_search(
                 else:
                     response["ranked_data"] = parsed_data
 
+    if ranking_skipped:
+        response["ranking_applied"] = False
+    add_no_results_guidance(
+        response,
+        body_search=str(snake_params.get("search", "")) in ("1", "2") and target != "aiSearch",
+    )
     if finalize_ids:
         rename_row_ids_to_rank(response)
     return slim_response(response)
@@ -471,6 +552,24 @@ OUTCOME_KEYWORDS = {
     "일부기각": "partially_rejected",
 }
 
+OUTCOME_NOTE = "휴리스틱 추정이며 인용 가능한 판결 결과가 아닙니다. 판결요지에는 주문이 없는 경우가 많아 '불명'이 흔합니다."
+
+_DISPOSITION_VERB = r"(?:한다|하였|했|하고|합니다|함)"
+_APPLICANT = r"(?:청구|상고|항소|신청|재심|심판청구|이의|재항고|항고)"
+# Specific keywords first; plain 기각/각하/인용/취소 need disposition context.
+_OUTCOME_PATTERNS = [
+    ("파기환송", re.compile(r"파기\s*환송")),
+    ("파기자판", re.compile(r"파기\s*자판")),
+    ("일부인용", re.compile(r"일부\s*인용")),
+    ("일부기각", re.compile(r"일부\s*기각")),
+    ("파기", re.compile(r"파기(?!\s*(?:환송|자판))")),
+    # (?<!기): "기각하였다" contains "각하"
+    ("각하", re.compile(rf"{_APPLICANT}[^.\n]{{0,30}}(?<!기)각하|(?<!기)각하\s*{_DISPOSITION_VERB}|(?<!기)각하\s*(?:판결|결정)")),
+    ("기각", re.compile(rf"{_APPLICANT}[^.\n]{{0,30}}기각|기각\s*{_DISPOSITION_VERB}|기각\s*(?:판결|결정)")),
+    ("인용", re.compile(rf"{_APPLICANT}[^.\n]{{0,30}}(?<!일부)인용(?!\s*(?:하지|되지|된|하여|함으로))|(?<!일부)인용\s*{_DISPOSITION_VERB}(?!지)|인용\s*(?:판결|결정)")),
+    ("취소", re.compile(rf"{_APPLICANT}[^.\n]{{0,30}}취소|취소\s*{_DISPOSITION_VERB}|취소\s*(?:판결|결정)")),
+]
+
 # Legal term suffix patterns (Korean legal jargon indicators)
 LEGAL_TERM_SUFFIXES = re.compile(
     r'[\uAC00-\uD7A3]{2,}(?:자|인|권|의무|행위|사항|절차|요건|책임|위반|처분|규정|조항|법률|계약|소송|재판|판결|채권|채무|손해|배상|이행|해제|해지|취소|무효|유효)'
@@ -478,11 +577,17 @@ LEGAL_TERM_SUFFIXES = re.compile(
 
 
 def extract_outcome(text: str) -> str:
-    """Extract court decision outcome from 판결요지 text using keyword matching."""
+    """Extract court decision outcome from 판결요지 text using keyword matching.
+
+    Heuristic, not a citable result: specific keywords are checked first and
+    plain 기각/각하/인용/취소 require disposition context (e.g. "청구를 기각한다").
+    "원심판결 인용", "인용하지", "인용된", "을 인용하여" are not outcomes.
+    Returns "불명" when unclear (common, since 판결요지 often has no 주문).
+    """
     if not text:
         return "불명"
-    for keyword in OUTCOME_KEYWORDS:
-        if keyword in text:
+    for keyword, pattern in _OUTCOME_PATTERNS:
+        if pattern.search(text):
             return keyword
     return "불명"
 
