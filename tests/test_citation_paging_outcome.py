@@ -7,7 +7,9 @@ import pytest
 
 import lexlink.citation as citation_mod
 import lexlink.server as server_mod
-from lexlink._helpers import extract_outcome, run_search
+from lexlink._helpers import ToolValidationError, extract_outcome, run_search
+from lexlink.errors import ErrorCode, create_error_response
+from lexlink.cache import ResponseCache
 from lexlink.cache import get_cache
 from lexlink.citation import CitationExtractor
 
@@ -191,7 +193,7 @@ def _search(client, rtype, display, page, total=None):
 
 
 def _seqs(resp):
-    rows = resp["ranked_data"]["law"]
+    rows = resp["ranked_data"].get("law", [])
     return [r["법령일련번호"] for r in rows]
 
 
@@ -227,13 +229,14 @@ def test_ranked_page_beyond_results_is_empty_not_no_results(rtype):
 
 @pytest.mark.unit
 @pytest.mark.parametrize("rtype", ["JSON", "XML"])
-def test_ranked_over_window_skips_ranking_and_forwards_page(rtype):
-    client = PagedClient(total=150)
-    resp = _search(client, rtype, display=30, page=4)  # 120 > 100
+def test_ranked_beyond_window_fetches_size_100_upstream_page(rtype):
+    client = PagedClient(total=250)
+    resp = _search(client, rtype, display=30, page=5)  # offset 120 >= 100
+    assert len(client.calls) == 1
     sent = client.calls[0]
-    assert sent["page"] == 4 and sent["display"] == 30
-    assert "numOfRows" not in sent
+    assert sent["page"] == "2" and (sent.get("display") == "100" or sent.get("numOfRows") == "100")
     assert resp["ranking_applied"] is False
+    assert _seqs(resp) == [str(1000 + i) for i in range(121, 151)]
 
 
 @pytest.mark.unit
@@ -280,8 +283,10 @@ def test_elaw_search_pages_and_zero_results(monkeypatch):
     client.total = 0
     zero = fn(query="민법", display=20, page=1, type="JSON")
     assert zero["warning"] == "no_results"
-    skipped = fn(query="민법", display=30, page=4, type="JSON")
-    assert skipped["ranking_applied"] is False
+    client.total = 250
+    beyond = fn(query="민법", display=30, page=6, type="JSON")
+    assert beyond["ranking_applied"] is False
+    assert len(_seqs(beyond)) == 30 and "ranked_data" in beyond
 
 
 @pytest.mark.unit
@@ -336,3 +341,441 @@ def test_extract_outcome_table(text, expected):
 @pytest.mark.unit
 def test_extract_outcome_docstring_notes_heuristic():
     assert "Heuristic" in extract_outcome.__doc__
+
+
+# ============================================================ round 3 regressions
+
+def _tool(monkeypatch, client, name):
+    monkeypatch.setattr(server_mod, "LawAPIClient", lambda *a, **k: client)
+    monkeypatch.setenv("OC", FAKE_OC)
+    return server_mod.create_server()._tool_manager.get_tool(name).fn
+
+
+# ---- 1. cache aliasing
+
+@pytest.mark.unit
+def test_response_cache_returns_and_stores_copies():
+    cache = ResponseCache()
+    original = {"status": "ok", "raw_content": "A"}
+    params = {"query": "q"}
+    cache.put("law", params, original)
+    original["raw_content"] = "mutated-after-put"
+    first = cache.get("law", params)
+    assert first["raw_content"] == "A"
+    first["raw_content"] = "mutated-after-get"
+    first["ranked_data"] = {"x": 1}
+    second = cache.get("law", params)
+    assert second["raw_content"] == "A" and "ranked_data" not in second
+    assert second is not first
+
+
+class RowsClient:
+    """Serves ROWS pages honouring display/page (JSON), recording calls."""
+
+    def __init__(self, root, list_key, rows, name_field):
+        self.root, self.list_key, self.rows, self.name_field = root, list_key, rows, name_field
+        self.calls = []
+
+    def get(self, endpoint, params, response_type="JSON"):
+        self.calls.append(dict(params))
+        n = min(int(params.get("display", 20)), 100)
+        pg = int(params.get("page", 1))
+        body = {self.root: {"totalCnt": str(len(self.rows)), "page": str(pg),
+                            self.list_key: self.rows[(pg - 1) * n:pg * n]}}
+        return {"status": "ok", "request_id": "r", "raw_content": json.dumps(body, ensure_ascii=False)}
+
+
+@pytest.mark.unit
+def test_cgm_expc_pages_2_plus_not_empty_after_cache_hit(monkeypatch):
+    rows = [{"id": str(i + 1), "안건명": f"퇴직금 해석 {i:02d}", "법령해석례일련번호": str(5000 + i)}
+            for i in range(60)]
+    client = RowsClient("CgmExpc", "cgmExpc", rows, "안건명")
+    fn = _tool(monkeypatch, client, "cgm_expc_search")
+    seen = []
+    for pg in (1, 2, 3):
+        out = fn(ministry="고용노동부", query="퇴직금", display=5, page=pg)
+        ids = [r["법령해석례일련번호"] for r in out["ranked_data"]["cgmExpc"]]
+        assert len(ids) == 5, (pg, ids)
+        seen += ids
+    assert len(set(seen)) == 15
+    assert len(client.calls) == 1  # one cached 100-row window
+
+
+@pytest.mark.unit
+def test_special_decc_pages_and_display_change_after_cache_hit(monkeypatch):
+    rows = [{"id": str(i + 1), "사건명": f"부가가치세 {i:02d}", "특별행정심판재결례일련번호": str(5000 + i)}
+            for i in range(60)]
+    client = RowsClient("Decc", "decc", rows, "사건명")
+    fn = _tool(monkeypatch, client, "special_decc_search")
+    kw = dict(tribunal="조세심판원", query="부가가치세")
+    assert len(fn(display=5, page=1, **kw)["ranked_data"]["decc"]) == 5
+    assert len(fn(display=5, page=2, **kw)["ranked_data"]["decc"]) == 5
+    assert len(fn(display=10, page=1, **kw)["ranked_data"]["decc"]) == 10
+
+
+# ---- 2. paging across the 100-row window
+
+def _prec_name(i):
+    # varied lengths so relevance ranking really reorders the window
+    return f"민법 {i:03d}" if i % 3 == 0 else f"{'가' * (i % 7)} 민법 판례 사건 {i:03d}"
+
+
+class PrecPagedClient:
+    def __init__(self, total):
+        self.total, self.calls = total, []
+
+    def get(self, endpoint, params, response_type="JSON"):
+        self.calls.append(dict(params))
+        n = int(params.get("display") or 20)
+        pg = int(params.get("page") or 1)
+        ids = list(range(1, self.total + 1))[(pg - 1) * n:pg * n]
+        if response_type == "JSON":
+            rows = [{"id": str(i), "사건명": _prec_name(i), "판례일련번호": str(2000 + i)} for i in ids]
+            raw = json.dumps({"PrecSearch": {"totalCnt": str(self.total), "page": str(pg), "prec": rows}},
+                             ensure_ascii=False)
+        else:
+            rows = "".join(f'<prec id="{i}"><사건명>{_prec_name(i)}</사건명><판례일련번호>{2000 + i}</판례일련번호></prec>'
+                           for i in ids)
+            raw = f"<PrecSearch><totalCnt>{self.total}</totalCnt><page>{pg}</page>{rows}</PrecSearch>"
+        return {"status": "ok", "request_id": "r", "raw_content": raw}
+
+
+DISPLAYS = [1, 3, 7, 20, 30, 33, 50, 99, 100]
+
+
+def _traverse(search_page, total, display):
+    seen, applied = [], []
+    for pg in range(1, total // display + 3):
+        resp = search_page(pg)
+        assert "ranked_data" in resp, f"page {pg} lacks ranked_data"
+        rows = _seqs(resp)
+        applied.append(resp.get("ranking_applied"))
+        if not rows:
+            break
+        seen += rows
+    return seen, applied
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("rtype", ["JSON", "XML"])
+@pytest.mark.parametrize("display", DISPLAYS)
+def test_paging_traversal_has_no_dups_or_gaps_run_search(rtype, display):
+    client = PagedClient(total=250)
+    seen, applied = _traverse(lambda pg: _search(client, rtype, display, pg), 250, display)
+    assert len(seen) == len(set(seen)) == 250
+    assert set(seen) == {str(1000 + i) for i in range(1, 251)}
+    if display < 100 and 100 % display:
+        assert "partial" in applied
+    assert max(len(client.calls) for _ in [0]) >= 1
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("rtype", ["JSON", "XML"])
+@pytest.mark.parametrize("display", DISPLAYS)
+def test_paging_traversal_has_no_dups_or_gaps_elaw(monkeypatch, rtype, display):
+    client = PagedClient(total=250)
+    fn = _tool(monkeypatch, client, "elaw_search")
+    seen, _ = _traverse(lambda pg: fn(query="민법", display=display, page=pg, type=rtype), 250, display)
+    assert len(seen) == len(set(seen)) == 250
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("rtype", ["JSON", "XML"])
+@pytest.mark.parametrize("display", [7, 30, 33, 100])
+def test_paging_traversal_with_display_over_fetch_key(rtype, display):
+    client = PrecPagedClient(250)
+
+    def page(pg):
+        params = {"oc": FAKE_OC, "target": "prec", "type": rtype, "query": "민법",
+                  "display": display, "page": pg}
+        resp = run_search(get_client=lambda: client, target="prec", query="민법",
+                          snake_params=params, response_type=rtype, display=display,
+                          ranking_field="사건명", list_type="items", item_category="prec",
+                          over_fetch_key="display")
+        rows = resp["ranked_data"]["prec"] if "prec" in resp.get("ranked_data", {}) else []
+        return {"ranked_data": {"law": [{"법령일련번호": r["판례일련번호"]} for r in rows]},
+                "ranking_applied": resp.get("ranking_applied")}
+
+    seen, _ = _traverse(page, 250, display)
+    assert len(seen) == len(set(seen)) == 250
+
+
+@pytest.mark.unit
+def test_straddling_page_uses_at_most_two_upstream_calls_and_is_partial():
+    client = PagedClient(total=250)
+    resp = _search(client, "JSON", display=30, page=4)  # rows 90..119
+    assert resp["ranking_applied"] == "partial"
+    assert len(client.calls) == 2
+    assert [c["page"] for c in client.calls] == ["1", "2"]
+    assert len(_seqs(resp)) == 30
+
+
+@pytest.mark.unit
+def test_ranked_data_page_field_reflects_requested_page():
+    client = PagedClient(total=250)
+    for pg in (1, 2, 3, 4, 9):
+        assert _search(client, "JSON", display=30, page=pg)["ranked_data"]["page"] == str(pg)
+
+
+# ---- 7. paging inputs and hints
+
+@pytest.mark.unit
+@pytest.mark.parametrize("page, display", [(0, 20), (-1, 20), (1, 0), (1, -5)])
+def test_run_search_rejects_bad_paging(page, display):
+    with pytest.raises(ToolValidationError):
+        _search(PagedClient(), "JSON", display=display, page=page)
+
+
+@pytest.mark.unit
+def test_elaw_search_rejects_bad_paging(monkeypatch):
+    fn = _tool(monkeypatch, PagedClient(), "elaw_search")
+    for kw in ({"page": 0}, {"page": -1}, {"display": 0}):
+        out = fn(query="민법", type="JSON", **kw)
+        assert out["status"] == "error" and out["error_code"] == "VALIDATION_ERROR", kw
+
+
+@pytest.mark.unit
+def test_display_over_100_still_clamps_not_errors():
+    resp = _search(PagedClient(total=250), "JSON", display=150, page=1)
+    assert resp["status"] == "ok"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("display, page", [(20, 20), (100, 5)])
+def test_page_beyond_results_hints_no_more_results(display, page):
+    resp = _search(PagedClient(total=45), "JSON", display=display, page=page)
+    assert resp["status"] == "ok"
+    assert any("no_more_results" in h for h in resp.get("hints", []))
+    ok = _search(PagedClient(total=45), "JSON", display=20, page=1)
+    assert not any("no_more_results" in h for h in ok.get("hints", []))
+
+
+# ---- 3. composite failures are not "no results"
+
+class TargetClient:
+    """Per-target responder; ``fail`` maps target(+search) -> error code."""
+
+    def __init__(self, fail=None, ok_rows=False):
+        self.fail, self.ok_rows, self.calls = fail or {}, ok_rows, []
+
+    def get(self, endpoint, params, response_type="JSON"):
+        self.calls.append(dict(params))
+        target = params.get("target")
+        for key, code in self.fail.items():
+            tgt, _, search = key.partition(":")
+            if tgt == target and (not search or str(params.get("search")) == search):
+                return create_error_response(error_code=code, message="boom", hints=[], request_id="r")
+        return {"status": "ok", "request_id": "r",
+                "raw_content": json.dumps({"X": {"totalCnt": "0"}})}
+
+
+ALL_TARGETS = ["aiSearch", "prec", "expc", "eflaw", "decc", "detc", "ttSpecialDecc"]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("name, kw", [
+    ("legal_resolver", {"situation": "보증금 문제"}),
+    ("check_precedent_odds", {"query": "보증금"}),
+    ("chain_dispute_prep", {"query": "보증금"}),
+    ("chain_full_research", {"query": "보증금"}),
+])
+def test_composites_return_error_when_every_search_failed(monkeypatch, name, kw):
+    client = TargetClient({t: ErrorCode.TIMEOUT for t in ALL_TARGETS})
+    out = _tool(monkeypatch, client, name)(**kw)
+    assert out["status"] == "error" and out["error_code"] == "TIMEOUT", out
+    assert out["hints"] and out.get("warning") != "no_results"
+    assert out["success"] is False
+
+
+@pytest.mark.unit
+def test_composite_mixed_failure_codes_become_upstream_error(monkeypatch):
+    client = TargetClient({"aiSearch": ErrorCode.TIMEOUT, "expc": ErrorCode.API_NOT_SUBSCRIBED})
+    out = _tool(monkeypatch, client, "legal_resolver")(situation="보증금")
+    assert out["status"] == "error" and out["error_code"] == "UPSTREAM_ERROR"
+
+
+@pytest.mark.unit
+def test_legal_resolver_partial_failure_warns_and_never_no_results(monkeypatch):
+    client = TargetClient({"expc": ErrorCode.TIMEOUT})
+    out = _tool(monkeypatch, client, "legal_resolver")(situation="보증금")
+    assert out["status"] == "ok" and "warning" not in out
+    assert any("expc" in w and "TIMEOUT" in w for w in out["warnings"])
+
+
+@pytest.mark.unit
+def test_check_precedent_odds_partial_failure_warns(monkeypatch):
+    client = TargetClient({"prec:1": ErrorCode.TIMEOUT})
+    out = _tool(monkeypatch, client, "check_precedent_odds")(query="보증금")
+    assert out["status"] == "ok" and "warning" not in out
+    assert any("TIMEOUT" in w and "prec" in w for w in out["warnings"])
+
+
+@pytest.mark.unit
+def test_chain_dispute_prep_partial_failure_warns_and_full_success_keeps_no_results(monkeypatch):
+    out = _tool(monkeypatch, TargetClient({"detc": ErrorCode.UPSTREAM_ERROR}), "chain_dispute_prep")(query="보증금")
+    assert out["status"] == "ok" and "warning" not in out
+    assert any("detc" in w and "UPSTREAM_ERROR" in w for w in out["warnings"])
+    clean = _tool(monkeypatch, TargetClient(), "chain_dispute_prep")(query="보증금")
+    assert clean["warning"] == "no_results" and "warnings" not in clean
+
+
+@pytest.mark.unit
+def test_chain_full_research_one_branch_failed_warns(monkeypatch):
+    client = TargetClient({"prec": ErrorCode.TIMEOUT})
+    out = _tool(monkeypatch, client, "chain_full_research")(query="보증금")
+    assert out["status"] == "ok"
+    assert any("check_precedent_odds" in w and "TIMEOUT" in w for w in out["warnings"])
+
+
+# ---- 4. article_citation name check
+
+def _named_body(name, abbrev=None):
+    info = {"법령명_한글": name}
+    if abbrev is not None:
+        info["법령명약칭"] = abbrev
+    return json.dumps({"법령": {"기본정보": info,
+                              "조문": {"조문단위": [{"조문번호": "3", "조문내용": "제3조"}]}}},
+                      ensure_ascii=False)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("given, official, abbrev", [
+    ("정보통신망법", "정보통신망 이용촉진 및 정보보호 등에 관한 법률", "정보통신망법"),
+    ("중대재해처벌법", "중대재해 처벌 등에 관한 법률", "중대재해처벌법"),
+    ("남녀고용평등법", "남녀고용평등과 일ㆍ가정 양립 지원에 관한 법률", "남녀고용평등법"),
+    ("상가임대차보호법", "상가건물 임대차보호법", "상가임대차보호법"),
+    ("「민법」", "민법", ""),
+    ("민법(법률)", "민법", ""),
+    ("민 법", "민법", None),
+])
+def test_citation_accepts_abbreviation_and_decorated_names(cite, given, official, abbrev):
+    CitationClient.body = _named_body(official, abbrev)
+    out = cite(mst="1", law_name=given, article=3)
+    assert out.get("error_code") is None and out["success"] is True, out
+
+
+@pytest.mark.unit
+def test_citation_abbreviation_found_via_law_search_when_body_lacks_it(cite):
+    official = "중대재해 처벌 등에 관한 법률"
+    CitationClient.body = _named_body(official)  # no 법령명약칭 field at all
+    searches = []
+    original_get = CitationClient.get
+
+    def get(self, endpoint, params, response_type="JSON"):
+        if endpoint == "/DRF/lawSearch.do":
+            searches.append(dict(params))
+            body = {"LawSearch": {"totalCnt": "1", "law": [
+                {"법령명한글": official, "법령약칭명": "중대재해처벌법", "법령일련번호": "1"}]}}
+            return {"status": "ok", "request_id": "r", "raw_content": json.dumps(body, ensure_ascii=False)}
+        return original_get(self, endpoint, params, response_type)
+
+    CitationClient.get = get
+    try:
+        out = cite(mst="1", law_name="중대재해처벌법", article=3)
+        matched = cite(mst="1", law_name=official, article=3)
+    finally:
+        CitationClient.get = original_get
+    assert out["success"] is True
+    assert len(searches) == 1  # only the mismatching call searched
+    assert matched["success"] is True
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("upstream, given", [
+    ("개인정보 보호법 시행령", "개인정보보호법"),
+    ("개인정보 보호법", "개인정보보호법 시행령"),
+    ("개인정보 보호법 시행규칙", "개인정보보호법 시행령"),
+    ("정보통신망 이용촉진 및 정보보호 등에 관한 법률 시행령", "정보통신망법"),
+])
+def test_citation_still_rejects_law_vs_decree_mismatch(cite, upstream, given):
+    CitationClient.body = _named_body(upstream, "")
+    out = cite(mst="1", law_name=given, article=3)
+    assert out["error_code"] == "VALIDATION_ERROR" and out["success"] is False
+    assert cite.extracted == []
+
+
+# ---- 5. verification outage
+
+@pytest.mark.unit
+@pytest.mark.parametrize("code", ["TIMEOUT", "API_NOT_SUBSCRIBED", "UPSTREAM_ERROR", "EMPTY_RESPONSE"])
+def test_citation_verification_outage_continues_with_warning(cite, code):
+    CitationClient.error = create_error_response(error_code=code, message="x", hints=[], request_id="r")
+    out = cite(mst="1", law_name="민법", article=3)
+    assert out["success"] is True and cite.extracted
+    assert any(code in w for w in out["warnings"])
+
+
+@pytest.mark.unit
+def test_citation_not_found_is_hard_error_with_success_false(cite):
+    CitationClient.error = create_error_response(error_code="NOT_FOUND", message="x", hints=[], request_id="r")
+    out = cite(mst="9", law_name="민법", article=3)
+    assert out["error_code"] == "NOT_FOUND" and out["success"] is False
+    assert cite.extracted == []
+
+
+# ---- 6. extract_outcome rewrite (REPORT cases)
+
+@pytest.mark.unit
+@pytest.mark.parametrize("text, expected", [
+    ("청구를 기각하지 아니한다", "불명"),
+    ("청구를 기각하지 않는다", "불명"),
+    ("상고를 기각하지 않을 수 없다", "불명"),
+    ("청구를 기각할 수 없다", "불명"),
+    ("상고는 기각될 것이다", "불명"),
+    ("항소는 각하되어야 한다", "불명"),
+    ("청구는 인용될 수 없다", "불명"),
+    ("청구를 인용할 수 없다", "불명"),
+    ("신청을 인용할 수 없다", "불명"),
+    ("청구를 인용할 수 있다", "불명"),
+    ("청구를 인용함에 있어서는", "불명"),
+    ("원심판결을 파기하지 아니한다", "불명"),
+    ("파기사유가 없으므로 상고를 기각한다", "기각"),
+    ("재심청구 사유가 없으므로 기각해야 한다", "불명"),
+    ("원심판결을 파기하고 사건을 서울고등법원에 환송한다", "파기환송"),
+    ("원심판결을 파기하고 사건을 서울고등법원에 환송하며", "파기환송"),
+    ("원심판결 파기, 환송", "파기환송"),
+    ("원심판결을 파기하고, 원고의 청구를 기각한다", "파기"),
+    ("원심판결을 파기한다", "파기"),
+    ("피고인의 상고를 기각한다. 파기환송 판결 취지에 따라", "기각"),
+    ("항소를 기각하고 상고를 각하한다", "기각"),
+    ("원고의 주위적 청구를 기각하고 예비적 청구를 인용한다", "기각"),
+    ("원고의 청구 중 일부를 인용한다", "일부인용"),
+    ("청구를 일부만 인용한다", "일부인용"),
+    ("원고의 청구를 일부 인용하고 나머지를 기각한다", "일부인용"),
+    ("청구를 일부 기각한다", "일부기각"),
+    ("원고가 청구한 취소소송은 제소기간 내에 제기하여야 한다", "불명"),
+    ("소송의 청구취지는 처분의 취소를 구하는 것이다", "불명"),
+    ("행정처분의 취소를 청구하는 경우 이해관계가 있어야 한다", "불명"),
+    ("처분을 취소한다", "취소"),
+    ("이 사건 처분을 취소하였다", "취소"),
+    ("처분을 취소하지 아니한다", "불명"),
+    ("소를 각하한다", "각하"),
+    ("청구기각", "기각"),
+])
+def test_extract_outcome_position_based(text, expected):
+    assert extract_outcome(text) == expected
+
+
+@pytest.mark.unit
+def test_extract_outcome_is_linear_on_1mb_inputs():
+    import time
+    shapes = ["가" * 10**6, "기각" * 500000, ("청구" + "가" * 25 + "인용") * 35000,
+              "파기하고 " * 150000, ("상고" * 5 + "를 ") * 90000]
+    for text in shapes:
+        t0 = time.perf_counter()
+        extract_outcome(text)
+        assert time.perf_counter() - t0 < 0.2
+
+
+@pytest.mark.unit
+def test_outcome_keywords_dict_removed():
+    import lexlink._helpers as helpers
+    assert not hasattr(helpers, "OUTCOME_KEYWORDS")
+
+
+# ---- 8. docs
+
+@pytest.mark.unit
+def test_ordin_search_rr_cls_cd_doc_uses_revision_type_meaning():
+    fn = server_mod.create_server()._tool_manager.get_tool("ordin_search").fn
+    assert "제개정" in fn.__doc__ and "Administrative district" not in fn.__doc__
