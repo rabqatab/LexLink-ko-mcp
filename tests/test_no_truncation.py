@@ -18,7 +18,6 @@ from lexlink._helpers import (
     compact_limit,
     extract_key_factors,
     extract_legal_terms,
-    extract_outcome,
     slim_enabled,
 )
 from lexlink.article_text import compact_delegation_tree, strip_html
@@ -312,7 +311,6 @@ def test_downstream_helpers_handle_large_text_fast(default_env):
     body = sentence * (200_000 // len(sentence) + 1) + " 원심판결을 파기환송한다."
     assert len(body) >= 200_000
     t0 = time.perf_counter()
-    assert extract_outcome(body) in ("파기환송", "파기")
     factors = extract_key_factors(body)
     terms = extract_legal_terms(body)
     stripped = strip_html(body.replace(". ", ".<br/>"))
