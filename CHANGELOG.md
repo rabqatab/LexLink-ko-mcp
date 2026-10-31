@@ -90,6 +90,7 @@ All notable changes to LexLink are documented here in both English and Korean.
 
 #### Docs
 - `docs/ISSUES.md` lists `*_service` tools without a size-control option; their docstrings now warn that responses can be large.
+- Docs refresh and restructure: README/README_kr slimmed to overview and quick start; `docs/API_REFERENCE.md` now starts with the tool list generated from the server (55 tools) and has derived-tool, response-size and known-limitation sections; `docs/DEPLOYMENT_GUIDE.md` merged into `docs/OPERATIONS.md`; new `docs/DEVELOPMENT.md` and `docs/README.md` index; `ROADMAP.md`, `STATUS.md`, `ISSUES.md` and the audit checklist moved to `docs/archive/`; AGENTS.md and `.env.example` corrected (9 prompts, `law_as_of`, `.env` is not read by the server, removed unused `LOG_LEVEL`).
 
 #### Security
 - The OC credential is removed from upstream response bodies (e.g. `판례상세링크`), error messages, and debug/request logs (`has_oc` flag only); the `httpx` logger is limited to WARNING. The client's generic error path logs a redacted message plus traceback frames only. Encoded forms (`%3FOC%3D`, `&#38;OC=`, `\x26OC=`, `<OC>..</OC>`) are removed; redaction is linear-time and leaves legal text alone (`OC: "Office of Command"`, `"law" means`).
@@ -676,6 +677,7 @@ All notable changes to LexLink are documented here in both English and Korean.
 
 #### 문서
 - `docs/ISSUES.md`에 크기 제어 옵션이 없는 `*_service` 도구를 정리하고, 해당 도구 docstring에 응답이 클 수 있다는 경고를 추가.
+- 문서 정리 및 구조 개편: README/README_kr은 개요와 빠른 시작만 남김. `docs/API_REFERENCE.md`는 서버에서 생성한 도구 목록(55개)으로 시작하며 파생 도구, 응답 크기, 알려진 한계 절을 추가. `docs/DEPLOYMENT_GUIDE.md`를 `docs/OPERATIONS.md`로 통합. `docs/DEVELOPMENT.md`와 `docs/README.md`(목차) 신설. `ROADMAP.md`, `STATUS.md`, `ISSUES.md`, 점검 체크리스트는 `docs/archive/`로 이동. AGENTS.md와 `.env.example` 정정(프롬프트 9개, `law_as_of`, 서버는 `.env`를 읽지 않음, 사용하지 않는 `LOG_LEVEL` 제거).
 
 #### 보안
 - 업스트림 응답 본문(`판례상세링크` 등), 오류 메시지, 디버그/요청 로그에서 OC 인증값을 제거(로그에는 `has_oc` 플래그만 기록). `httpx` 로거는 WARNING 이상으로 제한.

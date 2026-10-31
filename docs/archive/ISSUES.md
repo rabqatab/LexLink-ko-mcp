@@ -1,5 +1,8 @@
 # LexLink - Bugs and Issues Tracker
 
+> **Archived 2026-10-31.** Historical record, not maintained. Counts, issue status and deployment details may be out of date. Current docs: [docs index](../README.md), [API reference](../API_REFERENCE.md), [CHANGELOG](../../CHANGELOG.md).
+
+
 **Last Updated:** 2026-10-25
 
 ---

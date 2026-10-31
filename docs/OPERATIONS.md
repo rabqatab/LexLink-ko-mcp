@@ -1,6 +1,15 @@
 # LexLink HTTP 서버 운영 가이드
 
-HTTP/SSE 모드(`uv run serve`)를 외부에 노출할 때의 인증, 로깅, 제한, 배포 설정을 설명합니다. stdio 모드는 이 문서의 영향을 받지 않습니다.
+HTTP/SSE 모드(`uv run serve`)를 외부에 노출할 때의 배포, 인증, 로깅, 제한, 프록시 설정을 설명합니다. stdio 모드는 이 문서의 영향을 받지 않습니다.
+
+목차: 1 기본 원칙 / 2 환경변수 / 3 로그와 개인정보 / 4 TLS 프록시 / 5 systemd / 6 PlayMCP 등록 / 7 OC와 IP 등록 / 8 EC2 배포 절차 / 9 문제 해결
+
+로컬 시험:
+
+```bash
+OC=<OC> LEXLINK_AUTH_TOKENS=local:<TOKEN> TRANSPORT=http uv run serve
+# 엔드포인트: http://localhost:8000/mcp  (Host localhost:8000은 기본으로 허용)
+```
 
 ## 1. 기본 원칙
 
@@ -18,7 +27,10 @@ HTTP/SSE 모드(`uv run serve`)를 외부에 노출할 때의 인증, 로깅, �
 | 변수 | 기본값 | 설명 |
 |------|--------|------|
 | `OC` | - | law.go.kr API용 서버 OC (서버 IP가 등록되어 있어야 함) |
-| `TRANSPORT` | `sse` | `http` 권장 |
+| `LEXLINK_BASE_URL` | `http://www.law.go.kr` | 업스트림 기본 URL |
+| `LEXLINK_TIMEOUT` | `60` | 업스트림 요청 타임아웃(초) |
+| `SLIM_RESPONSE` | - | `1`/`true`/`yes`/`on`이면 크기 제한 환경(PlayMCP 등)용 압축 모드: `ranked_data`가 있으면 `raw_content` 제거, 압축 상한 유지(발췌 500자, 상위 10/3건, 위임 항목 80건), 20,000바이트 초과 결과는 줄이고 `truncated`/`truncated_notes` 표시. 없으면 이미 가져온 내용은 자르지 않음 |
+| `TRANSPORT` | `sse` | `http`(Streamable HTTP, `/mcp`) 권장. `sse`는 `/sse` |
 | `HOST` / `PORT` | `0.0.0.0` / `8000` | 바인드 주소. 리버스 프록시 뒤에서는 `HOST=127.0.0.1` 권장 |
 | `LEXLINK_AUTH_TOKENS` | - | `이름:토큰,이름2:토큰2`. 클라이언트는 `Authorization: Bearer <토큰>` 전송. 형식 오류/중복이면 기동 실패 |
 | `LEXLINK_ALLOW_NO_AUTH` | - | 정확히 `true`일 때만 토큰 없이 기동 (PlayMCP 인증 없음 등록 전용). 기동 시 강한 경고 로그 출력 |
@@ -142,10 +154,94 @@ LEXLINK_LOG_DIR=/var/log/lexlink
 
 ## 6. PlayMCP 인증 없음 등록 주의
 
-PlayMCP를 "인증 없음"으로 등록하려면 `LEXLINK_ALLOW_NO_AUTH=true`가 필요하며, 이 경우 엔드포인트에 도달할 수 있는 누구나 서버의 OC 할당량을 사용할 수 있습니다. 완화 수단은 속도/동시성 제한(이 모드에서는 모든 호출자가 하나의 버킷 `noauth`을 공유), Host 검증, 프록시 단의 추가 제한뿐입니다. 가능하면 토큰 인증을 사용하세요. PlayMCP 등록 절차 자체는 이 저장소에 문서화되어 있지 않으므로 PlayMCP 공식 안내에서 확인하세요(이 저장소의 `docs/DEPLOYMENT_GUIDE.md`에는 인증 방식 "인증 없음", 도메인 필요, 80/443 포트 요구 정도만 적혀 있습니다).
+PlayMCP를 "인증 없음"으로 등록하려면 `LEXLINK_ALLOW_NO_AUTH=true`가 필요하며, 이 경우 엔드포인트에 도달할 수 있는 누구나 서버의 OC 할당량을 사용할 수 있습니다. 완화 수단은 속도/동시성 제한(이 모드에서는 모든 호출자가 하나의 버킷 `noauth`을 공유), Host 검증, 프록시 단의 추가 제한뿐입니다. 가능하면 토큰 인증을 사용하세요. PlayMCP 등록 절차 자체는 PlayMCP 공식 안내에서 확인하세요. 이 저장소가 아는 것은 아래 요구사항뿐이며 PlayMCP 쪽 변경은 반영되지 않을 수 있습니다.
+
+- 엔드포인트는 도메인이어야 하며 IP 주소는 거절됩니다. IP만 있으면 `1-2-3-4.sslip.io`처럼 점을 대시로 바꾼 sslip.io 도메인을 쓸 수 있습니다.
+- 포트는 80/443이므로 8000번 앞에 Nginx 같은 프록시를 둡니다.
+- Streamable HTTP(`TRANSPORT=http`, 경로 `/mcp`)를 사용합니다.
+- "인증 없음"으로 등록하려면 서버를 `LEXLINK_ALLOW_NO_AUTH=true`로 시작해야 합니다. `LEXLINK_AUTH_TOKENS`만 설정하면 토큰 없는 요청은 401이 됩니다.
+
+등록 양식 예시(값은 예시):
+
+| 항목 | 값 |
+|---|---|
+| MCP 이름 / 식별자 | LexLink - 한국 법령정보 / lexlink |
+| MCP 설명 | 대한민국 법률, 판례, 행정규칙 검색 및 조회를 위한 MCP 서버. law.go.kr 국가법령정보 API 연동. 55개 도구 지원. |
+| 대화 예시 | 민법 제20조 내용 알려줘 / 건축법과 관련된 대법원 판례 검색해줘 / 자동차관리법 시행령 검색 |
+| 인증 방식 | 인증 없음 (`LEXLINK_ALLOW_NO_AUTH=true` 필요) |
+| MCP Endpoint | `https://<도메인>/mcp` |
+| 대표 이미지 | `assets/LexLink_logo.png` |
 
 ## 7. law.go.kr OC와 고정 IP 등록
 
-`docs/DEPLOYMENT_GUIDE.md`와 서버 오류 힌트(`client.py`)에 따르면 law.go.kr은 OC와 요청 IP를 짝으로 검증하므로 서버의 공인 IP를 open.law.go.kr에 등록해야 하며, 등록되지 않으면 "사용자 정보 검증에 실패하였습니다" 오류가 납니다. 따라서 고정 공인 IP(예: 탄력적 IP)에서 서버를 운영하세요. 등록 화면의 구체적인 메뉴 이름과 절차는 이 저장소에 문서화되어 있지 않으니 [open.law.go.kr](https://open.law.go.kr)에서 직접 확인하세요.
+서버 오류 힌트(`client.py`)에 따르면 law.go.kr은 OC와 요청 IP를 짝으로 검증하므로 서버의 공인 IP를 open.law.go.kr에 등록해야 하며, 등록되지 않으면 "사용자 정보 검증에 실패하였습니다" 오류가 납니다. 따라서 고정 공인 IP(예: 탄력적 IP)에서 서버를 운영하세요. 등록 화면의 구체적인 메뉴 이름과 절차는 이 저장소에 문서화되어 있지 않으니 [open.law.go.kr](https://open.law.go.kr)에서 직접 확인하세요.
 
 law.go.kr의 일일 호출 한도(quota)는 이 저장소에 문서화되어 있지 않습니다. 한도는 open.law.go.kr 또는 운영 기관에 직접 확인하세요. 서버의 `LEXLINK_RATE_LIMIT_PER_MIN`/`LEXLINK_MAX_CONCURRENCY`는 서버 보호용이며 law.go.kr 한도와 무관합니다.
+
+계정에 따라 일부 API(예: 현행법령 시행일 본문 `eflaw`)를 open.law.go.kr에서 별도로 신청해야 합니다. 신청하지 않은 OC는 `API_NOT_SUBSCRIBED` 오류를 받으며, 이때는 `law_service`나 `eflaw_josub`을 쓰거나 해당 API를 신청하세요. 사용 중인 OC의 신청 상태는 이 문서로 알 수 없습니다.
+
+## 8. EC2 배포 절차 (Ubuntu 기준)
+
+Amazon Linux는 `apt` 대신 `yum`, 사용자 `ec2-user`, Nginx 설정 위치 `/etc/nginx/conf.d/`만 다릅니다.
+
+1. 인스턴스: Ubuntu 22.04 LTS, t3.micro 이상. 보안 그룹은 SSH(22)는 내 IP만, HTTP(80)와 HTTPS(443)는 공개.
+2. 탄력적 IP를 할당해 연결하고, 그 IP를 open.law.go.kr에 등록합니다(7장).
+3. 의존성 설치:
+   ```bash
+   sudo apt update && sudo apt install -y python3.12 python3.12-venv git nginx
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+   ```
+4. 코드 받기:
+   ```bash
+   git clone https://github.com/rabqatab/LexLink-ko-mcp.git ~/lexlink-ko-mcp
+   cd ~/lexlink-ko-mcp && uv sync
+   ```
+5. 시험 실행 (토큰이 없으면 시작되지 않음):
+   ```bash
+   OC=<OC> LEXLINK_AUTH_TOKENS=playmcp:<TOKEN> LEXLINK_ALLOWED_HOSTS=<도메인>,localhost:8000 TRANSPORT=http uv run serve
+   ```
+   시작 로그에 `Endpoint: http://0.0.0.0:8000/mcp`가 나옵니다.
+6. Nginx: 4장의 Nginx 예시를 `/etc/nginx/sites-available/lexlink`에 두고(TLS 없이 80번만 쓸 때는 `listen 80;`과 `server_name <도메인>;`) 활성화합니다.
+   ```bash
+   sudo ln -s /etc/nginx/sites-available/lexlink /etc/nginx/sites-enabled/
+   sudo rm -f /etc/nginx/sites-enabled/default
+   sudo nginx -t && sudo systemctl restart nginx
+   ```
+7. systemd: 5장의 유닛과 환경 파일을 만들고 `sudo systemctl daemon-reload && sudo systemctl enable --now lexlink`. `User=`, `WorkingDirectory=`, `ExecStart=`의 `uv` 경로는 실제 값과 맞춥니다(대소문자 구분).
+8. 확인 (Host 헤더는 `LEXLINK_ALLOWED_HOSTS`에 있는 값이어야 하며 아니면 421):
+   ```bash
+   curl -X POST http://localhost/mcp \
+     -H "Host: <도메인>" \
+     -H "Authorization: Bearer <TOKEN>" \
+     -H "Content-Type: application/json" \
+     -H "Accept: application/json, text/event-stream" \
+     -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}'
+   ```
+   토큰이 없거나 틀리면 401, 맞으면 `serverInfo`가 담긴 응답이 옵니다.
+9. HTTPS: 도메인이 있으면 `sudo certbot --nginx -d <도메인>`(Let's Encrypt). 시험용으로는 `ngrok http 8000`도 쓸 수 있지만 무료 URL은 재시작마다 바뀝니다.
+
+업데이트:
+
+```bash
+cd ~/lexlink-ko-mcp && git pull && uv sync && sudo systemctl restart lexlink
+```
+
+PlayMCP처럼 응답 크기 제한이 있는 곳에 붙일 때는 환경 파일에 `SLIM_RESPONSE=true`를 추가합니다. 제한 때문에 못 받은 부분은 `jo`, `page`/`display`, `sections="summary"`로 나누어 조회합니다(`truncated_notes`에 안내가 나옵니다).
+
+## 9. 문제 해결
+
+| 증상 | 확인 |
+|---|---|
+| 기동 시 `HTTP mode requires authentication` | `LEXLINK_AUTH_TOKENS` 또는 `LEXLINK_ALLOW_NO_AUTH=true` 설정 |
+| 401 | `Authorization: Bearer <토큰>` 누락/오류. 인증 없음 등록이면 `LEXLINK_ALLOW_NO_AUTH=true`로 시작했는지 |
+| 421 | 요청 Host가 `LEXLINK_ALLOWED_HOSTS`에 없음 |
+| 429 | 토큰별 속도/동시성 제한 초과 (`Retry-After` 참고) |
+| 404 (세션) | 만료되었거나 다른 토큰의 세션. 새 세션을 시작 |
+| 503 `too_many_sessions` | `LEXLINK_MAX_SESSIONS` 도달 |
+| Nginx 502 | LexLink 서비스가 내려가 있음: `sudo systemctl status lexlink`, `sudo journalctl -u lexlink -n 50` |
+| systemd `status=217/USER` | 유닛의 `User=`가 잘못됨 |
+| systemd `status=203/EXEC` | `ExecStart=`의 `uv` 경로 또는 프로젝트 경로가 잘못됨 (`which uv`) |
+| 포트 8000 사용 중 | `sudo lsof -i :8000`으로 확인 후 정리 |
+| "사용자 정보 검증에 실패하였습니다" | 서버 공인 IP가 OC에 등록되지 않음 (7장) |
+| PlayMCP "Endpoint URL의 도메인이 유효하지 않습니다" | IP 대신 도메인(sslip.io 등) 사용 |
+| PlayMCP "MCP Server 연결 확인에 실패했습니다" | `TRANSPORT=http`, 경로 `/mcp`, 인증 설정, Host 허용 목록 확인 후 8장의 curl로 직접 시험 |

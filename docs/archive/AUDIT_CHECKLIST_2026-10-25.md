@@ -1,5 +1,8 @@
 # LexLink 점검 체크리스트 (2026-10-25)
 
+> **Archived 2026-10-31.** Historical record, not maintained. Counts, issue status and deployment details may be out of date. Current docs: [docs index](../README.md), [API reference](../API_REFERENCE.md), [CHANGELOG](../../CHANGELOG.md).
+
+
 코드 수정 전 현황 파악용 문서. 54개 도구를 실제 호출해 동작을 확인하고, 법제처 Open API 가이드(open.law.go.kr) 목록과 대조했다.
 
 ## 0. 점검 방법

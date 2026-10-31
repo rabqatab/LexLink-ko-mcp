@@ -1,5 +1,8 @@
 # LexLink API Implementation Roadmap
 
+> **Archived 2026-10-31.** Historical record, not maintained. Counts, issue status and deployment details may be out of date. Current docs: [docs index](../README.md), [API reference](../API_REFERENCE.md), [CHANGELOG](../../CHANGELOG.md).
+
+
 **Last Updated:** 2026-03-30
 **Status:** All 55 tools + 2 resources + 9 prompts implemented (v2.1.0)
 
