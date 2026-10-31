@@ -14,7 +14,7 @@ All notable changes to LexLink are documented here in both English and Korean.
 - #12 `article_citation` resolves "같은 법" (and "같은 법 시행령/시행규칙") to the most recently named law as an external citation; "이 법" stays internal. "100% accurate" wording softened.
 - #13 `check_precedent_odds` classifies the outcome from the 주문 only (new `extract_order` / `classify_order`) and returns the 주문 text as `order`. Labels: 파기환송, 파기자판, 파기, 상고기각, 항소기각, 항고기각, 원판결변경, 일부인용, 인용, 기각, 각하, 취소, 무죄, 유죄, 공소기각, 불명. Not a win rate (see `outcome_note`). `extract_outcome` is removed.
 - #14 `eflaw_service` with `mst` now requires `ef_yd` or `id`; otherwise it fails fast with a `VALIDATION_ERROR` instead of the misleading API_NOT_SUBSCRIBED page.
-- #15 `aiSearch`, `legal_resolver`, `chain_full_research` add a `low_relevance` warning when no result shares a character bigram with the query (lexical hint only, nothing is dropped).
+- #15 `aiSearch`, `legal_resolver`, `chain_full_research` add a `relevance_unverified` warning when no result shares a character bigram with the query (lexical hint only, nothing is dropped).
 - #16 `chain_law_system`: `admin_rules` schema changed to `{name, id, article}` taken from the 위임행정규칙 entries of the delegation tree; `linked_ordinances` now comes from `lnkLsOrd` (real 자치법규) with `linked_ordinances_total`. Failures are reported in `warnings` instead of empty lists.
 - #17 `SLIM_RESPONSE=true` is guarded centrally (wrapper around `server.tool`): responses over 20,000 bytes are trimmed and flagged with `truncated` / `truncated_notes`. Default mode is unchanged.
 - #18 Zero-result guidance for `lstrm_ai_search`, `dlytrm_search`, `ls_rlt_search`, `lstrm_rlt_jo_search`; JSON `raw_content` is trimmed to the requested page's rows (e.g. `prec_search` display=5: 47 KB -> 1.6 KB).
@@ -605,7 +605,7 @@ All notable changes to LexLink are documented here in both English and Korean.
 - #12 `article_citation`이 "같은 법"(및 "같은 법 시행령/시행규칙")을 가장 최근에 언급된 법령의 외부 인용으로 해석. "이 법"은 내부 유지. "100% 정확" 문구 완화.
 - #13 `check_precedent_odds`가 주문만으로 결과 분류(`extract_order` / `classify_order` 추가), 주문 원문을 `order`로 반환. 라벨: 파기환송, 파기자판, 파기, 상고기각, 항소기각, 항고기각, 원판결변경, 일부인용, 인용, 기각, 각하, 취소, 무죄, 유죄, 공소기각, 불명. 승소율이 아님(`outcome_note`). `extract_outcome` 제거.
 - #14 `eflaw_service`는 `mst` 사용 시 `ef_yd` 또는 `id` 필수. 없으면 오해를 부르는 API_NOT_SUBSCRIBED 대신 `VALIDATION_ERROR`로 즉시 실패.
-- #15 `aiSearch`, `legal_resolver`, `chain_full_research`: 어떤 결과도 질의와 글자 bigram을 공유하지 않으면 `low_relevance` 경고 추가(어휘 기반 힌트일 뿐, 결과는 삭제하지 않음).
+- #15 `aiSearch`, `legal_resolver`, `chain_full_research`: 어떤 결과도 질의와 글자 bigram을 공유하지 않으면 `relevance_unverified` 경고 추가(어휘 기반 힌트일 뿐, 결과는 삭제하지 않음).
 - #16 `chain_law_system`: `admin_rules` 스키마를 위임 조문 트리의 위임행정규칙 항목에서 만든 `{name, id, article}`로 변경, `linked_ordinances`는 `lnkLsOrd`(실제 자치법규)와 `linked_ordinances_total` 사용. 실패는 빈 목록 대신 `warnings`로 보고.
 - #17 `SLIM_RESPONSE=true`를 `server.tool` 래퍼로 중앙 제어: 20,000바이트 초과 응답은 줄이고 `truncated` / `truncated_notes`로 표시. 기본 모드는 변경 없음.
 - #18 `lstrm_ai_search`, `dlytrm_search`, `ls_rlt_search`, `lstrm_rlt_jo_search` 결과 없음 안내 추가. JSON `raw_content`를 요청 페이지의 행으로 축소(`prec_search` display=5: 47KB -> 1.6KB).
