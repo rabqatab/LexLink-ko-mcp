@@ -14,7 +14,7 @@ LexLink는 대한민국 국가법령정보 API ([open.law.go.kr](https://open.la
 
 ## 제공 기능
 
-- **도구 55개**, **프롬프트 9개**, **리소스 2개** (v2.2.0, 그리고 [CHANGELOG.md](CHANGELOG.md)의 미배포 변경 사항).
+- **도구 66개**, **프롬프트 9개**, **리소스 2개** (v2.2.0, 그리고 [CHANGELOG.md](CHANGELOG.md)의 미배포 변경 사항).
 - 시행일/공포일 기준 법령, 단일 조문(`jo`), 영문 법령, 행정규칙, 자치법규, 조약.
 - 판례, 헌재결정례, 법령해석례, 행정심판례, 위원회 결정문, 중앙부처 해석, 특별행정심판.
 - `law_as_of`: 특정 날짜에 시행 중이던 법령(또는 한 조문).
@@ -35,6 +35,7 @@ LexLink는 대한민국 국가법령정보 API ([open.law.go.kr](https://open.la
 | 판례와 결정례 | `prec_*`, `detc_*`, `expc_*`, `decc_*`, `committee_*`, `cgm_expc_*`, `special_decc_*` |
 | 조약 | `trty_search`, `trty_service` |
 | AI 검색, 지식베이스 | `aiSearch`, `aiRltLs_search`, `lstrm_ai_search`, `dlytrm_search`, `lstrm_rlt_search`, `dlytrm_rlt_search`, `lstrm_rlt_jo_search`, `jo_rlt_lstrm_search`, `ls_rlt_search` |
+| 이력, 비교, 별표, 용어사전 | `oldAndNew_*`, `thdCmp_*`, `lsJoHstInf_search`, `lsHstInf_search`, `delHst_search`, `lsAbrv_search`, `licbyl_search`, `lstrm_*` |
 | 분석 | `article_citation`, `check_precedent_odds`, `legal_resolver`, `simplify_article`, `law_amendment_summary`, `article_amendment_diff` |
 | 체인, 운영 | `chain_full_research`, `chain_amendment_track`, `chain_dispute_prep`, `chain_law_system`, `cache_stats` |
 
@@ -45,6 +46,9 @@ LexLink는 대한민국 국가법령정보 API ([open.law.go.kr](https://open.la
 | 일상 언어의 막연한 질문 | `legal_resolver`, `aiSearch`, `aiRltLs_search` |
 | 법령명과 조문 번호 | `eflaw_search`(MST 확인) 후 `eflaw_josub` / `eflaw_service`에 `jo` 지정 |
 | "특정 날짜에 법이 어땠나?" | `law_as_of` |
+| 개정 신구조문 대비 | `oldAndNew_search` 후 `oldAndNew_service` |
+| 법률, 시행령, 시행규칙 나란히 보기 | `thdCmp_search` 후 `thdCmp_service`에 `jo` 지정 (없으면 매우 큼) |
+| 법령용어의 뜻 | `lstrm_search` 후 `lstrm_service`(사전); `lstrm_ai_search`는 연관 용어 링크만 제공 |
 | 판례 주제 조사 | `prec_search`, `detc_search`, `chain_dispute_prep` |
 
 조문 본문은 항상 `jo`를 지정하세요(예: `35`, `"35의5"`, `"제35조의5"`, `"003505"`; 6자리로 정규화됨). 지정하지 않으면 법령에 따라 응답이 매우 커질 수 있습니다.

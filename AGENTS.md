@@ -1,6 +1,6 @@
 # AGENTS.md
 
-LexLink is a Model Context Protocol (MCP) server over the Korean National Law Information API (law.go.kr DRF). It exposes 55 tools, 9 prompts and 2 resources. Version: v2.2.0 plus the Unreleased section of CHANGELOG.md (`__version__` is read from package metadata and reported as MCP `serverInfo.version`).
+LexLink is a Model Context Protocol (MCP) server over the Korean National Law Information API (law.go.kr DRF). It exposes 66 tools, 9 prompts and 2 resources. Version: v2.2.0 plus the Unreleased section of CHANGELOG.md (`__version__` is read from package metadata and reported as MCP `serverInfo.version`).
 
 Do not trust counts or lists in docs, including this file. Generate them from the server:
 
@@ -26,6 +26,7 @@ The full tool list with arguments is in [docs/API_REFERENCE.md](docs/API_REFEREN
 - `server.py`: `create_server()` with all tools, prompts, resources and `SERVER_INSTRUCTIONS`. Wraps `server.tool` so every result passes the `SLIM_RESPONSE` size guard.
 - `_helpers.py`: `TOOL_ANNOTATIONS`, `handle_tool_error`, `run_search`, `run_service`, SLIM helpers.
 - `client.py`: HTTP client (follows law.go.kr JS anti-bot redirects, detects empty/unsubscribed/HTML upstream bodies).
+- `law_extras.py`: argument validation and payload normalization for the history/comparison/appendix/dictionary tools (oldAndNew, thdCmp, lsJoHstInf, lsHstInf, delHst, lsAbrv, licbyl, lstrm).
 - `params.py`, `validation.py`, `linkage.py`, `agency_codes.py`, `as_of.py`, `article_text.py`, `citation.py`, `parser.py`, `ranking.py`, `cache.py`, `resolver.py`, `errors.py`.
 - `stdio_server.py` (`uv run stdio`), `http_server.py` (`uv run serve`), `http_security.py` (auth, rate limit, session binding, Host/Origin), `raw_logger.py`, `log_processor.py`.
 
@@ -54,6 +55,7 @@ Resources (2): `lexlink://laws/frequently-used` (static, about 20 law names to �
 - **Ministry interpretations** (`cgm_expc_*`): upstream target `{code}CgmExpc`, 39 ministries. 재정경제부 and 국세청 are list-only, so `cgm_expc_service` returns `VALIDATION_ERROR` for them.
 - **`ordinLsCon_search`**: exactly one of `query`, `law_id`, `org`.
 - **Knowledge-base linkage** tools use `lawService.do`; `display`/`page` are not upstream parameters for them.
+- **History/comparison tools** (`oldAndNew_*`, `thdCmp_*`, `lsJoHstInf_search`, `lsHstInf_search`, `delHst_search`, `lsAbrv_search`, `licbyl_search`, `lstrm_*`): the upstream answers bad dates, unknown codes and missing dates with a silent 0 rows, so these are validated first (`VALIDATION_ERROR`). `thdCmp_service` needs `knd` and is 90-610 KB without `jo` (filtered locally, upstream has no article parameter). `lsAbrv_search` filters and pages the upstream's 2.3 MB list itself. `lstrm_service` reads XML because the JSON form detaches 출처/용례 from their entry, and takes `trm_seqs` (the 법령용어ID) since names with spaces/slashes/parentheses are NOT_FOUND by `query`. `oldAndNew_service` is an upstream-edited table (see its `caution`). `licbyl_search` returns links only. Details: [docs/API_REFERENCE.md](docs/API_REFERENCE.md#lexlink-도구-목록).
 - **Search ranking**: `run_search` over-fetches up to 100 rows to re-rank keyword queries, then returns the requested page.
 - **Error shape**: `{status, error_code, message, hints, request_id}`. Codes: `VALIDATION_ERROR`, `TIMEOUT`, `UPSTREAM_ERROR`, `INTERNAL_ERROR`, `NOT_FOUND`, `ARTICLE_NOT_FOUND`, `EMPTY_RESPONSE`, `API_NOT_SUBSCRIBED`, `UPSTREAM_HTML_ERROR`.
 

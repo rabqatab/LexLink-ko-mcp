@@ -16,7 +16,7 @@ LexLink is an MCP (Model Context Protocol) server that wraps the Korean National
 
 ## What it provides
 
-- **55 tools**, **9 prompts** and **2 resources** (v2.2.0, plus the Unreleased changes listed in [CHANGELOG.md](CHANGELOG.md)).
+- **66 tools**, **9 prompts** and **2 resources** (v2.2.0, plus the Unreleased changes listed in [CHANGELOG.md](CHANGELOG.md)).
 - Laws by effective date or announcement date, single articles (`jo`), English translations, administrative rules, local ordinances, treaties.
 - Court precedents, Constitutional Court decisions, legal interpretations, administrative appeals, committee decisions, ministry interpretations, special tribunals.
 - `law_as_of`: the version of a law (or one article) in force on a given date.
@@ -37,6 +37,7 @@ All tool names and arguments are in the [API reference](docs/API_REFERENCE.md#le
 | Case law and decisions | `prec_*`, `detc_*`, `expc_*`, `decc_*`, `committee_*`, `cgm_expc_*`, `special_decc_*` |
 | Treaties | `trty_search`, `trty_service` |
 | AI search and knowledge base | `aiSearch`, `aiRltLs_search`, `lstrm_ai_search`, `dlytrm_search`, `lstrm_rlt_search`, `dlytrm_rlt_search`, `lstrm_rlt_jo_search`, `jo_rlt_lstrm_search`, `ls_rlt_search` |
+| History, comparison, appendix, dictionary | `oldAndNew_*`, `thdCmp_*`, `lsJoHstInf_search`, `lsHstInf_search`, `delHst_search`, `lsAbrv_search`, `licbyl_search`, `lstrm_*` |
 | Analysis | `article_citation`, `check_precedent_odds`, `legal_resolver`, `simplify_article`, `law_amendment_summary`, `article_amendment_diff` |
 | Chains and ops | `chain_full_research`, `chain_amendment_track`, `chain_dispute_prep`, `chain_law_system`, `cache_stats` |
 
@@ -47,6 +48,9 @@ Which tool to start with:
 | A vague question in plain Korean | `legal_resolver`, `aiSearch`, `aiRltLs_search` |
 | A law name and article number | `eflaw_search` (get MST) then `eflaw_josub` / `eflaw_service` with `jo` |
 | "What did the law say on date D?" | `law_as_of` |
+| Old/new article text of an amendment | `oldAndNew_search` then `oldAndNew_service` |
+| Law, 시행령 and 시행규칙 side by side | `thdCmp_search` then `thdCmp_service` with `jo` (very large without it) |
+| What a legal term means | `lstrm_search` then `lstrm_service` (dictionary); `lstrm_ai_search` only gives related-term links |
 | A topic for case law | `prec_search`, `detc_search`, `chain_dispute_prep` |
 
 For article text always pass `jo` (e.g. `35`, `"35의5"`, `"제35조의5"`, `"003505"`; normalized to 6 digits). Without it some laws return a very large body.

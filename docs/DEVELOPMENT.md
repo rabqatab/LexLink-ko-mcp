@@ -22,6 +22,7 @@ Tests mock the upstream API (fixtures in `tests/fixtures/`). There is no coverag
 | `client.py` | HTTP client for law.go.kr: anti-bot redirect following, structured upstream error detection |
 | `params.py` | snake_case to upstream camelCase mapping, OC resolution (`oc` argument, then `OC` env; the argument is ignored in HTTP mode) |
 | `validation.py` | date and `jo` validation/normalization |
+| `law_extras.py` | validation and normalization for the history/comparison/appendix/dictionary tools (oldAndNew, thdCmp, lsJoHstInf, lsHstInf, delHst, lsAbrv, licbyl, lstrm) |
 | `linkage.py` | knowledge-base and ordinance-link request logic |
 | `agency_codes.py` | ministry, committee and tribunal code tables and aliases |
 | `as_of.py` | pure helpers for `law_as_of` (version in force on a date) |

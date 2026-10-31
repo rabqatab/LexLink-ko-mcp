@@ -1,0 +1,59 @@
+{
+  "thdCmpLawSearch": {
+    "resultMsg": "success",
+    "키워드": "민법",
+    "thdCmp": [
+      {
+        "id": "1",
+        "법령ID": "011546",
+        "위임조문_삼단비교상세링크": "/DRF/lawService.do?OC=test&target=thdCmp&MST=188376&knd=2&type=HTML&mobileYn=",
+        "시행일자": "20161220",
+        "법령명한글": "난민법",
+        "법령구분명": "법률",
+        "인용조문_삼단비교상세링크": "/DRF/lawService.do?OC=test&target=thdCmp&MST=188376&knd=1&type=HTML&mobileYn=",
+        "소관부처명": "법무부",
+        "공포번호": "14408",
+        "삼단비교일련번호": "188376",
+        "제개정구분명": "일부개정",
+        "공포일자": "20161220",
+        "소관부처코드": "1270000"
+      },
+      {
+        "id": "2",
+        "법령ID": "011878",
+        "위임조문_삼단비교상세링크": "/DRF/lawService.do?OC=test&target=thdCmp&MST=273705&knd=2&type=HTML&mobileYn=",
+        "시행일자": "20250919",
+        "법령명한글": "난민법 시행령",
+        "법령구분명": "대통령령",
+        "인용조문_삼단비교상세링크": "/DRF/lawService.do?OC=test&target=thdCmp&MST=273705&knd=1&type=HTML&mobileYn=",
+        "소관부처명": "법무부",
+        "공포번호": "35747",
+        "삼단비교일련번호": "273705",
+        "제개정구분명": "타법개정",
+        "공포일자": "20250916",
+        "소관부처코드": "1270000"
+      },
+      {
+        "id": "3",
+        "법령ID": "011885",
+        "위임조문_삼단비교상세링크": "/DRF/lawService.do?OC=test&target=thdCmp&MST=266929&knd=2&type=HTML&mobileYn=",
+        "시행일자": "20241203",
+        "법령명한글": "난민법 시행규칙",
+        "법령구분명": "법무부령",
+        "인용조문_삼단비교상세링크": "/DRF/lawService.do?OC=test&target=thdCmp&MST=266929&knd=1&type=HTML&mobileYn=",
+        "소관부처명": "법무부",
+        "공포번호": "01084",
+        "삼단비교일련번호": "266929",
+        "제개정구분명": "일부개정",
+        "공포일자": "20241203",
+        "소관부처코드": "1270000"
+      }
+    ],
+    "page": "1",
+    "resultCode": "00",
+    "target": "thdCmp",
+    "totalCnt": "9",
+    "section": "lawNm",
+    "numOfRows": "3"
+  }
+}

@@ -10,7 +10,7 @@
 
 ## LexLink 도구 목록
 
-도구 55개, 프롬프트 9개, 리소스 2개. 아래 표는 서버의 `list_tools()`에서 생성했습니다(필수 인자, 선택 인자와 기본값). 모든 도구는 선택 인자 `oc`를 받지만 HTTP 모드에서는 무시됩니다. 같은 모양으로 직접 확인하려면 [DEVELOPMENT.md](DEVELOPMENT.md#adding-a-tool)의 스니펫을 쓰세요.
+도구 66개, 프롬프트 9개, 리소스 2개. 아래 표는 서버의 `list_tools()`에서 생성했습니다(필수 인자, 선택 인자와 기본값). 모든 도구는 선택 인자 `oc`를 받지만 HTTP 모드에서는 무시됩니다. 같은 모양으로 직접 확인하려면 [DEVELOPMENT.md](DEVELOPMENT.md#adding-a-tool)의 스니펫을 쓰세요.
 
 ### 법령 (Laws)
 
@@ -81,6 +81,46 @@
 | `jo_rlt_lstrm_search` | jo | query, law_id, type=JSON |
 | `ls_rlt_search` | - | query=*, display=20, page=1, type=JSON |
 
+### 이력 · 비교 · 별표 · 용어사전 (History, comparison, appendix, dictionary)
+
+| Tool | 필수 인자 | 선택 인자 (기본값) |
+|---|---|---|
+| `oldAndNew_search` | - | query, display=20, page=1, sort, ef_yd, anc_yd, date, nb, anc_no, rr_cls_cd, org, knd, gana, type=JSON |
+| `oldAndNew_service` | - | id, mst, type=JSON |
+| `thdCmp_search` | - | query, display=20, page=1, sort, ef_yd, anc_yd, date, nb, anc_no, rr_cls_cd, org, knd, gana, type=JSON |
+| `thdCmp_service` | knd | id, mst, jo, type=JSON |
+| `lsJoHstInf_search` | - | reg_dt, from_reg_dt, to_reg_dt, id, jo, org, display=20, page=1, type=JSON |
+| `lsHstInf_search` | reg_dt | org, display=20, page=1, type=JSON |
+| `delHst_search` | - | knd, del_dt, frm_dt, to_dt, display=20, page=1, type=JSON |
+| `lsAbrv_search` | - | query, std_dt, end_dt, display=20, page=1 |
+| `licbyl_search` | - | query, search, display=20, page=1, sort, org, mul_org, knd, gana, type=JSON |
+| `lstrm_search` | - | query, display=20, page=1, sort, reg_dt, gana, dic_knd_cd, type=JSON |
+| `lstrm_service` | - | query, trm_seqs |
+
+이 11개 도구의 공통 동작 (2026-10-31 라이브 측정):
+
+- **잘못된 인자는 호출 전에 `VALIDATION_ERROR`.** 업스트림은 존재하지 않는 날짜(`20261301`), 알 수 없는 코드(`knd=99`, `dicKndCd=999999`), 필수 날짜 누락을 조용히 0건으로 응답합니다. 0건이 "변경 없음"으로 읽히지 않도록 날짜는 달력상 실제 날짜인지, 코드는 허용 목록인지 확인하고, `lsJoHstInf_search`/`lsHstInf_search`는 날짜 없이 호출할 수 없습니다.
+- **목록은 항상 리스트.** 업스트림은 한 건이면 객체, 없으면 키 생략으로 응답합니다. `ranked_data.<목록키>`(`oldAndNew`, `thdCmp`, `law`, `licbyl`, `lstrm`)는 항상 리스트이고, 0건은 `status: ok` + `warning: "no_results"`입니다. `lsJoHstInf_search`의 `조문정보.jo`도 항상 리스트입니다. 행의 `id`는 `rank`로 바뀝니다.
+- **마지막 페이지 너머:** `lsJoHstInf_search`, `lsHstInf_search`, `delHst_search`는 업스트림이 `totalCnt: 0`으로 응답하므로, 실제 전체 건수를 다시 조회해 `warning: "page_out_of_range"`로 알립니다(0건과 구분).
+- **존재하지 않는 id**는 `NOT_FOUND`: `oldAndNew_service`, `thdCmp_service`, `lstrm_service`. `oldAndNew_service`는 "ID가 없음"과 "신구법이 없는 개정본"을 업스트림이 구분하지 않습니다.
+- `display`는 100으로 제한되고, `SLIM_RESPONSE` 크기 가드가 그대로 적용됩니다.
+- 응답의 `*링크` 필드에서 OC는 제거됩니다.
+- 숫자 인자(날짜, id, mst, org, nb, anc_no, trm_seqs 등)의 전각 숫자 `０-９`(`２０２５０４０１`)만 ASCII로 바꾼 뒤 검증합니다(`①` 같은 다른 문자는 바꾸지 않고 거부). 코드·열거 인자(`knd`, `search`, `rr_cls_cd`, `sort` 등)는 바꾸지 않고 `VALIDATION_ERROR`입니다.
+- `gana`는 로마자 초성 코드(`ga`, `na`, `da`, `ra`, `ma`, `ba`, `sa`, `ah`(ㅇ), `ja`, `cha`, `ka`, `ta`, `pa`, `ha`, `etc`)만 허용하고(업스트림은 다른 값을 무시하고 전체를 반환), `oldAndNew_search`/`thdCmp_search`의 `knd`는 `A0001`(헌법), `A0002`(법률), `A0007`(대통령령), `A0009`(총리령), `A0011`(부령) 형태의 코드(영문 1자 + 숫자 4자리)만 허용합니다. 전체 코드표는 업스트림이 공개하지 않아 형태만 검증하며, 존재하지 않는 코드는 0건이 될 수 있습니다.
+
+도구별 메모:
+
+| 도구 | 메모 |
+|---|---|
+| `oldAndNew_*` | `query`는 법령명 부분 일치(`민법`은 `난민법`도 반환). 목록 행의 `신구법일련번호` = 본문의 `mst`, `신구법ID` = 법령ID. 본문은 조문 선택 인자가 없지만 작습니다(측정: 민법 10.8KB, 가사소송법 12.2KB, 가족관계법 3.4KB). `versions`에 구·신 개정본의 MST/시행일/공포일을 정리. `id`만 주면 업스트림이 개정본을 고름(관측: 현행). id와 mst가 서로 다른 법령이면 `warning`. **주의(`caution`):** 신구법 대비표는 법제처가 편집한 자료라 실제 법령 조문과 다를 수 있음. 측정: 민법 제379조, mst 284415의 구조문(원본 DRF 응답)이 "연 5분"인데 구 개정본(MST 265307) 조문은 "연 5푼"이고, 구 개정본의 시행일이 `law_as_of`와 다를 수 있음(도구가 만든 차이가 아니라 원본 응답에 있음). 인용 전에 `eflaw_service`/`law_as_of`로 확인. `SLIM_RESPONSE`에서 크기를 넘으면 구조문·신조문 목록을 같은 건수로 잘라 `truncated_notes`에 표시 |
+| `thdCmp_*` | 본문 `knd` 필수(1 인용조문, 2 위임조문; 없으면 업스트림이 빈 응답). **`jo` 없이는 매우 큼** (측정, 도구 응답 JSON, knd 1/2): 가사소송법 89/167KB, 가족관계의 등록 등에 관한 법률 204/251KB, 민법 610/592KB; `jo` 지정 시 1~9KB. 업스트림에 조문 인자가 없어 `jo`는 서버가 JSON 본문에서 해당 조문 행만 남깁니다(장·절 제목 행 제외, 한 조문이 여러 행일 수 있음, `selection`에 행 수). 없으면 `ARTICLE_NOT_FOUND`. 시행령·시행규칙 id/mst를 주면 모법을 기준으로 응답하므로 `anchor`/`warning`을 확인. 가사소송법의 `시행령명`처럼 요약 필드가 엉뚱한 값일 수 있어 조문 행을 기준으로 삼을 것. `jo`가 빈 문자열이면 `VALIDATION_ERROR`(전체 반환 아님). 소득세법처럼 `knd=2`의 법률조문 `조내용`이 조문이 아닌 장·절 제목으로 채워진 법령은 시행령·시행규칙 하위 조문이 붙은 행을 그대로 돌려주되 `selection.own_text_is_heading`과 `warning`으로 표시합니다(제목을 조문 본문으로 인용하지 말고 `knd=1` 또는 `eflaw_service`로 확인). 장·절 제목 행은 조내용(`제N편/장/절/관`)으로 가려내며, 조제목이 없는 실제 조문(예: "제5조 삭제")은 일치함 |
+| `lsJoHstInf_search` | `totalCnt`는 조문이 아닌 법령(개정본) 수. `jo`는 `조문정보`만 거르므로 그 조문이 안 바뀐 개정본도 `조문정보.jo: []`로 나옴(`note`). 한 조문의 전 개정본 이력은 `chain_amendment_track`/`article_amendment_diff`가 쓰는 본문 쪽(`lawService`, ID+JO)이며 공개 도구는 없음. 20개 법령이 한 페이지(최대 약 50KB) |
+| `lsHstInf_search` | `regDt`는 법령 변경(등록)일로 공포일·시행일과 다를 수 있음 |
+| `delHst_search` | 삭제된 일련번호만 있고 이름·본문은 없음. 필터 없이 약 14,000건. 범위는 `frm_dt`+`to_dt`(문서의 `delDt`는 단일 일자) |
+| `lsAbrv_search` | 업스트림은 query·display·page를 무시하고 2,714건 전체(약 2.3MB)를 반환하므로 서버가 필터 없는 목록을 한 번(고정 캐시 키) 가져와 `std_dt`/`end_dt`(등록일, 포함)와 `query`(법령명·약칭, 공백·대소문자 무시)를 직접 적용하고 페이지를 나눕니다. JSON 해석 실패나 빈 목록은 `UPSTREAM_ERROR`이며 캐시하지 않습니다. `totalCnt`와 행 수가 다르면 행은 돌려주되 `warning: upstream_total_mismatch`를 달고 캐시하지 않습니다. `rank`는 문자열, 마지막 페이지 너머는 `warning: "page_out_of_range"`, `request_id`는 호출마다 새로 만듭니다. 현행·연혁·시행예정 개정본이 모두 나와 법령ID가 중복될 수 있고 약칭이 비어 있는 법령도 있음. `type` 인자 없음 |
+| `licbyl_search` | 별표/서식의 **링크와 메타데이터만** 반환하며 내용은 가져오지 않음. `별표서식파일링크`(HWP 등), `별표서식PDF파일링크`, `별표법령상세링크`는 `https://www.law.go.kr` 기준 상대 링크. `search`(1 별표명, 2 법령명, 3 본문)·`knd`(1~5)·`mul_org`(OR/AND)·`gana` 검증. 0건이면 현재 `search` 범위를 알리고 다른 범위를 안내 |
+| `lstrm_*` | **사전(정의)** 용. `lstrm_ai_search`는 연관 용어·조문 링크용(정의 없음). 목록 행의 `법령용어ID`를 `trm_seqs`로 넘기는 것이 안전합니다(쉼표 목록 가능). 공백·슬래시·괄호가 있는 이름(`재산분할청구/재산분할청구권`, `양육비 채무자`)은 `query`로 `NOT_FOUND`가 되지만 `trm_seqs`로는 조회됩니다(라이브 확인). `query`는 정확한 표제어여야 하며(`선`은 `선의`를 찾지 못함) 여러 사전(법령용어사전, 법령정의사전, 법령한영사전, 생활용어사전, 알법정비사전)의 항목을 `entries[]`로 반환. 업스트림 JSON은 항목을 병렬 배열로 합치고 `출처`/`용례`가 어느 항목 것인지 알 수 없게 만들어서 서버가 XML을 읽어 항목별로 구조화합니다(`type` 인자 없음). `definition`의 `&middot;` 같은 엔티티는 풀어서 반환하고 HTML 태그 조각(`<a>`, `<img>`)은 남아 있을 수 있음. `&reg`처럼 `;`가 없는 엔티티는 풀지 않음. 항목에 `출처`가 여러 개면 줄바꿈으로 이어서 모두 유지 |
+
 ### 분석 도구 (Analysis)
 
 | Tool | 필수 인자 | 선택 인자 (기본값) |
@@ -110,7 +150,7 @@
 
 | 구분 | 도구 수 | 비고 |
 |---|---|---|
-| 업스트림 API를 그대로 감싼 도구 | 43 | `committee_*`(위원회 12개), `cgm_expc_*`(부처 39개), `special_decc_*`(심판원 4개)는 인자로 대상을 고르는 도구 |
+| 업스트림 API를 그대로 감싼 도구 | 54 | 신규 11개(`oldAndNew_*`, `thdCmp_*`, `lsJoHstInf_search`, `lsHstInf_search`, `delHst_search`, `lsAbrv_search`, `licbyl_search`, `lstrm_*`) 포함. `committee_*`(위원회 12개), `cgm_expc_*`(부처 39개), `special_decc_*`(심판원 4개)는 인자로 대상을 고르는 도구 |
 | LexLink 파생 도구 | 12 | `law_as_of`, `article_citation`, `check_precedent_odds`, `legal_resolver`, `simplify_article`, `law_amendment_summary`, `article_amendment_diff`, `chain_*` 4개, `cache_stats` |
 
 업스트림 카탈로그 195종 중 이 도구들이 다루지 않는 API는 각 절에 `NOT IMPLEMENTED`로 표시했습니다.
@@ -495,9 +535,9 @@ http://www.law.go.kr/DRF/lawService.do?OC=test&target=elaw&MST=127280&type=XML
 
 ---
 
-## 1.4 이력 APIs (3 not implemented)
+## 1.4 이력 APIs (2 implemented, 1 used internally)
 
-### 1.4.1 법령 변경이력 목록 조회 — NOT IMPLEMENTED
+### 1.4.1 법령 변경이력 목록 조회 — `lsHstInf_search` ✅ IMPLEMENTED
 **Endpoint**: `GET http://www.law.go.kr/DRF/lawSearch.do?target=lsHstInf`
 
 | 요청변수 | 값 | 설명 |
@@ -540,13 +580,17 @@ http://www.law.go.kr/DRF/lawSearch.do?target=lsHstInf&OC=test&regDt=20170726&typ
 
 ---
 
-### 1.4.2 일자별 조문 개정 이력 목록 조회 — NOT IMPLEMENTED
-**Endpoint**: `GET http://www.law.go.kr/DRF/lawSearch.do?target=dayjoRvs`
+### 1.4.2 일자별 조문 개정 이력 목록 조회 — `lsJoHstInf_search` ✅ IMPLEMENTED
+**Endpoint**: `GET http://www.law.go.kr/DRF/lawSearch.do?target=lsJoHstInf`
+
+요청변수: `regDt`(조문 개정일), `fromRegDt`/`toRegDt`(기간), `ID`(법령ID), `JO`(6자리), `org`, `page`. 출력: 법령 행(`법령정보`) + `조문정보.jo[]`(조문번호, 변경사유, 조문개정일, 조문시행일, 링크). 업스트림 `display`도 동작함(문서에는 없음).
 
 ---
 
-### 1.4.3 조문별 변경 이력 목록 조회 — NOT IMPLEMENTED
-**Endpoint**: `GET http://www.law.go.kr/DRF/lawSearch.do?target=joChg`
+### 1.4.3 조문별 변경 이력 목록 조회 — 공개 도구 없음 (내부 사용)
+**Endpoint**: `GET http://www.law.go.kr/DRF/lawService.do?target=lsJoHstInf` (`ID` + `JO` 필수)
+
+`chain_amendment_track`과 `article_amendment_diff` 내부에서 호출합니다.
 
 ---
 
@@ -654,7 +698,7 @@ http://www.law.go.kr/DRF/lawService.do?OC=test&target=lsDelegated&type=XML&ID=00
 
 ---
 
-## 1.6 부가서비스 APIs (8 not implemented)
+## 1.6 부가서비스 APIs (6 implemented, 4 not implemented)
 
 ### 1.6.1 법령 체계도 목록 조회 — NOT IMPLEMENTED
 **Endpoint**: `GET http://www.law.go.kr/DRF/lawSearch.do?target=stmd`
@@ -662,23 +706,23 @@ http://www.law.go.kr/DRF/lawService.do?OC=test&target=lsDelegated&type=XML&ID=00
 ### 1.6.2 법령 체계도 본문 조회 — NOT IMPLEMENTED
 **Endpoint**: `GET http://www.law.go.kr/DRF/lawService.do?target=stmd`
 
-### 1.6.3 신구법 목록 조회 — NOT IMPLEMENTED
+### 1.6.3 신구법 목록 조회 — `oldAndNew_search` ✅ IMPLEMENTED
 **Endpoint**: `GET http://www.law.go.kr/DRF/lawSearch.do?target=oldAndNew`
 
-### 1.6.4 신구법 본문 조회 — NOT IMPLEMENTED
+### 1.6.4 신구법 본문 조회 — `oldAndNew_service` ✅ IMPLEMENTED
 **Endpoint**: `GET http://www.law.go.kr/DRF/lawService.do?target=oldAndNew`
 
-### 1.6.5 3단 비교 목록 조회 — NOT IMPLEMENTED
+### 1.6.5 3단 비교 목록 조회 — `thdCmp_search` ✅ IMPLEMENTED
 **Endpoint**: `GET http://www.law.go.kr/DRF/lawSearch.do?target=thdCmp`
 
-### 1.6.6 3단 비교 본문 조회 — NOT IMPLEMENTED
+### 1.6.6 3단 비교 본문 조회 — `thdCmp_service` ✅ IMPLEMENTED
 **Endpoint**: `GET http://www.law.go.kr/DRF/lawService.do?target=thdCmp`
 
-### 1.6.7 법률명 약칭 조회 — NOT IMPLEMENTED
+### 1.6.7 법률명 약칭 조회 — `lsAbrv_search` ✅ IMPLEMENTED
 **Endpoint**: `GET http://www.law.go.kr/DRF/lawSearch.do?target=lsAbrv`
 
-### 1.6.8 삭제 데이터 목록 조회 — NOT IMPLEMENTED
-**Endpoint**: `GET http://www.law.go.kr/DRF/lawSearch.do?target=datDelHst`
+### 1.6.8 삭제 데이터 목록 조회 — `delHst_search` ✅ IMPLEMENTED
+**Endpoint**: `GET http://www.law.go.kr/DRF/lawSearch.do?target=delHst`
 
 ### 1.6.9 한눈보기 목록 조회 — NOT IMPLEMENTED
 **Endpoint**: `GET http://www.law.go.kr/DRF/lawSearch.do?target=oneView`
@@ -1155,10 +1199,10 @@ http://www.law.go.kr/DRF/lawSearch.do?OC=test&target=trty&type=XML&cls=2
 
 ---
 
-# 7. 별표·서식 (Tables & Forms) APIs — 3 APIs (NOT IMPLEMENTED)
+# 7. 별표·서식 (Tables & Forms) APIs — 3 APIs (1 implemented)
 
-## 7.1 법령 별표·서식 목록 조회
-**Endpoint**: `GET http://www.law.go.kr/DRF/lawSearch.do?target=lsByl`
+## 7.1 법령 별표·서식 목록 조회 — `licbyl_search` ✅ IMPLEMENTED
+**Endpoint**: `GET http://www.law.go.kr/DRF/lawSearch.do?target=licbyl` (본문 API 없음; 목록의 링크가 파일/상세 페이지)
 
 ## 7.2 행정규칙 별표·서식 목록 조회
 **Endpoint**: `GET http://www.law.go.kr/DRF/lawSearch.do?target=admrulByl`
@@ -1178,13 +1222,13 @@ http://www.law.go.kr/DRF/lawSearch.do?OC=test&target=trty&type=XML&cls=2
 
 ---
 
-# 9. 법령용어 (Legal Terms) APIs — 2 APIs (NOT IMPLEMENTED)
+# 9. 법령용어 (Legal Terms) APIs — 2 APIs
 
-## 9.1 법령 용어 목록 조회
-**Endpoint**: `GET http://www.law.go.kr/DRF/lawSearch.do?target=lsTrm`
+## 9.1 법령 용어 목록 조회 — `lstrm_search` ✅ IMPLEMENTED
+**Endpoint**: `GET http://www.law.go.kr/DRF/lawSearch.do?target=lstrm` (AI 조회 `lstrmAI`와 다른 사전 API)
 
-## 9.2 법령 용어 본문 조회
-**Endpoint**: `GET http://www.law.go.kr/DRF/lawService.do?target=lsTrm`
+## 9.2 법령 용어 본문 조회 — `lstrm_service` ✅ IMPLEMENTED
+**Endpoint**: `GET http://www.law.go.kr/DRF/lawService.do?target=lstrm` (`query`=정확한 용어; 서버는 XML로 호출)
 
 ---
 
@@ -1603,10 +1647,10 @@ article_citation(
 | `lsJoHstInf` | 조문별 변경 이력 (`lawService.do`, ID+JO) | JSON 정상 |
 | `lnkOrd` / `lnkLsOrd` / `lnkOrg` | 자치법규 기준 연계 | JSON 정상 (v2.2.0부터 `ordinLsCon_search`로 구현) |
 | `baiPvcs` | 감사원 사전컨설팅 의견서 | JSON 정상 (Section 16) |
-| `lsAbrv` | 법률명 약칭 | JSON 정상이나 query/display 무시, 2,714건 전체(2.3MB) 반환 |
+| `lsAbrv` | 법률명 약칭 | JSON 정상이나 query/display 무시, 2,714건 전체(2.3MB) 반환. `lsAbrv_search`가 서버에서 필터·페이징 |
 | `lsHistory` | 법령 연혁 목록/본문 | **HTML 전용** (type=JSON/XML도 HTML 반환) |
 
-미확인: `admrulOldAndNew`, `oneView`, `datDelHst`, `admrulByl`, `ordinByl`, `lsDayJoRvs`, 모바일 22종, 맞춤형 6종.
+미확인: `admrulOldAndNew`, `oneView`, `admrulByl`, `ordinByl`, `lsDayJoRvs`, 모바일 22종, 맞춤형 6종.
 
 ---
 

@@ -137,6 +137,19 @@ def map_params_to_upstream(snake_params: dict) -> dict:
         # Phase 7: Legal term knowledge base linkage (lstrmRlt / dlytrmRlt)
         "trm_rlt_cd": "trmRltCd",  # 용어관계코드 (140301 동의어 … 140305 연관어)
 
+        # History / comparison / appendix / dictionary lists (camelCase)
+        "reg_dt": "regDt",           # 등록(변경)일 (lsHstInf, lsJoHstInf, lstrm)
+        "from_reg_dt": "fromRegDt",  # 조문 개정일 기간 시작 (lsJoHstInf)
+        "to_reg_dt": "toRegDt",      # 조문 개정일 기간 종료 (lsJoHstInf)
+        "del_dt": "delDt",           # 삭제일 (delHst)
+        "frm_dt": "frmDt",           # 삭제일 범위 시작 (delHst)
+        "to_dt": "toDt",             # 삭제일 범위 종료 (delHst)
+        "std_dt": "stdDt",           # 등록일 범위 시작 (lsAbrv)
+        "end_dt": "endDt",           # 등록일 범위 종료 (lsAbrv)
+        "mul_org": "mulOrg",         # 소관부처 복수 조건 OR/AND (licbyl)
+        "dic_knd_cd": "dicKndCd",    # 법령용어 종류 코드 (lstrm)
+        "trm_seqs": "trmSeqs",       # 법령용어ID, 쉼표 구분 (lstrm 본문)
+
         # Service params (ID/MST uppercase per API convention)
         "id": "ID",
         "mst": "MST",

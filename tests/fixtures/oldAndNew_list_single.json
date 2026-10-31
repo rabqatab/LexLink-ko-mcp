@@ -1,0 +1,27 @@
+{
+  "OldAndNewLawSearch": {
+    "resultMsg": "success",
+    "키워드": "가사소송법",
+    "page": "1",
+    "resultCode": "00",
+    "target": "oldAndNew",
+    "oldAndNew": {
+      "현행연혁코드": "현행",
+      "id": "1",
+      "신구법ID": "001206",
+      "신구법상세링크": "/DRF/lawService.do?OC=test&target=oldAndNew&MST=265309&type=HTML&mobileYn=",
+      "시행일자": "20260101",
+      "법령구분명": "법률",
+      "소관부처명": "법무부",
+      "공포번호": "20432",
+      "신구법일련번호": "265309",
+      "제개정구분명": "타법개정",
+      "공포일자": "20240920",
+      "소관부처코드": "1270000",
+      "신구법명": "가사소송법"
+    },
+    "totalCnt": "1",
+    "section": "lawNm",
+    "numOfRows": "1"
+  }
+}

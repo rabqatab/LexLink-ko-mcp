@@ -166,7 +166,7 @@ PlayMCP를 "인증 없음"으로 등록하려면 `LEXLINK_ALLOW_NO_AUTH=true`가
 | 항목 | 값 |
 |---|---|
 | MCP 이름 / 식별자 | LexLink - 한국 법령정보 / lexlink |
-| MCP 설명 | 대한민국 법률, 판례, 행정규칙 검색 및 조회를 위한 MCP 서버. law.go.kr 국가법령정보 API 연동. 55개 도구 지원. |
+| MCP 설명 | 대한민국 법률, 판례, 행정규칙 검색 및 조회를 위한 MCP 서버. law.go.kr 국가법령정보 API 연동. 66개 도구 지원. |
 | 대화 예시 | 민법 제20조 내용 알려줘 / 건축법과 관련된 대법원 판례 검색해줘 / 자동차관리법 시행령 검색 |
 | 인증 방식 | 인증 없음 (`LEXLINK_ALLOW_NO_AUTH=true` 필요) |
 | MCP Endpoint | `https://<도메인>/mcp` |
