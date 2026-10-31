@@ -18,10 +18,10 @@ import lexlink.server as server_mod
 from lexlink.cache import get_cache
 from lexlink.client import LawAPIClient
 from lexlink.law_extras import (
-    filter_abbreviations, parse_lstrm_xml, select_thdcmp_article,
-    validate_yyyymmdd, validate_ymd_range,
+    ascii_digits, filter_abbreviations, parse_lstrm_xml, select_thdcmp_article,
+    validate_digits, validate_yyyymmdd, validate_ymd_range,
 )
-from lexlink._helpers import ToolValidationError
+from lexlink._helpers import SLIM_MAX_BYTES, ToolValidationError, _json_size
 
 FIXTURES = Path(__file__).parent / "fixtures"
 FAKE_OC = "unit-test-oc"
@@ -386,8 +386,8 @@ def test_abrv_paging_is_local_and_cached(call):
     t = call(abrv_routes(calls))
     p1 = t("lsAbrv_search", display=10, page=1)
     p2 = t("lsAbrv_search", display=10, page=2)
-    assert len(p1["ranked_data"]["law"]) == 10 and p2["ranked_data"]["law"][0]["rank"] == 11
-    assert p1["ranked_data"]["law"][0]["rank"] == 1
+    assert len(p1["ranked_data"]["law"]) == 10 and p2["ranked_data"]["law"][0]["rank"] == "11"
+    assert p1["ranked_data"]["law"][0]["rank"] == "1"
     assert p1["ranked_data"]["law"][-1]["법령일련번호"] != p2["ranked_data"]["law"][0]["법령일련번호"]
     assert len(calls) == 1                           # one upstream fetch, second page from cache
     far = t("lsAbrv_search", display=10, page=999)
@@ -413,16 +413,53 @@ def test_abrv_dates_forwarded_and_upstream_error_propagates(call):
     t = call({(SEARCH, "lsAbrv"): ""})                # 0-byte body
     out = t("lsAbrv_search", std_dt="20260101", end_dt="20261231")
     assert out["status"] == "error"
-    q = call.holder["up"].calls[0][1]
-    assert q["stdDt"] == "20260101" and q["endDt"] == "20261231"
+    assert "stdDt" not in call.holder["up"].calls[0][1]      # the range is applied locally on 등록일
 
 
 @pytest.mark.unit
-def test_abrv_total_mismatch_warns(call):
+def test_abrv_incomplete_upstream_is_an_error_and_never_cached(call):
     d = json.loads(fx("lsAbrv_list_trimmed.json"))
+    good = json.dumps(d, ensure_ascii=False)
     d["LawSearch"]["totalCnt"] = str(len(d["LawSearch"]["law"]) + 5)
-    out = call({(SEARCH, "lsAbrv"): json.dumps(d, ensure_ascii=False)})("lsAbrv_search")
-    assert out["status"] == "ok" and "upstream_total_mismatch" in out["warning"]
+    mismatch = json.dumps(d, ensure_ascii=False)
+    empty = json.dumps({"LawSearch": {"target": "lsAbrv", "totalCnt": "0"}})
+    bodies = iter([mismatch, empty, "{not json", good])
+    t = call({(SEARCH, "lsAbrv"): lambda q: next(bodies)})
+    for _ in range(3):
+        assert_error(t("lsAbrv_search"), "UPSTREAM_ERROR")
+    assert t("lsAbrv_search")["status"] == "ok"          # the 4th fetch really went upstream: nothing bad was cached
+    assert len(call.holder["up"].calls) == 4
+    assert t("lsAbrv_search")["status"] == "ok" and len(call.holder["up"].calls) == 4   # now cached
+
+
+@pytest.mark.unit
+def test_abrv_one_cache_key_dates_applied_locally_unique_request_ids(call):
+    t = call(abrv_routes())
+    a = t("lsAbrv_search", std_dt="20240101", end_dt="20241231", display=100)
+    b = t("lsAbrv_search", std_dt="20230101", end_dt="20231231", display=100)
+    c = t("lsAbrv_search", display=100)
+    assert len(call.holder["up"].calls) == 1 and "stdDt" not in call.holder["up"].calls[0][1]
+    assert all("20240101" <= r["등록일"] <= "20241231" for r in a["ranked_data"]["law"]) and a["ranked_data"]["law"]
+    assert all("20230101" <= r["등록일"] <= "20231231" for r in b["ranked_data"]["law"])
+    assert int(c["ranked_data"]["totalCnt"]) > int(a["ranked_data"]["totalCnt"])
+    assert len({a["request_id"], b["request_id"], c["request_id"]}) == 3
+    only_from = t("lsAbrv_search", std_dt="20240101", display=100)
+    assert all(r["등록일"] >= "20240101" for r in only_from["ranked_data"]["law"])
+
+
+@pytest.mark.unit
+def test_abrv_past_the_end_warns(call):
+    out = call(abrv_routes())("lsAbrv_search", display=10, page=999)
+    assert out["warning"] == "page_out_of_range" and out["ranked_data"]["law"] == []
+
+
+@pytest.mark.unit
+def test_abrv_fullwidth_date_is_normalized_not_dropped(call):
+    t = call(abrv_routes())
+    full = t("lsAbrv_search", std_dt="２０２４０１０１", end_dt="２０２４１２３１", display=100)
+    ascii_ = t("lsAbrv_search", std_dt="20240101", end_dt="20241231", display=100)
+    assert full["ranked_data"]["totalCnt"] == ascii_["ranked_data"]["totalCnt"] != ""
+    assert int(full["ranked_data"]["totalCnt"]) < int(full["ranked_data"]["upstream_totalCnt"])
 
 
 @pytest.mark.unit
@@ -591,7 +628,7 @@ def test_thd_cmp_service_default_keeps_everything_slim_cuts_and_points_to_jo(cal
     monkeypatch.setenv("SLIM_RESPONSE", "true")
     slim = t("thdCmp_service", knd=1, id="001706")
     assert slim["truncated"] is True and "jo로 조문 지정" in json.dumps(slim, ensure_ascii=False)
-    assert len(json.dumps(slim, ensure_ascii=False).encode()) < 40_000
+    assert _json_size(slim) <= SLIM_MAX_BYTES
     one = t("thdCmp_service", knd=1, id="001706", jo=250)
     assert "truncated" not in one and one["selection"]["matched_rows"] == 1
 
@@ -698,3 +735,218 @@ def test_lstrm_service_requires_query(call, q):
 def test_parse_lstrm_xml_pure():
     entries = parse_lstrm_xml(fx("lstrm_body_sangsok.xml"))
     assert len(entries) == 4 and entries[1]["dict_code"] == "011402"
+
+
+# ---------------------------------------------------------------- review fixes
+
+def thd_body(rows, key="법률조문"):
+    return json.dumps({"ThdCmpLawXService": {"기본정보": {"법령ID": "1", "법령명": "x", "삼단비교존재여부": "Y"},
+                                             "인용조문삼단비교": {key: rows}}}, ensure_ascii=False)
+
+
+@pytest.mark.unit
+def test_thd_cmp_jo_matches_titleless_real_article_but_not_headings(call):
+    rows = [
+        {"조번호": "0005", "조가지번호": "00", "조제목": "", "조내용": "제5조 삭제 <2010.3.31>"},
+        {"조번호": "0005", "조가지번호": "00", "조제목": "", "조내용": "제5편 벌칙"},
+        {"조번호": "0005", "조가지번호": "00", "조제목": "", "조내용": "제1항 협의상 파양 <개정 2012.2.10>"},
+        {"조번호": "0006", "조가지번호": "00", "조제목": "제6조(x)", "조내용": "b"},
+    ]
+    out = call({(SERVICE, "thdCmp"): thd_body(rows)})("thdCmp_service", knd=1, id="1", jo=5)
+    kept = json.loads(out["raw_content"])["ThdCmpLawXService"]["인용조문삼단비교"]["법률조문"]
+    assert [r["조내용"] for r in kept] == ["제5조 삭제 <2010.3.31>"]
+
+
+@pytest.mark.unit
+def test_thd_cmp_jo_filters_every_list_even_with_rows_lacking_joBeonho():
+    root = {"인용조문삼단비교": {
+        "법률조문": [{"조번호": "0003", "조가지번호": "00", "조제목": "제3조", "조내용": "a"},
+                     {"조제목": "제9조", "조내용": "no number"}],
+        "시행령조문": [{"조번호": "0004", "조가지번호": "00", "조제목": "제4조", "조내용": "b"}]}}
+    new, matched, total = select_thdcmp_article(root, "000300")
+    sec = new["인용조문삼단비교"]
+    assert [r["조내용"] for r in sec["법률조문"]] == ["a"] and sec["시행령조문"] == []
+    assert (matched, total) == (1, 3)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("jo", ["", "   "])
+def test_thd_cmp_blank_jo_is_validation_error_not_full_law(call, jo):
+    t = call(thd_route("thdCmp_body_265309_knd2_trimmed.json"))
+    assert_error(t("thdCmp_service", knd=2, mst="265309", jo=jo), "VALIDATION_ERROR")
+    assert call.holder["up"].calls == []
+
+
+LSTRM_ONE = fx("lstrm_body_seoneui.xml")
+
+
+@pytest.mark.unit
+def test_lstrm_service_trm_seqs(call):
+    t = call({(SERVICE, "lstrm"): LSTRM_ONE})
+    out = t("lstrm_service", trm_seqs=31106)
+    assert out["status"] == "ok" and out["trm_seqs"] == "31106"
+    q = call.holder["up"].calls[0][1]
+    assert q["trmSeqs"] == "31106" and "query" not in q and q["type"] == "XML"
+    assert "warning" not in out
+
+
+@pytest.mark.unit
+def test_lstrm_service_trm_seqs_comma_list_and_missing_ids(call):
+    t = call({(SERVICE, "lstrm"): LSTRM_ONE})
+    out = t("lstrm_service", trm_seqs="31106, 999")
+    assert call.holder["up"].calls[0][1]["trmSeqs"] == "31106,999"
+    assert "999" in out["warning"] and "31106" not in out["warning"]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("kw", [{"trm_seqs": "abc"}, {"trm_seqs": "1,,2"}, {"trm_seqs": "1", "query": "x"}, {}])
+def test_lstrm_service_trm_seqs_validation(call, kw):
+    t = call({(SERVICE, "lstrm"): LSTRM_ONE})
+    assert_error(t("lstrm_service", **kw), "VALIDATION_ERROR")
+    assert call.holder["up"].calls == []
+
+
+@pytest.mark.unit
+def test_lstrm_service_not_found_hint_points_to_trm_seqs_and_search_description_does_too(call):
+    nf = '<?xml version="1.0" encoding="utf-8"?><Law>일치하는 법령용어가 없습니다.  법령용어명을 확인하여 주십시오.</Law>'
+    out = call({(SERVICE, "lstrm"): nf})("lstrm_service", query="양육비 채무자")
+    assert_error(out, "NOT_FOUND")
+    assert any("trm_seqs" in h for h in out["hints"])
+    desc = asyncio.run(server_mod.create_server().list_tools())
+    d = {t.name: t.description for t in desc}["lstrm_search"]
+    assert "trm_seqs" in d and "법령용어ID" in d
+
+
+@pytest.mark.unit
+def test_lstrm_service_html_page_mentioning_match_is_not_not_found(call):
+    page = "<!DOCTYPE html><html><body><p>일치하는 자료<br></body>"
+    out = call({(SERVICE, "lstrm"): page})("lstrm_service", query="x")
+    assert out["status"] == "error" and out["error_code"] != "NOT_FOUND"
+
+
+@pytest.mark.unit
+def test_parse_lstrm_xml_nested_tags_repeated_source_and_entities():
+    raw = ('<L><법령용어일련번호>1</법령용어일련번호><법령용어명_한글>a</법령용어명_한글>'
+           '<출처>법A</출처><출처>법B</출처>'
+           '<법령용어정의>앞<b>굵게</b>뒤 갑&amp;middot;을 병</법령용어정의></L>')
+    e = parse_lstrm_xml(raw)[0]
+    assert e["definition"] == "앞굵게뒤 갑·을 병"
+    assert e["definition"].startswith("앞굵게뒤")                       # nested text kept
+    assert e["source"] == "법A\n법B"                                     # repeated tag kept
+    cdata = '<L><법령용어일련번호>1</법령용어일련번호><법령용어정의><![CDATA[자&middot;의 &lt;x&gt;]]></법령용어정의></L>'
+    assert parse_lstrm_xml(cdata)[0]["definition"] == "자·의 <x>"
+
+
+@pytest.mark.unit
+def test_fullwidth_digits_are_normalized_or_rejected_never_silently_dropped(call):
+    assert ascii_digits("２０２５０４０１") == "20250401"
+    assert validate_yyyymmdd("２０２５０４０１", "d") == "20250401"
+    assert validate_digits("２８４４１５", "mst") == "284415"
+    with pytest.raises(ToolValidationError):
+        validate_yyyymmdd("２０２５１３０１", "d")                    # still a real-date check
+    t = call({(SEARCH, "lsHstInf"): fx("lsHstInf_list_20260317.json"),
+              (SERVICE, "oldAndNew"): fx("oldAndNew_body_273705.json"),
+              (SEARCH, "delHst"): fx("delHst_list_2025.json"),
+              (SEARCH, "lstrm"): fx("lstrm_list_seoneui.json")})
+    t("lsHstInf_search", reg_dt="２０２６０３１７", org="１２７００００")
+    q = call.holder["up"].calls[0][1]
+    assert q["regDt"] == "20260317" and q["org"] == "1270000"
+    out = t("oldAndNew_service", mst="２７３７０５")
+    assert call.holder["up"].calls[1][1]["MST"] == "273705" and "warning" not in out
+    t("delHst_search", frm_dt="２０２５０１０１", to_dt="２０２５１２３１")
+    assert call.holder["up"].calls[2][1]["frmDt"] == "20250101"
+    t("lstrm_search", reg_dt="２０２００１０１~２０２６１２３１")
+    assert call.holder["up"].calls[3][1]["regDt"] == "20200101~20261231"
+
+
+@pytest.mark.unit
+def test_old_and_new_service_id_mst_mismatch_warns(call):
+    t = call({(SERVICE, "oldAndNew"): fx("oldAndNew_body_273705.json")})
+    out = t("oldAndNew_service", id="001206", mst="273705")
+    assert out["status"] == "ok" and "001206" in out["warning"] and "011878" in out["warning"]
+    assert "warning" not in t("oldAndNew_service", id="11878", mst="273705")
+
+
+@pytest.mark.unit
+def test_old_and_new_service_carries_the_upstream_edit_caution(call):
+    t = call({(SERVICE, "oldAndNew"): fx("oldAndNew_body_273705.json")})
+    assert "확인" in t("oldAndNew_service", mst="273705")["caution"]
+    desc = {x.name: x.description for x in asyncio.run(server_mod.create_server().list_tools())}["oldAndNew_service"]
+    assert "5분" in desc and "law_as_of" in desc
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("tool,kw", [
+    ("oldAndNew_search", {"knd": "abc"}), ("oldAndNew_search", {"gana": "zz!"}), ("oldAndNew_search", {"knd": "1"}),
+    ("thdCmp_search", {"gana": "가"}), ("lstrm_search", {"gana": "zz"}), ("licbyl_search", {"gana": "zz"}),
+])
+def test_gana_and_knd_are_validated(call, tool, kw):
+    t = call({(SEARCH, "oldAndNew"): fx("oldAndNew_list_minbeop.json"), (SEARCH, "lstrm"): fx("lstrm_list_seoneui.json"),
+              (SEARCH, "licbyl"): fx("licbyl_list_gajok.json"), (SEARCH, "thdCmp"): fx("thdCmp_list_gasa.json")})
+    assert_error(t(tool, query="a", **kw), "VALIDATION_ERROR")
+    assert call.holder["up"].calls == []
+
+
+@pytest.mark.unit
+def test_gana_and_knd_valid_values_are_forwarded(call):
+    t = call({(SEARCH, "oldAndNew"): fx("oldAndNew_list_minbeop.json"), (SEARCH, "lstrm"): fx("lstrm_list_seoneui.json")})
+    t("oldAndNew_search", knd="a0002", gana="GA")
+    t("lstrm_search", gana="etc")
+    assert call.holder["up"].calls[0][1]["knd"] == "A0002" and call.holder["up"].calls[0][1]["gana"] == "ga"
+    assert call.holder["up"].calls[1][1]["gana"] == "etc"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("search,expect,absent", [(None, "search=2", "search=1"), (2, "search=1", "search=2"), (3, "search=1", "search=3")])
+def test_licbyl_zero_row_hint_names_the_other_scopes(call, search, expect, absent):
+    zero = json.dumps({"licBylSearch": {"키워드": "q", "page": "1", "totalCnt": "0", "numOfRows": "0"}})
+    kw = {} if search is None else {"search": search}
+    out = call({(SEARCH, "licbyl"): zero})("licbyl_search", query="q", **kw)
+    text = " ".join(out["hints"])
+    assert expect in text and "본문 검색" not in text
+    assert f"{absent}(" not in text.split("현재")[-1].split("기준입니다.")[-1]      # not offered as the alternative
+
+
+def big_oldnew(n=202):
+    col = lambda tag: {"조문": [{"no": str(i + 1), "content": f"{tag} 제{i + 1}조 " + "가나다라 " * 20} for i in range(n)]}
+    return json.dumps({"OldAndNewService": {
+        "신조문목록": col("신"), "구조문목록": col("구"),
+        "구조문_기본정보": {"법령ID": "001706", "법령일련번호": "1", "법령명": "민법"},
+        "신조문_기본정보": {"법령ID": "001706", "법령일련번호": "2", "법령명": "민법"}}}, ensure_ascii=False)
+
+
+@pytest.mark.unit
+def test_old_and_new_service_slim_cut_keeps_columns_the_same_length(call, monkeypatch):
+    t = call({(SERVICE, "oldAndNew"): big_oldnew()})
+    full = t("oldAndNew_service", mst="2")
+    assert "truncated" not in full and len(json.loads(full["raw_content"])["OldAndNewService"]["구조문목록"]["조문"]) == 202
+    monkeypatch.setenv("SLIM_RESPONSE", "true")
+    slim = t("oldAndNew_service", mst="2")
+    root = json.loads(slim["raw_content"])["OldAndNewService"]
+    old, new = root["구조문목록"]["조문"], root["신조문목록"]["조문"]
+    assert slim["truncated"] is True and 0 < len(old) < 202 and len(old) == len(new)
+    assert old[-1]["no"] == new[-1]["no"] and str(len(old)) in " ".join(slim["truncated_notes"])
+    assert _json_size(slim) <= SLIM_MAX_BYTES
+
+
+@pytest.mark.unit
+def test_del_hst_empty_page_reports_the_requested_page(call):
+    empty = json.dumps({"LawSearch": {"page": "0", "target": "delHst", "totalCnt": "0"}})
+    out = call({(SEARCH, "delHst"): empty})("delHst_search", knd=1, del_dt="20100101", page=1)
+    assert out["ranked_data"]["page"] == "1" and out["warning"] == "no_results"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("tool,target,root,key,kw", [
+    ("oldAndNew_search", "oldAndNew", "OldAndNewLawSearch", "oldAndNew", {}),
+    ("thdCmp_search", "thdCmp", "thdCmpLawSearch", "thdCmp", {}),
+    ("licbyl_search", "licbyl", "licBylSearch", "licbyl", {}),
+    ("lstrm_search", "lstrm", "LsTrmSearch", "lstrm", {}),
+])
+def test_other_lists_keep_their_total_past_the_last_page(call, tool, target, root, key, kw):
+    """Measured live: these four report the real totalCnt (not 0) past the last page, so no re-ask is needed."""
+    body = json.dumps({root: {"page": "99", "totalCnt": "9", "numOfRows": "0"}})
+    out = call({(SEARCH, target): body})(tool, query="a", page=99, **kw)
+    assert out["ranked_data"]["totalCnt"] == "9" and out["ranked_data"][key] == []
+    assert out.get("warning") != "no_results" and any("no_more_results" in h for h in out["hints"])
+    assert len(call.holder["up"].calls) == 1

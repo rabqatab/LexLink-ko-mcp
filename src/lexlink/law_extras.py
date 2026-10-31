@@ -10,8 +10,10 @@ normalizes the payload after it. Pure functions; no network access.
 """
 
 import datetime
+import html
 import json
 import re
+import unicodedata
 import xml.etree.ElementTree as ET
 from typing import Optional
 
@@ -36,6 +38,18 @@ THDCMP_KINDS = {"1": "인용조문", "2": "위임조문"}
 _KIND_ALIASES = {"인용조문": "1", "위임조문": "2"}
 
 
+GANA_INITIALS = {"ga", "na", "da", "ra", "ma", "ba", "sa", "a", "ja", "cha", "ka", "ta", "pa", "ha", "etc"}
+_KND_CODE_RE = re.compile(r"[A-Z][0-9]{4}")  # 법종구분코드, e.g. A0002 법률, A0003 대통령령
+
+
+def ascii_digits(value) -> str:
+    """Trimmed text with full-width digits (and other compatibility forms) folded to ASCII.
+
+    Every numeric validator goes through this, so "２０２５０４０１" is "20250401" and
+    nothing relies on str.isdigit() or \\d, which accept non-ASCII digits."""
+    return unicodedata.normalize("NFKC", "" if value is None else str(value)).strip()
+
+
 def _bad(message: str, hints: Optional[list] = None) -> ToolValidationError:
     return ToolValidationError(message, hints=hints)
 
@@ -49,9 +63,9 @@ def as_list(value) -> list:
 
 def validate_yyyymmdd(value, name: str) -> str:
     """A real calendar date as 8 digits (YYYYMMDD); the upstream silently returns 0 rows otherwise."""
-    s = "" if value is None else str(value).strip()
+    s = ascii_digits(value)
     try:
-        if not re.fullmatch(r"\d{8}", s):
+        if not re.fullmatch(r"[0-9]{8}", s):
             raise ValueError
         datetime.date(int(s[:4]), int(s[4:6]), int(s[6:]))
     except ValueError:
@@ -64,7 +78,7 @@ def validate_yyyymmdd(value, name: str) -> str:
 
 def validate_ymd_range(value, name: str) -> str:
     """YYYYMMDD~YYYYMMDD with two real dates and start <= end."""
-    s = "" if value is None else str(value).strip()
+    s = ascii_digits(value)
     parts = s.split("~")
     if len(parts) != 2:
         raise _bad(f"{name} must be in format YYYYMMDD~YYYYMMDD (e.g., '20240101~20241231'), got: {value!r}")
@@ -81,8 +95,8 @@ def validate_digits(value, name: str, *, allow_empty: bool = True) -> Optional[s
         if allow_empty:
             return None
         raise _bad(f"{name} is required")
-    s = str(value).strip()
-    if not re.fullmatch(r"\d{1,12}", s):
+    s = ascii_digits(value)
+    if not re.fullmatch(r"[0-9]{1,12}", s):
         raise _bad(
             f"{name} must be numeric, got: {value!r}",
             hints=["검색 도구 결과의 법령ID(예: 001706) 또는 일련번호(MST)를 그대로 사용하세요"],
@@ -105,12 +119,43 @@ def validate_choice(value, name: str, allowed, *, upper: bool = False) -> Option
     return s
 
 
+def validate_gana(value) -> Optional[str]:
+    """사전식 검색 초성 code: ga, na, da, ra, ma, ba, sa, a, ja, cha, ka, ta, pa, ha, etc.
+
+    Anything else is silently ignored by the upstream (the filter is dropped and every
+    row comes back), so it is rejected."""
+    if value is None or str(value).strip() == "":
+        return None
+    s = str(value).strip().lower()
+    if s not in GANA_INITIALS:
+        raise _bad(
+            f"gana must be one of {sorted(GANA_INITIALS)}, got: {value!r}",
+            hints=["한글 초성이 아니라 로마자 코드(예: 가 -> ga)를 사용하세요. 업스트림은 알 수 없는 값을 무시하고 전체를 반환합니다"],
+        )
+    return s
+
+
+def validate_law_kind(value) -> Optional[str]:
+    """법령종류 code in the 법종구분코드 form: a letter and 4 digits (A0002 법률, A0003 대통령령).
+
+    The upstream does not publish the full code list; other shapes give 0 rows."""
+    if value is None or str(value).strip() == "":
+        return None
+    s = str(value).strip().upper()
+    if not _KND_CODE_RE.fullmatch(s):
+        raise _bad(
+            f"knd must be a 법령종류 code like 'A0002' (법률) or 'A0003' (대통령령), got: {value!r}",
+            hints=["업스트림은 알 수 없는 코드를 0건으로 응답합니다"],
+        )
+    return s
+
+
 def validate_org(value, name: str = "org") -> Optional[str]:
     """소관부처코드, one or several separated by commas."""
     if value is None or str(value).strip() == "":
         return None
-    s = str(value).strip().replace(" ", "")
-    if not re.fullmatch(r"\d{3,10}(,\d{3,10})*", s):
+    s = ascii_digits(value).replace(" ", "")
+    if not re.fullmatch(r"[0-9]{3,10}(,[0-9]{3,10})*", s):
         raise _bad(
             f"{name} must be a 소관부처코드 (digits, e.g. '1270000'; several separated by commas), got: {value!r}",
         )
@@ -154,8 +199,8 @@ def validate_law_list_filters(
     if nb:
         out["nb"] = nb
     if anc_no not in (None, ""):
-        s = str(anc_no).strip()
-        if not re.fullmatch(r"\d{1,9}(~\d{1,9})?", s):
+        s = ascii_digits(anc_no)
+        if not re.fullmatch(r"[0-9]{1,9}(~[0-9]{1,9})?", s):
             raise _bad(f"anc_no must be a 공포번호 or a range like 10000~20000, got: {anc_no!r}")
         out["anc_no"] = s
     rr = validate_choice(rr_cls_cd, "rr_cls_cd", RR_CLS_CODES)
@@ -164,10 +209,12 @@ def validate_law_list_filters(
     org = validate_org(org)
     if org:
         out["org"] = org
-    if knd not in (None, ""):
-        out["knd"] = str(knd).strip()
-    if gana not in (None, ""):
-        out["gana"] = str(gana).strip()
+    knd = validate_law_kind(knd)
+    if knd:
+        out["knd"] = knd
+    gana = validate_gana(gana)
+    if gana:
+        out["gana"] = gana
     return out
 
 
@@ -262,16 +309,32 @@ def _article_lists(section) -> list:
     if isinstance(section, dict):
         for key, value in section.items():
             rows = as_list(value)
-            if rows and all(isinstance(r, dict) and "조번호" in r for r in rows):
+            if rows and any(isinstance(r, dict) and "조번호" in r for r in rows):
                 found.append(key)
     return found
+
+
+_HEADING_RE = re.compile(r"제\s*[0-9]+\s*(?:편|장|절|관)")
+_HANG_HEADING_RE = re.compile(r"제\s*[0-9]+\s*항\s")
+
+
+def is_heading_row(row: dict) -> bool:
+    """Chapter/section heading rows ("제1편 총칙", "제2장 ...") share a 조번호 with real articles.
+
+    A real article may have no 조제목 (e.g. content "제5조 삭제 <2010.3.31>"), so headings are
+    recognized by their content, not by an empty title."""
+    content = str(row.get("조내용", "") or "").strip()
+    if _HEADING_RE.match(content):
+        return True
+    return not row.get("조제목") and bool(_HANG_HEADING_RE.match(content))
 
 
 def select_thdcmp_article(root: dict, jo_code: str) -> tuple:
     """Keep only rows of one article in the 3단 비교 section.
 
-    ``jo_code`` is the 6-digit code (4 digits article + 2 digits branch). Rows
-    without a 조제목 are chapter/section headings and never match. Returns
+    ``jo_code`` is the 6-digit code (4 digits article + 2 digits branch). Chapter/section
+    heading rows never match; rows without a 조번호 never match. Every row list in
+    the section is filtered, none is left whole. Returns
     ``(new_root, matched_rows, total_rows)``; the article may have several
     rows (one per delegated 시행령 article)."""
     number, branch = jo_code[:4], jo_code[4:]
@@ -285,8 +348,9 @@ def select_thdcmp_article(root: dict, jo_code: str) -> tuple:
         for list_key in _article_lists(section):
             rows = as_list(section[list_key])
             keep = [r for r in rows
-                    if r.get("조제목") and str(r.get("조번호", "")).zfill(4) == number
-                    and str(r.get("조가지번호", "00")).zfill(2) == branch]
+                    if isinstance(r, dict) and r.get("조번호") not in (None, "") and not is_heading_row(r)
+                    and ascii_digits(r["조번호"]).zfill(4) == number
+                    and ascii_digits(r.get("조가지번호") or "00").zfill(2) == branch]
             total += len(rows)
             matched += len(keep)
             new_section[list_key] = keep
@@ -364,8 +428,14 @@ def parse_lstrm_xml(raw: str) -> list:
             entries.append(current)
         if current is None or child.tag not in _LSTRM_FIELDS:
             continue
-        text = (child.text or "").strip()
-        current[_LSTRM_FIELDS[child.tag]] = text or None
+        text = "".join(child.itertext()).strip()          # nested tags must not cut the text
+        if child.tag in ("법령용어정의", "용례"):
+            text = html.unescape(text)                     # CDATA keeps entities such as &middot; literal
+        field = _LSTRM_FIELDS[child.tag]
+        if not text:
+            continue
+        # a repeated tag (several 출처 ...) is kept, one per line, never last-wins
+        current[field] = text if current[field] is None else current[field] + "\n" + text
     return entries
 
 

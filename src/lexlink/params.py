@@ -148,6 +148,7 @@ def map_params_to_upstream(snake_params: dict) -> dict:
         "end_dt": "endDt",           # 등록일 범위 종료 (lsAbrv)
         "mul_org": "mulOrg",         # 소관부처 복수 조건 OR/AND (licbyl)
         "dic_knd_cd": "dicKndCd",    # 법령용어 종류 코드 (lstrm)
+        "trm_seqs": "trmSeqs",       # 법령용어ID, 쉼표 구분 (lstrm 본문)
 
         # Service params (ID/MST uppercase per API convention)
         "id": "ID",

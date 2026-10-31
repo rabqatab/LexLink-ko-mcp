@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+import uuid
 import xml.etree.ElementTree as ET
 from typing import Annotated, Optional, Union
 from urllib.parse import unquote
@@ -32,11 +33,11 @@ from .parser import parse_xml_response, extract_law_list, update_law_list
 from .cache import get_cache
 from .law_extras import (
     DEL_HST_KINDS, LICBYL_KINDS, LICBYL_SEARCH, LSTRM_DIC_KINDS, LSTRM_SORTS,
-    as_list, filter_abbreviations, normalize_jo_info, normalize_ranked_rows,
+    as_list, ascii_digits, filter_abbreviations, normalize_jo_info, normalize_ranked_rows,
     normalize_thdcmp_knd, oldnew_has_none, oldnew_versions, parse_json_root,
     parse_lstrm_xml, select_thdcmp_article, thdcmp_anchor, thdcmp_has_no_comparison,
     thdcmp_mismatch, total_count, validate_choice, validate_digits, validate_display,
-    validate_law_list_filters, validate_list_type, validate_org, validate_yyyymmdd,
+    validate_gana, validate_law_list_filters, validate_list_type, validate_org, validate_yyyymmdd,
     validate_ymd_range,
 )
 from .ranking import detect_query_language, should_apply_ranking, rank_search_results
@@ -45,7 +46,7 @@ from ._helpers import (
     TOOL_ANNOTATIONS, stringify_id, handle_tool_error, ToolValidationError,
     slim_response, run_search, run_service, annotate_prec_body_availability,
     extract_order, classify_order, extract_key_factors, extract_legal_terms, compute_text_diff, run_coroutine_sync,
-    compact_limit, slim_limited, slim_enabled, mark_slim_cut, low_relevance_warning,
+    compact_limit, slim_limited, slim_enabled, mark_slim_cut, low_relevance_warning, SLIM_MAX_BYTES, _json_size,
     rename_row_ids_to_rank, run_ranked_paging, validate_paging, OVER_FETCH_WINDOW,
     add_no_more_results_hint, add_no_results_guidance, body_is_all_null, NO_MORE_RESULTS_HINT,
     trim_raw_to_ranked,
@@ -5458,8 +5459,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             rr_cls_cd: 제개정 종류 코드 (300201 제정, 300202 일부개정, 300203 전부개정, 300204 폐지,
                 300205 폐지제정, 300206 일괄개정, 300207 일괄폐지, 300208 기타, 300209 타법개정, 300210 타법폐지)
             org: 소관부처코드
-            knd: 법령종류 코드
-            gana: Dictionary-order initial (ga, na, da, ...)
+            knd: 법령종류 code like A0002 (법률), A0003 (대통령령); other shapes are rejected
+            gana: Dictionary-order initial code: ga, na, da, ra, ma, ba, sa, a, ja, cha, ka, ta, pa, ha, etc
             oc: Optional OC override (defaults to env var)
             type: Response format - "JSON" (default), "XML", or "HTML"
             ctx: MCP context (injected automatically)
@@ -5490,6 +5491,34 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         response = _run_list("oldAndNew", snake_params, type, display, query=q)
         return normalize_ranked_rows(response, "oldAndNew")
 
+    OLDNEW_CAUTION = ("신구법 대비표는 법제처가 편집한 자료로 실제 법령 조문과 다를 수 있습니다(예: 구조문의 오기, 구 개정본 시행일 차이). "
+                      "인용 전에 eflaw_service / law_as_of로 조문을 확인하세요.")
+
+    def _cut_oldnew_pairs(response: dict, root_key: str, root: dict) -> dict:
+        """Under SLIM_RESPONSE cut 구조문목록 and 신조문목록 to the SAME row count, so the guard
+        never leaves one column longer than the other (rows are numbered `no` in both)."""
+        cols = {k: as_list((root.get(k) or {}).get("조문")) for k in ("구조문목록", "신조문목록")}
+        total = max(len(v) for v in cols.values())
+
+        def build(n: int) -> dict:
+            cut = dict(root)
+            for k, rows in cols.items():
+                cut[k] = {"조문": rows[:n]}
+            out = dict(response)
+            out["raw_content"] = json.dumps({root_key: cut}, ensure_ascii=False)
+            return out
+
+        lo, hi = 1, total
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if _json_size(build(mid)) <= SLIM_MAX_BYTES - 2500:
+                lo = mid
+            else:
+                hi = mid - 1
+        out = build(lo)
+        return mark_slim_cut(out, f"구조문목록·신조문목록을 각각 앞 {lo}건만 표시(전체 {total}건; 두 목록은 같은 건수로 잘랐습니다). "
+                                  "전체는 SLIM_RESPONSE 해제 환경에서 받을 수 있습니다")
+
     # ==================== TOOL 57: oldAndNew_service ====================
     @server.tool(annotations=TOOL_ANNOTATIONS)
     @handle_tool_error
@@ -5509,6 +5538,12 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
 
         An unknown id/mst, and a revision that has no comparison table, both give
         NOT_FOUND: the upstream does not tell them apart.
+
+        ⚠️ The table is an upstream-edited product, not the statute text: it can differ
+        from the statute (measured: 민법 제379조, mst 284415, the raw DRF 구조문 reads
+        "연 5분" while the old revision, MST 265307, reads "연 5푼"), and the old
+        revision's 시행일 can differ from law_as_of. Verify any citation with
+        eflaw_service / law_as_of before relying on it. The response repeats this in `caution`.
 
         Args:
             id: 법령ID (either id or mst is required). Without mst the upstream picks
@@ -5540,7 +5575,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                                snake_params=snake_params, response_type=type)
         if response.get("status") != "ok" or type != "JSON":
             return response
-        _, root = parse_json_root(response.get("raw_content", ""))
+        root_key, root = parse_json_root(response.get("raw_content", ""))
         if root is None:
             return response
         if oldnew_has_none(root):
@@ -5552,9 +5587,16 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         response = dict(response)
         versions = oldnew_versions(root)
         response["versions"] = versions
-        if mst and versions.get("new", {}).get("mst") not in ("", None, mst):
+        response["caution"] = OLDNEW_CAUTION
+        new = versions.get("new", {})
+        if mst and new.get("mst") not in ("", None, mst):
             response["warning"] = (f"요청한 MST {mst}와 응답의 신조문 법령일련번호 "
-                                   f"{versions['new']['mst']}가 다릅니다. versions를 확인하세요")
+                                   f"{new['mst']}가 다릅니다. versions를 확인하세요")
+        elif id and new.get("law_id") and new["law_id"].lstrip("0") != id.lstrip("0"):
+            response["warning"] = (f"요청한 법령ID {id}와 응답의 신조문 법령ID {new['law_id']}({new.get('law_name', '')})가 "
+                                   "다릅니다. id와 mst가 같은 법령인지 확인하세요")
+        if slim_enabled() and _json_size(response) > SLIM_MAX_BYTES - 1500:
+            response = _cut_oldnew_pairs(response, root_key, root)
         return response
 
     # ==================== TOOL 58: lsJoHstInf_search ====================
@@ -5759,6 +5801,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         response = _run_list("delHst", snake_params, type, display)
         response = _guard_past_last_page(
             response, page, lambda: _run_list("delHst", {**snake_params, "page": 1}, type, display))
+        if isinstance(response.get("ranked_data"), dict):
+            response["ranked_data"]["page"] = str(page)           # upstream says "0" for an empty page
         return normalize_ranked_rows(response, "law")
 
     # ==================== TOOL 61: lsAbrv_search ====================
@@ -5777,8 +5821,9 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         Law-name abbreviations (법률명 약칭 조회): 약칭 <-> 정식 법령명.
 
         The upstream has no query, display or page: it always returns every
-        abbreviation (about 2,700 rows, 2.3 MB). This tool fetches that list (cached),
-        filters it by `query` and pages it itself. `query` matches 법령명한글 or
+        abbreviation (about 2,700 rows, 2.3 MB). This tool fetches that list (cached
+        once, unfiltered), applies the 등록일 range (std_dt/end_dt, inclusive), filters by
+        `query` and pages it itself. `query` matches 법령명한글 or
         법령약칭명 (spaces and case ignored). Rows include 현행, 연혁 and 시행예정
         revisions, so one 법령ID can appear several times; 법령약칭명 is empty for laws
         without an abbreviation. To resolve an abbreviation to a law use this, then
@@ -5809,47 +5854,56 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         if std_dt and end_dt and std_dt > end_dt:
             raise ToolValidationError(f"std_dt must be <= end_dt, got: {std_dt} > {end_dt}")
         resolved_oc = resolve_oc(override_oc=oc)
-        upstream = map_params_to_upstream({
-            "oc": resolved_oc, "target": "lsAbrv", "type": "JSON",
-            "std_dt": std_dt, "end_dt": end_dt,
-        })
+        # One unfiltered list under one fixed cache key (the 등록일 range is applied below):
+        # a key per date pair would put a ~2.3 MB list in the cache for every pair asked.
+        upstream = map_params_to_upstream({"oc": resolved_oc, "target": "lsAbrv", "type": "JSON"})
         cache = get_cache()
         resp = cache.get("lsAbrv", upstream)
+        cached = resp is not None
         if resp is None:
-            resp = _get_client().get("/DRF/lawSearch.do", upstream, "JSON")
-            cache.put("lsAbrv", upstream, resp)
+            resp = _get_client().get("/DRF/lawSearch.do", dict(upstream), "JSON")
         if resp.get("status") != "ok":
             return resp
         _, root = parse_json_root(resp.get("raw_content", ""))
-        if root is None:
+        rows = as_list(root.get("law")) if root is not None else []
+        try:
+            declared = int(str(root.get("totalCnt")).strip()) if root is not None else None
+        except ValueError:
+            declared = None
+        if root is None or not rows or declared != len(rows):
+            # never cache (or serve) a list that is unparsable, empty or does not match its own count
             return create_error_response(
-                ErrorCode.UPSTREAM_ERROR, "lsAbrv 응답을 JSON으로 해석하지 못했습니다",
-                request_id=resp.get("request_id"),
+                ErrorCode.UPSTREAM_ERROR,
+                "lsAbrv 응답이 불완전합니다 (JSON 해석 실패, 빈 목록 또는 totalCnt와 행 수 불일치)",
+                hints=["잠시 후 다시 시도하세요. 불완전한 응답은 캐시하지 않습니다"],
+                request_id=resp.get("request_id"), declared_total=declared, rows=len(rows),
             )
-        rows = as_list(root.get("law"))
-        matched = filter_abbreviations(rows, query)
+        if not cached:
+            cache.put("lsAbrv", upstream, resp)
+        in_range = [r for r in rows
+                    if (not std_dt or str(r.get("등록일", "")) >= std_dt) and (not end_dt or str(r.get("등록일", "")) <= end_dt)]
+        matched = filter_abbreviations(in_range, query)
         start = (page - 1) * display
-        page_rows = [{"rank": start + i + 1, **{k: v for k, v in r.items() if k != "id"}}
+        page_rows = [{"rank": str(start + i + 1), **{k: v for k, v in r.items() if k != "id"}}
                      for i, r in enumerate(matched[start:start + display])]
         response = {
             "status": "ok",
-            "request_id": resp.get("request_id"),
+            "request_id": str(uuid.uuid4()),                  # per call; the cached fetch has its own id
             "upstream_type": "JSON",
             "ranked_data": {
                 "target": "lsAbrv",
                 "키워드": (query or "").strip(),
                 "totalCnt": str(len(matched)),
-                "upstream_totalCnt": str(root.get("totalCnt", len(rows))),
+                "upstream_totalCnt": str(len(rows)),
                 "page": str(page),
                 "numOfRows": str(len(page_rows)),
                 "law": page_rows,
             },
         }
-        if str(root.get("totalCnt", len(rows))) != str(len(rows)):
-            response["warning"] = (f"upstream_total_mismatch: totalCnt {root.get('totalCnt')} but "
-                                   f"{len(rows)} rows returned; results may be incomplete")
         add_no_results_guidance(response)
         add_no_more_results_hint(response, page, display)
+        if matched and start >= len(matched):
+            response["warning"] = "page_out_of_range"
         return response
 
     # ==================== TOOL 62: licbyl_search ====================
@@ -5889,7 +5943,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             org: 소관부처코드; several separated by commas
             mul_org: With several org: OR (default) or AND
             knd: 1 별표, 2 서식, 3 별지, 4 별도, 5 부록
-            gana: Dictionary-order initial (ga, na, da, ...)
+            gana: Dictionary-order initial code: ga, na, da, ra, ma, ba, sa, a, ja, cha, ka, ta, pa, ha, etc
             oc: Optional OC override (defaults to env var)
             type: Response format - "JSON" (default), "XML", or "HTML"
             ctx: MCP context (injected automatically)
@@ -5908,6 +5962,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         sort = validate_choice(sort, "sort", {"lasc", "ldes"})
         knd = validate_choice(knd, "knd", LICBYL_KINDS)
         mul_org = validate_choice(mul_org, "mul_org", {"OR", "AND"}, upper=True)
+        gana = validate_gana(gana)
         org = validate_org(org)
         resolved_oc = resolve_oc(override_oc=oc)
         snake_params = {
@@ -5916,10 +5971,14 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         }
         q = (query or "").strip()
         for key, value in (("query", q), ("search", search), ("sort", sort), ("org", org),
-                           ("mul_org", mul_org), ("knd", knd), ("gana", (gana or "").strip())):
+                           ("mul_org", mul_org), ("knd", knd), ("gana", gana)):
             if value: snake_params[key] = value
         response = _run_list("licbyl", snake_params, type, display)
         normalize_ranked_rows(response, "licbyl")
+        if response.get("warning") == "no_results":
+            others = [f"search={k}({v})" for k, v in LICBYL_SEARCH.items() if k != (search or "1")]
+            response["hints"] = list(NO_RESULTS_HINTS) + [
+                f"현재 search={search or '1'}({LICBYL_SEARCH[search or '1']}) 기준입니다. " + " 또는 ".join(others) + "로 다시 시도해 보세요"]
         if response.get("status") == "ok":
             response["links_note"] = ("별표서식파일링크, 별표서식PDF파일링크, 별표법령상세링크는 https://www.law.go.kr 기준 "
                                       "상대 링크입니다. 파일 내용은 가져오지 않았습니다.")
@@ -5965,8 +6024,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             anc_no: 공포번호 or range (10000~20000)
             rr_cls_cd: 제개정 종류 코드 (300201 제정 ... 300210 타법폐지; see oldAndNew_search)
             org: 소관부처코드
-            knd: 법령종류 코드
-            gana: Dictionary-order initial (ga, na, da, ...)
+            knd: 법령종류 code like A0002 (법률), A0003 (대통령령); other shapes are rejected
+            gana: Dictionary-order initial code: ga, na, da, ra, ma, ba, sa, a, ja, cha, ka, ta, pa, ha, etc
             oc: Optional OC override (defaults to env var)
             type: Response format - "JSON" (default), "XML", or "HTML"
             ctx: MCP context (injected automatically)
@@ -6052,6 +6111,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         if not id and not mst:
             raise ValueError("Either 'id' or 'mst' parameter is required")
         type = validate_list_type(type, tool="thdCmp_service")
+        if jo is not None and jo.strip() == "":
+            raise ToolValidationError("jo must not be empty", hints=["조문을 지정하지 않으려면 jo를 생략하세요(전체는 매우 큽니다)"])
         jo = _normalize_jo_arg(jo)
         if jo and type != "JSON":
             raise ToolValidationError("jo requires type='JSON' for thdCmp_service",
@@ -6124,7 +6185,12 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         Rows here are dictionary entries (법령용어명, 법령용어ID, 사전구분코드:
         011401 법령용어사전, 011402 법령정의사전, 011403 법령한영사전, 011404 알법정비사전,
         011405 생활용어사전); a matching keyword also returns long defined phrases that
-        merely contain it. Pass the exact 법령용어명 to lstrm_service.
+        merely contain it.
+
+        Next step: pass the row's `법령용어ID` to lstrm_service as `trm_seqs`. Do NOT pass
+        the 법령용어명 as `query` when it has spaces, slashes or parentheses
+        (e.g. "재산분할청구/재산분할청구권", "양육비 채무자"): the name lookup then returns
+        NOT_FOUND although the term exists. A 법령용어ID can be a comma list; pass it whole.
 
         Args:
             query: Term keyword (omit for all)
@@ -6132,7 +6198,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             page: Page number (1-based, default 1)
             sort: lasc/ldes (term name), rasc/rdes (등록일자)
             reg_dt: 등록일자 range YYYYMMDD~YYYYMMDD
-            gana: Dictionary-order initial (ga, na, da, ...)
+            gana: Dictionary-order initial code: ga, na, da, ra, ma, ba, sa, a, ja, cha, ka, ta, pa, ha, etc
             dic_knd_cd: 010101 (법령) or 010102 (행정규칙)
             oc: Optional OC override (defaults to env var)
             type: Response format - "JSON" (default), "XML", or "HTML"
@@ -6149,6 +6215,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         type = validate_list_type(type, tool="lstrm_search")
         page, display = validate_display(page, display)
         sort = validate_choice(sort, "sort", LSTRM_SORTS)
+        gana = validate_gana(gana)
         dic_knd_cd = validate_choice(dic_knd_cd, "dic_knd_cd", LSTRM_DIC_KINDS)
         reg_dt = validate_ymd_range(reg_dt, "reg_dt") if reg_dt not in (None, "") else None
         resolved_oc = resolve_oc(override_oc=oc)
@@ -6157,7 +6224,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             "display": display, "page": page,
         }
         for key, value in (("query", (query or "").strip()), ("sort", sort), ("reg_dt", reg_dt),
-                           ("gana", (gana or "").strip()), ("dic_knd_cd", dic_knd_cd)):
+                           ("gana", gana), ("dic_knd_cd", dic_knd_cd)):
             if value: snake_params[key] = value
         response = _run_list("lstrm", snake_params, type, display)
         return normalize_ranked_rows(response, "lstrm")
@@ -6166,14 +6233,20 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
     @server.tool(annotations=TOOL_ANNOTATIONS)
     @handle_tool_error
     def lstrm_service(
-        query: str,
+        query: Optional[str] = None,
+        trm_seqs: Optional[Union[str, int]] = None,
         oc: Optional[str] = None,
         ctx: Context = None,
     ) -> dict:
         """
         Definitions of one legal term from the dictionary (법령용어 본문 조회).
 
-        Returns every dictionary entry for the exact term, usually from several
+        Give `trm_seqs` (the `법령용어ID` of a lstrm_search row) or, for a plain headword,
+        `query`. Prefer the ID: the name lookup returns NOT_FOUND for names with spaces,
+        slashes or parentheses ("재산분할청구/재산분할청구권", "양육비 채무자") although the
+        term exists. A 법령용어ID can be a comma list ("4725479,3829827"): pass it whole.
+
+        Returns every dictionary entry for the term, usually from several
         dictionaries (법령용어사전, 법령정의사전 = definitions in a given law with `source`,
         법령한영사전 = English equivalent in `definition` and a sample sentence in
         `example`, 생활용어사전, 알법정비사전). Each entry stands alone; do not merge
@@ -6182,43 +6255,63 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
 
         The upstream's JSON form collapses the entries into parallel arrays and loses
         which 출처/용례 belongs to which entry, so this tool reads the XML and returns
-        structured `entries` (no `type` argument).
+        structured `entries` (no `type` argument). A repeated 출처 is kept, one per line.
 
         Args:
-            query: The exact term (법령용어명), e.g. "선의"; required. A term that is
-                not an exact dictionary headword is NOT_FOUND ("선" does not find "선의").
+            query: The exact term (법령용어명), e.g. "선의". A term that is not an exact
+                dictionary headword is NOT_FOUND ("선" does not find "선의").
+            trm_seqs: 법령용어ID from lstrm_search (digits, comma-separated for several)
             oc: Optional OC override (defaults to env var)
             ctx: MCP context (injected automatically)
 
         Returns:
             entries[]: term_id, name_ko, name_hanja, dict_code, dict_name, definition,
             source, example (None when absent), plus count; or a structured error.
+            With trm_seqs, `warning` lists requested ids that returned no entry.
 
         Examples:
             >>> lstrm_service(query="상속")
+            >>> lstrm_service(trm_seqs="18980")   # 재산분할청구/재산분할청구권
         """
+        (trm_seqs,) = stringify_id(trm_seqs)
         q = (query or "").strip()
-        if not q or q == "*":
+        seqs = None
+        if trm_seqs is not None and trm_seqs.strip():
+            seqs = ascii_digits(trm_seqs).replace(" ", "")
+            if not re.fullmatch(r"[0-9]{1,12}(,[0-9]{1,12})*", seqs):
+                raise ToolValidationError(
+                    f"trm_seqs must be 법령용어ID digits, comma-separated for several, got: {trm_seqs!r}",
+                    hints=["lstrm_search 결과의 `법령용어ID`를 그대로 넘기세요"],
+                )
+            if q:
+                raise ToolValidationError("Use either query or trm_seqs, not both")
+        elif not q or q == "*":
             raise ToolValidationError(
-                "query is required: the exact legal term",
-                hints=["lstrm_search로 법령용어명을 찾은 뒤 그대로 넘기세요"],
+                "query or trm_seqs is required",
+                hints=["lstrm_search로 찾은 행의 법령용어ID를 trm_seqs로 넘기세요 (이름에 공백·슬래시·괄호가 있으면 query는 NOT_FOUND)"],
             )
         resolved_oc = resolve_oc(override_oc=oc)
-        snake_params = {"oc": resolved_oc, "target": "lstrm", "type": "XML", "query": q}
+        snake_params = {"oc": resolved_oc, "target": "lstrm", "type": "XML"}
+        snake_params["trm_seqs" if seqs else "query"] = seqs or q
         response = run_service(get_client=_get_client, target="lstrm",
                                snake_params=snake_params, response_type="XML")
-        if response.get("status") != "ok":
-            return response
+        label = f"법령용어ID {seqs}" if seqs else f"법령용어 '{q}'"
         not_found = create_error_response(
-            ErrorCode.NOT_FOUND, f"법령용어 '{q}'를 찾을 수 없습니다.",
-            hints=["정확한 법령용어명이어야 합니다. lstrm_search로 먼저 검색하세요"],
+            ErrorCode.NOT_FOUND, f"{label}를 찾을 수 없습니다.",
+            hints=[
+                "이름 조회(query)는 정확한 표제어여야 하며 공백·슬래시·괄호가 있는 이름은 실패할 수 있습니다. "
+                "lstrm_search 행의 `법령용어ID`를 trm_seqs로 넘기세요",
+                "lstrm_search로 먼저 검색하세요",
+            ],
             request_id=response.get("request_id"),
         )
+        if response.get("status") != "ok":
+            return not_found if response.get("error_code") == ErrorCode.NOT_FOUND else response
         raw = response.get("raw_content", "")
         try:
             entries = parse_lstrm_xml(raw)
         except ET.ParseError:
-            if "일치하는" in raw:
+            if "일치하는" in raw and not re.match(r"\s*<(?:!doctype|html)", raw, re.I):
                 return not_found
             return create_error_response(
                 ErrorCode.UPSTREAM_ERROR, "lstrm 응답을 XML로 해석하지 못했습니다",
@@ -6226,14 +6319,20 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             )
         if not entries:
             return not_found
-        return {
+        out = {
             "status": "ok",
             "request_id": response.get("request_id"),
             "upstream_type": "XML",
-            "query": q,
+            "query" if not seqs else "trm_seqs": q if not seqs else seqs,
             "count": len(entries),
             "entries": entries,
         }
+        if seqs:
+            got = {e["term_id"] for e in entries}
+            missing = [i for i in seqs.split(",") if i not in got]
+            if missing:
+                out["warning"] = f"요청한 법령용어ID 중 항목이 없는 것: {', '.join(missing)}"
+        return out
 
     # ==================== PROMPTS ====================
 
