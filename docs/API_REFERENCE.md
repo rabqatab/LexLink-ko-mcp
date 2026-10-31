@@ -294,6 +294,26 @@ http://www.law.go.kr/DRF/lawService.do?OC=test&target=lawjosub&type=XML&ID=00182
 
 ---
 
+## 1.2.3 기준일 시점 조회 — `law_as_of` ✅ IMPLEMENTED (LexLink 파생 도구)
+
+법제처 DRF에는 "D일에 시행 중이던 법령" 조회가 없다. `eflaw_search`의 `ef_yd`는 시행일 범위 필터, `eflaw_service`/`eflaw_josub`의
+`ef_yd`는 해당 MST 자신의 시행일을 지정하는 개정본 선택자이다. `law_as_of(law_name, as_of, article?, article_branch?, as_of_end?)`는
+`lawSearch target=eflaw`(LID, nw=1,2,3)로 (MST, 시행일) 목록을 만들고 시행일 <= D 중 가장 늦은 것을 골라
+`lawService target=eflaw`(MST + efYd)로 그 개정본의 조문을 가져온다.
+
+| `in_force` | `reason` | 의미 |
+|---|---|---|
+| `true` | - | 기준일에 시행 중인 개정본(MST, 시행일, 공포일, 조문). 부칙의 조문별 시행일은 `partial_effect.article_scan`에 인용 |
+| `false` | `BEFORE_FIRST_ENFORCEMENT` | 최초 시행 전 (동일 명칭 다른 법령ID가 없을 때만) |
+| `false` | `BEFORE_EARLIEST_AVAILABLE_VERSION` | 조회된 연혁 이전: 시행 여부 확인 불가 (동일 명칭 법령ID 존재, 연혁 누락, 조회 실패 등) |
+| `false` | `AFTER_REPEAL` | 폐지(`폐지`/`타법폐지`/`일괄폐지`) 이후. `폐지제정`은 폐지가 아님 |
+| `null` | `NOT_CURRENT_UPSTREAM` | 업스트림에 현행/시행예정 버전이 없고 폐지 표시도 없는 법령(한시법 종료 등)의 마지막 버전 이후: 시행 중이었는지 알 수 없음 |
+
+오류는 `status: error` + `error_code` (VALIDATION_ERROR, ARTICLE_NOT_FOUND, 업스트림 코드). 업스트림 실패는 "없음"으로 보고하지 않는다.
+동일 명칭의 구법(다른 법령ID)은 법령구분이 같고 (법률/대통령령/헌법이거나 소관부처가 같을 때)에만 대체한다.
+
+---
+
 ## 1.3 영문법령 APIs (2 implemented)
 
 ### 1.3.1 영문법령 목록 조회 — `elaw_search` ✅ IMPLEMENTED

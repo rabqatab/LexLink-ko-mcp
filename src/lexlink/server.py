@@ -3464,6 +3464,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             head: dict = {"법령ID": law_id}
         else:
             rows = []
+            searched_rows: list = []
             target_name = re.sub(r"\s+", "", law_name)
             # include_repealed: a repealed law has no 현행 row, so the default (current-only)
             # name search cannot see it; retry once with nw=1,2,3 unless an exact name matched.
@@ -3481,7 +3482,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 err = _result_error(search_result, "eflaw 법령 검색")
                 if err:
                     return _upstream_failure_response(law_name, err)
-                rows = select_law_rows(law_rows(search_result), law_name)
+                searched_rows = law_rows(search_result)
+                rows = select_law_rows(searched_rows, law_name)
                 if any(re.sub(r"\s+", "", r.get("법령명한글", "")) == target_name for r in rows):
                     break
             if not rows:
@@ -3497,6 +3499,14 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             "law_type": head.get("법령구분명", ""),
             "ministry": head.get("소관부처명", ""),
         }
+        # other 법령IDs with exactly this name that the name search already returned
+        same_name: dict = {}
+        want = re.sub(r"\s+", "", info["law_name"])
+        for r in (searched_rows if rows else []):
+            rid = r.get("법령ID", "")
+            if rid and rid != law_id and rid not in same_name and re.sub(r"\s+", "", r.get("법령명한글", "")) == want:
+                same_name[rid] = {"law_id": rid, "law_type": r.get("법령구분명", ""), "ministry": r.get("소관부처명", "")}
+        info["same_name_laws"] = list(same_name.values())
 
         all_rows = list(rows)
         if need_history and law_id:
@@ -4819,12 +4829,22 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         if _result_error(res, "eflaw 동명 구법 조회"):
             return [], True
         want = re.sub(r"\s+", "", law_name)
-        ids = []
+        found: dict = {}
         for r in law_rows(res):
             rid = r.get("법령ID", "")
-            if rid and rid != law_id and re.sub(r"\s+", "", r.get("법령명한글", "")) == want and rid not in ids:
-                ids.append(rid)
-        return ids, False
+            if rid and rid != law_id and rid not in found and re.sub(r"\s+", "", r.get("법령명한글", "")) == want:
+                found[rid] = {"law_id": rid, "law_type": r.get("법령구분명", ""), "ministry": r.get("소관부처명", "")}
+        return list(found.values()), False
+
+    LINEAGE_BY_NAME = ("법률", "대통령령", "헌법")  # their names identify one lineage across 법령ID changes
+
+    def _same_lineage(a_type: str, a_min: str, b_type: str, b_min: str) -> bool:
+        """May two same-name 법령IDs be treated as one law's old/new version?
+        Same 법령구분명 and (a 법률/대통령령/헌법, or the same 소관부처명). Ministry names change over
+        time, so they are not compared for the name-identified levels."""
+        if not a_type or a_type != b_type:
+            return False
+        return a_type in LINEAGE_BY_NAME or (bool(a_min) and a_min == b_min)
 
     # ==================== TOOL 55: law_as_of ====================
     @server.tool(annotations=TOOL_ANNOTATIONS)
@@ -4922,12 +4942,17 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         name_match = "id" if by_id else ("exact" if _sq(name) in known_names else "partial")
 
         orig_cands, orig_info = cands, info
-        predecessor, other_ids, pred_failed = None, [], False
+        predecessor, other_ids, other_laws, pred_failed = None, [], [], False
         if select_as_of(cands, d)["outcome"] == "before_first_version":
-            other_ids, pred_failed = _same_name_other_ids(
+            alt_meta, pred_failed = _same_name_other_ids(
                 info["law_name"], info["law_id"], cands[0]["effective_date"], resolved_oc, fmt)
+            other_ids = [m["law_id"] for m in alt_meta]
+            other_laws = alt_meta
             best_alt = None
-            for alt_id in other_ids[:3]:
+            for m in alt_meta:
+                if not _same_lineage(info["law_type"], info["ministry"], m["law_type"], m["ministry"]):
+                    continue  # same name but another 법령구분/소관부처: a different regulation, not the old version
+                alt_id = m["law_id"]
                 alt = _resolve_law_versions("", resolved_oc, fmt, need_history=True, law_id=alt_id)
                 if alt.get("status") == "error":
                     pred_failed = True
@@ -4977,6 +5002,19 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 f"구법(법령ID {predecessor['law_id']})이 시행 중이었습니다. 아래 version은 구법의 것입니다.")
         elif other_ids:
             out["same_name_other_law_ids"] = other_ids
+            out["same_name_other_laws"] = other_laws
+            if any(not _same_lineage(info["law_type"], info["ministry"], m["law_type"], m["ministry"]) for m in other_laws):
+                caveats.append(
+                    "동일 명칭이지만 법령구분 또는 소관부처가 다른 법령이 있어 구법으로 보지 않았습니다: "
+                    + ", ".join(f"{m['law_id']}({m['law_type']}/{m['ministry']})" for m in other_laws))
+        elif info.get("same_name_laws"):
+            # already known from the name search rows (no extra request)
+            out["same_name_other_law_ids"] = [m["law_id"] for m in info["same_name_laws"]]
+            out["same_name_other_laws"] = info["same_name_laws"]
+            caveats.append(
+                f"동일 명칭의 법령이 법령ID {info['law_id']}({info['law_type']}/{info['ministry']}) 외에도 있습니다: "
+                + ", ".join(f"{m['law_id']}({m['law_type']}/{m['ministry']})" for m in info["same_name_laws"])
+                + f". 이 결과는 법령ID {info['law_id']} 기준이며, 다른 법령이면 법령ID로 다시 조회하세요.")
         if pred_failed:
             caveats.append("동일 명칭의 구법(다른 법령ID) 조회가 실패하여 기준일 이전 시행 여부를 확정할 수 없습니다.")
         if d > today:
