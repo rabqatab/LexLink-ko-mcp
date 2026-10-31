@@ -8,6 +8,10 @@ All notable changes to LexLink are documented here in both English and Korean.
 
 ### Unreleased
 
+#### Changed
+- Responses no longer cut content that was already fetched: `check_precedent_odds` (holding/summary excerpts, `key_factors`), `legal_resolver` (`article_text`, `citations`), `chain_full_research` (`representative_cases`), and `chain_law_system` (delegation tree entries and references) return everything by default. `compact_delegation_tree` has no entry cap unless `max_entries` is given. The one exception: `simplify_article` looks up at most 20 legal terms upstream (`extract_legal_terms` cap).
+- `SLIM_RESPONSE=true` (also `1`, `yes`, `on`; case-insensitive) additionally keeps those compact caps (500 chars, top 10/3, 80 delegation entries), so PlayMCP output is unchanged. Fan-out caps and `display` limits are unaffected.
+
 #### Fixed
 - `prec_service` / `detc_service` / `expc_service`: an upstream "일치하는 … 없습니다" answer (unknown id, or a case whose body the API does not provide, e.g. 국세법령정보시스템 precedents) now returns the new `NOT_FOUND` error instead of `status: ok`. Errors are never cached.
 - `prec_service(sections="summary")` falls back to including 판례내용 (`sections: "summary_fallback"` plus a warning) when both 판시사항 and 판결요지 are empty.
@@ -528,6 +532,10 @@ All notable changes to LexLink are documented here in both English and Korean.
 ## 한국어 (Korean)
 
 ### 미배포 (Unreleased)
+
+#### 변경
+- 이미 가져온 내용을 더 이상 자르지 않음: `check_precedent_odds`(판시사항·판결요지 발췌, `key_factors`), `legal_resolver`(`article_text`, `citations`), `chain_full_research`(`representative_cases`), `chain_law_system`(위임 트리 항목·참조)이 기본적으로 전체를 반환. `compact_delegation_tree`는 `max_entries`를 지정하지 않으면 항목 상한이 없음. 예외: `simplify_article`은 업스트림 조회를 최대 20개 법률 용어로 제한(`extract_legal_terms` 상한).
+- `SLIM_RESPONSE=true`는 위 압축 상한(500자, 상위 10/3건, 위임 항목 80건)도 함께 유지하므로 PlayMCP 출력은 그대로. 팬아웃 상한과 `display` 제한은 영향 없음.
 
 #### 수정
 - `prec_service` / `detc_service` / `expc_service`: 업스트림이 "일치하는 … 없습니다"로 답하는 경우(존재하지 않는 ID, 또는 국세법령정보시스템 판례처럼 API가 본문을 제공하지 않는 경우) `status: ok` 대신 새 `NOT_FOUND` 오류를 반환. 오류는 캐시되지 않음.

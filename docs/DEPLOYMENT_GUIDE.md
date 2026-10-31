@@ -32,7 +32,7 @@ OC=your_oc TRANSPORT=http uv run serve
 | `OC` | **Yes** | - | Server's OC for law.go.kr API (must have server IP registered) |
 | `PORT` | No | 8000 | Server port |
 | `HOST` | No | 0.0.0.0 | Server host |
-| `SLIM_RESPONSE` | No | - | Set to `true` to remove redundant raw XML from responses when parsed data exists (for PlayMCP size limits) |
+| `SLIM_RESPONSE` | No | - | Set to `true` to remove redundant raw XML from responses when parsed data exists, and keep the compact caps (500-char case/article excerpts, top-10/3 lists, 80 delegation entries) (for PlayMCP size limits). Unset: nothing already fetched is cut (one exception: `simplify_article` looks up at most 20 legal terms upstream) |
 
 *PlayMCP requires Streamable HTTP transport (`TRANSPORT=http`), not SSE.
 
@@ -243,7 +243,7 @@ WantedBy=multi-user.target
 >
 > **Note:** For case law tools (`prec_service`, `detc_service`, etc.) that return large responses, use `sections="summary"` parameter to retrieve only the summary section and stay within PlayMCP's 24KB size limit.
 >
-> **Note:** `SLIM_RESPONSE=true` prevents "Tool call returned too large content part" errors on PlayMCP by removing redundant raw XML when parsed `ranked_data` exists. All fields in `ranked_data` are preserved — no filtering or truncation.
+> **Note:** `SLIM_RESPONSE=true` prevents "Tool call returned too large content part" errors on PlayMCP by removing redundant raw XML when parsed `ranked_data` exists. All fields in `ranked_data` are preserved — no field filtering. It also keeps the compact caps of the chain/helper tools (500-char excerpts, top-10/3 lists, 80 delegation entries); without it those tools return everything they fetched.
 >
 > **How it works:**
 > - Search tools (`_search`): `raw_content` removed, `ranked_data` preserved with all fields → ~5-15KB

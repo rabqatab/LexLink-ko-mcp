@@ -64,7 +64,7 @@ tests/               # 122 offline tests (tracked in git): test_cache, test_cgm_
 
 - **OC parameter resolution**: Tool arg > Environment variable
 - **JSON by default**: Since v2.0.0 all tools default to `type="JSON"`; `XML`/`HTML` are opt-in. The cache key includes the response format, so a JSON body is never served to an XML request
-- **SLIM_RESPONSE mode**: `SLIM_RESPONSE=true` env var removes redundant `raw_content` XML when `ranked_data` exists. Does NOT filter or truncate fields — search tools already return slim data from API. Service tools without `ranked_data` keep `raw_content` as safety fallback
+- **SLIM_RESPONSE mode**: `SLIM_RESPONSE=true` env var removes redundant `raw_content` XML when `ranked_data` exists. Also keeps the compact caps via `compact_limit()` (500-char excerpts, top-10/3 lists, 80 delegation entries; unset = no cap). Does NOT filter fields — search tools already return slim data from API. Service tools without `ranked_data` keep `raw_content` as safety fallback
 - **Anti-bot bypass**: `client.py` detects and follows law.go.kr JS anti-bot redirects (2 patterns: string concat, substring slicing)
 - **Auto-ranking**: Search tools auto-fetch 100 results and re-rank by relevance for keyword queries
 - **Embedded law IDs**: `SERVER_INSTRUCTIONS` contains 20 common 법령ID mappings for clients that don't support MCP resources
