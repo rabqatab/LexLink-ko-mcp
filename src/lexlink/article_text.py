@@ -100,6 +100,11 @@ def normalize_article(article: Union[int, str], article_branch: Union[int, str, 
         text = text.replace(" ", "")
         if re.fullmatch(r"\d{6}", text):
             number, code_branch = int(text[:4]), int(text[4:])
+            if branch and code_branch and branch != code_branch:
+                raise ValueError(
+                    f"Conflicting branch numbers: {article!r} encodes branch {code_branch} "
+                    f"but article_branch={branch}"
+                )
             branch = branch or code_branch
         else:
             m = re.fullmatch(r"(?:제)?(\d+)(?:조)?(?:(?:의|-)(\d+))?", text)

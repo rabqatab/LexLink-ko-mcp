@@ -10,7 +10,7 @@
 
 | Metric | Status |
 |--------|--------|
-| **Tools Implemented** | 54/54 (100%) |
+| **Tools Implemented** | 55/55 (100%) |
 | **MCP Prompts** | 9/9 (100%) |
 | **MCP Resources** | 2 (1 static + 1 template) |
 | **Semantic Validation** | 26/26 (Phase 1-5 tools) |
@@ -35,7 +35,7 @@
 
 | File | Description |
 |------|-------------|
-| `src/lexlink/server.py` | Main server (54 tools, 9 prompts, 2 resources) |
+| `src/lexlink/server.py` | Main server (55 tools, 9 prompts, 2 resources) |
 | `src/lexlink/_helpers.py` | Shared helpers (~380 lines): TOOL_ANNOTATIONS, handle_tool_error, run_search, run_service |
 | `src/lexlink/cache.py` | Intelligent per-tool TTL caching (~183 lines) |
 | `src/lexlink/resolver.py` | Korean law name/abbreviation resolution (~225 lines) |

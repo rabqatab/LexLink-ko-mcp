@@ -169,10 +169,15 @@ def slim_hint(params) -> str:
     options = []
     if "jo" in params:
         options.append("jo로 조문 지정")
-    if "sections" in params:
-        options.append('sections="summary"')
     if "page" in params or "display" in params:
         options.append("page/display로 나누어 조회")
+    if "sections" in params:
+        # sections="summary" leaves the body out: it never returns more of the text
+        note = SLIM_NOTE + ('전문(sections="full")은 SLIM_RESPONSE 하에서 받을 수 없습니다; '
+                            'sections="summary"는 본문을 제외한 요약입니다. 전문이 필요하면 SLIM_RESPONSE 해제 환경을 사용하세요.')
+        if options:
+            note += " 나머지는 " + ", ".join(options) + "(으)로 받으세요."
+        return note
     if not options:
         return SLIM_NOTE + SLIM_NO_PARAMS_HINT
     return SLIM_NOTE + "나머지는 " + ", ".join(options) + "(으)로 받으세요."

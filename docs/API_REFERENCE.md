@@ -2,7 +2,7 @@
 # 국가법령정보 공동활용 Open API — 완전한 API 사양서
 
 > **목적:** LLM/에이전트가 그대로 ingest / parse / convert 할 수 있도록 통일된 포맷의 스펙 제공
-> **범위:** All 195 APIs available from law.go.kr Open API guide (54 implemented in LexLink; 2026-10-25 re-audit, was 191)
+> **범위:** All 195 APIs available from law.go.kr Open API guide (55 implemented in LexLink; 2026-10-25 re-audit, was 191)
 > **Source:** https://open.law.go.kr/LSO/openApi/guideList.do
 > **Last Updated:** 2026-10-25 (v2.2.0)
 
@@ -29,7 +29,7 @@
 | **사전컨설팅 의견서 (Pre-consulting Opinions)** | 2 | 0 | Not implemented (NEW, 감사원 `baiPvcs`; JSON verified) |
 | **Custom (article_citation)** | 1 | 1 | ✅ HTML parsing tool |
 | **Custom (chain tools + cache_stats)** | 5 | 5 | ✅ chain_full_research, chain_amendment_track, chain_dispute_prep, chain_law_system, cache_stats |
-| **Total** | **195+** | **54** | **~28% coverage** |
+| **Total** | **195+** | **55** | **~28% coverage** |
 
 > v2.2.0 note: 모든 업스트림 target 이름·엔드포인트는 2026-10-25 점검(`AUDIT_CHECKLIST_2026-10-25.md`)에서 직접 호출로 재검증했다. 미구현 API 중 JSON 동작을 확인한 목록은 Appendix D 참조.
 
@@ -291,6 +291,26 @@ http://www.law.go.kr/DRF/lawService.do?OC=test&target=eflawjosub&type=XML&MST=19
 ```
 http://www.law.go.kr/DRF/lawService.do?OC=test&target=lawjosub&type=XML&ID=001823&JO=000300&HANG=000100&HO=000200&MOK=다
 ```
+
+---
+
+## 1.2.3 기준일 시점 조회 — `law_as_of` ✅ IMPLEMENTED (LexLink 파생 도구)
+
+법제처 DRF에는 "D일에 시행 중이던 법령" 조회가 없다. `eflaw_search`의 `ef_yd`는 시행일 범위 필터, `eflaw_service`/`eflaw_josub`의
+`ef_yd`는 해당 MST 자신의 시행일을 지정하는 개정본 선택자이다. `law_as_of(law_name, as_of, article?, article_branch?, as_of_end?)`는
+`lawSearch target=eflaw`(LID, nw=1,2,3)로 (MST, 시행일) 목록을 만들고 시행일 <= D 중 가장 늦은 것을 골라
+`lawService target=eflaw`(MST + efYd)로 그 개정본의 조문을 가져온다.
+
+| `in_force` | `reason` | 의미 |
+|---|---|---|
+| `true` | - | 기준일에 시행 중인 개정본(MST, 시행일, 공포일, 조문). 부칙의 조문별 시행일은 `partial_effect.article_scan`에 인용 |
+| `false` | `BEFORE_FIRST_ENFORCEMENT` | 최초 시행 전 (동일 명칭 다른 법령ID가 없을 때만) |
+| `false` | `BEFORE_EARLIEST_AVAILABLE_VERSION` | 조회된 연혁 이전: 시행 여부 확인 불가 (동일 명칭 법령ID 존재, 연혁 누락, 조회 실패 등) |
+| `false` | `AFTER_REPEAL` | 폐지(`폐지`/`타법폐지`/`일괄폐지`) 이후. `폐지제정`은 폐지가 아님 |
+| `null` | `NOT_CURRENT_UPSTREAM` | 업스트림에 현행/시행예정 버전이 없고 폐지 표시도 없는 법령(한시법 종료 등)의 마지막 버전 이후: 시행 중이었는지 알 수 없음 |
+
+오류는 `status: error` + `error_code` (VALIDATION_ERROR, ARTICLE_NOT_FOUND, 업스트림 코드). 업스트림 실패는 "없음"으로 보고하지 않는다.
+동일 명칭의 구법(다른 법령ID)은 법령구분이 같고 (법률/대통령령/헌법이거나 소관부처가 같을 때)에만 대체한다.
 
 ---
 
