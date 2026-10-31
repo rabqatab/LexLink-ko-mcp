@@ -112,9 +112,12 @@ def enforce_display(response: dict, display: int, list_key: str) -> dict:
     """
     if not isinstance(response, dict) or response.get("status") != "ok":
         return response
+    original = response
+    # Work on a copy so a (possibly cache-derived) input is never mutated.
+    response = dict(response)
     raw = response.get("raw_content")
     if not isinstance(raw, str) or not raw.lstrip().startswith("{"):
-        return response
+        return original
     try:
         data = json.loads(raw)
     except ValueError:
@@ -132,6 +135,8 @@ def enforce_display(response: dict, display: int, list_key: str) -> dict:
 
     if isinstance(ranked, dict):
         # Ranking already trimmed; make raw_content agree with it.
+        ranked = dict(ranked)
+        response["ranked_data"] = ranked
         k = _find_key(ranked, list_key)
         if k is not None:
             items = ranked[k]

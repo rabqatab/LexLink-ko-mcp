@@ -207,6 +207,163 @@ def detect_items_key(parsed_data: dict) -> Optional[str]:
     return None
 
 
+OVER_FETCH_WINDOW = 100  # upstream max rows per request
+
+
+def validate_paging(page, display) -> tuple[int, int]:
+    """Return ``(page, display)`` as ints; page < 1 or display < 1 is a validation error."""
+    try:
+        p = int(str(page).strip()) if page not in (None, "") else 1
+        d = int(str(display).strip()) if display not in (None, "") else 20
+    except (TypeError, ValueError):
+        raise ToolValidationError(
+            f"page/display는 정수여야 합니다 (page={page!r}, display={display!r})",
+            hints=["page는 1 이상, display는 1~100 사이의 정수를 사용하세요"],
+        )
+    if p < 1 or d < 1:
+        raise ToolValidationError(
+            f"page와 display는 1 이상이어야 합니다 (page={p}, display={d}). "
+            f"page and display must be >= 1.",
+            hints=["page는 1부터 시작합니다", "display는 1~100 사이로 지정하세요 (100 초과는 100으로 제한)"],
+        )
+    return p, d
+
+
+def run_ranked_paging(
+    *,
+    fetch,
+    upstream_params: dict,
+    page: int,
+    display: int,
+    over_fetch_key: str,
+    response_type: str,
+    load,
+    rank,
+):
+    """Page a ranked (over-fetched) search with a stable row order.
+
+    Row order: the relevance-ranked first 100 upstream rows (the window), then
+    upstream rows 101+ in upstream order. For ``offset = (page-1)*display``:
+
+    - inside the window: rank the window and slice (ranking_applied None);
+    - beyond it: fetch the size-100 upstream page(s) covering the slice
+      (ranking_applied False);
+    - straddling it: ranked tail + head of upstream page 2 ("partial").
+
+    ``fetch(params) -> response``; ``load(response) -> (parsed, items) | None``;
+    ``rank(items) -> items``. Returns ``(response, parsed, rows, applied)`` where
+    ``parsed`` is None when nothing could be parsed (response returned as is,
+    including any error response from a failed fetch).
+    """
+    W = OVER_FETCH_WINDOW
+    offset = (page - 1) * display
+
+    def request(upstream_page: int) -> dict:
+        q = dict(upstream_params)
+        q["page"] = str(upstream_page)
+        q[over_fetch_key] = str(W)
+        # JSON format ignores numOfRows - must also set display
+        if response_type == "JSON":
+            q["display"] = str(W)
+        return fetch(q)
+
+    if offset + display <= W:
+        resp = request(1)
+        loaded = load(resp) if resp.get("status") == "ok" else None
+        if not loaded or not loaded[1]:
+            return resp, None, None, None
+        parsed, items = loaded
+        return resp, parsed, rank(items)[offset:offset + display], None
+
+    if offset >= W:
+        first = offset // W + 1
+        last = (offset + display - 1) // W + 1
+        base_resp = base_parsed = None
+        combined: list = []
+        for up in range(first, last + 1):
+            resp = request(up)
+            if resp.get("status") != "ok":
+                return resp, None, None, None
+            loaded = load(resp)
+            if base_resp is None:
+                base_resp = resp
+            if not loaded:
+                return base_resp, None, None, False
+            if base_parsed is None:
+                base_parsed = loaded[0]
+            combined.extend(loaded[1])
+        start = offset - (first - 1) * W
+        return base_resp, base_parsed, combined[start:start + display], False
+
+    # straddles the window boundary
+    resp1 = request(1)
+    loaded1 = load(resp1) if resp1.get("status") == "ok" else None
+    if not loaded1 or not loaded1[1]:
+        return resp1, None, None, None
+    parsed1, items1 = loaded1
+    ranked1 = rank(items1)
+    if len(items1) < W:  # whole result set fits in the window
+        return resp1, parsed1, ranked1[offset:offset + display], None
+    tail = ranked1[offset:W]
+    resp2 = request(2)
+    if resp2.get("status") != "ok":
+        return resp2, None, None, None
+    loaded2 = load(resp2)
+    head = loaded2[1][:offset + display - W] if loaded2 else []
+    return resp1, parsed1, tail + head, "partial"
+
+
+NO_RESULTS_MESSAGE = "검색 결과가 없습니다."
+NO_RESULTS_HINTS = [
+    "검색어를 줄이거나 핵심 단어만 사용해 보세요",
+    "약칭 대신 정식 명칭으로 검색해 보세요",
+]
+NO_RESULTS_BODY_HINT = "search=2(본문 검색)로 다시 시도해 보세요"
+
+
+def _total_count(response: dict) -> Optional[int]:
+    """totalCnt from ranked_data or raw_content, None when not found."""
+    ranked = response.get("ranked_data")
+    if isinstance(ranked, dict) and ranked.get("totalCnt") not in (None, ""):
+        try:
+            return int(str(ranked["totalCnt"]).strip())
+        except ValueError:
+            pass
+    raw = response.get("raw_content")
+    if isinstance(raw, str):
+        m = re.search(r'totalCnt["\']?\s*[:>=]\s*["\']?\s*(\d+)', raw)
+        if m:
+            return int(m.group(1))
+    return None
+
+
+def add_no_results_guidance(response: dict, *, body_search: bool = False) -> dict:
+    """Add warning/message/hints to an ok search response whose total is 0."""
+    if not isinstance(response, dict) or response.get("status") != "ok":
+        return response
+    if _total_count(response) != 0:
+        return response
+    response["warning"] = "no_results"
+    response["message"] = NO_RESULTS_MESSAGE
+    response["hints"] = list(NO_RESULTS_HINTS) + ([NO_RESULTS_BODY_HINT] if body_search else [])
+    return response
+
+
+NO_MORE_RESULTS_HINT = "no_more_results: 요청한 page가 마지막 페이지를 넘었습니다. 더 낮은 page를 사용하세요"
+
+
+def add_no_more_results_hint(response: dict, page: int, display: int) -> dict:
+    """Hint ``no_more_results`` when the page starts past a non-empty result set."""
+    if not isinstance(response, dict) or response.get("status") != "ok":
+        return response
+    total = _total_count(response)
+    if total and (page - 1) * display >= total:
+        hints = list(response.get("hints") or [])
+        hints.append(NO_MORE_RESULTS_HINT)
+        response["hints"] = hints
+    return response
+
+
 def run_search(
     *,
     get_client,
@@ -234,6 +391,7 @@ def run_search(
         snake_params["query"] = resolved_query
         logger.info(f"Resolved query: '{query}' → '{resolved_query}'")
 
+    page, display = validate_paging(snake_params.get("page", 1), display)
     upstream_params = map_params_to_upstream(snake_params)
 
     original_display = display
@@ -243,87 +401,115 @@ def run_search(
         and list_type is not None
         and should_apply_ranking(resolved_query)
     )
+    use_paging = ranking_enabled and over_fetch and display < OVER_FETCH_WINDOW
 
-    if ranking_enabled and over_fetch and original_display < 100:
-        upstream_params[over_fetch_key] = "100"
-        # JSON format ignores numOfRows — must also set display for JSON over-fetch
-        if response_type == "JSON":
-            upstream_params["display"] = "100"
-        logger.debug(f"Ranking enabled: fetching 100 results instead of {original_display}")
-
-    # Check cache before making API call
     cache = get_cache()
-    cached = cache.get(target, upstream_params)
-    if cached is not None:
-        response = cached
-    else:
-        client = get_client()
-        response = client.get("/DRF/lawSearch.do", upstream_params, response_type)
-        # Cache the raw response
-        cache.put(target, upstream_params, response)
+    client_holder: list = []
 
-    if response.get("status") == "ok" and response_type in ("XML", "JSON"):
-        raw_content = response.get("raw_content", "")
-        if raw_content:
-            # Parse response based on format
-            if response_type == "JSON":
-                import json as _json
-                try:
-                    json_data = _json.loads(raw_content)
-                    # JSON responses have a root key (e.g., "LawSearch", "PrecSearch")
-                    # Extract the inner object as parsed_data
-                    parsed_data = list(json_data.values())[0] if json_data else None
-                except (ValueError, IndexError):
-                    parsed_data = None
-            else:
-                parsed_data = parse_xml_response(raw_content)
+    def fetch(params: dict) -> dict:
+        cached = cache.get(target, params)
+        if cached is not None:
+            return cached
+        if not client_holder:
+            client_holder.append(get_client())
+        resp = client_holder[0].get("/DRF/lawSearch.do", params, response_type)
+        cache.put(target, params, resp)
+        return dict(resp)
+
+    def parse(resp: dict):
+        raw_content = resp.get("raw_content", "")
+        if not raw_content:
+            return None
+        if response_type == "JSON":
+            import json as _json
+            try:
+                json_data = _json.loads(raw_content)
+                # JSON responses have a root key (e.g., "LawSearch", "PrecSearch")
+                return list(json_data.values())[0] if json_data else None
+            except (ValueError, IndexError):
+                return None
+        return parse_xml_response(raw_content)
+
+    state = {"category": item_category}
+
+    def extract(parsed: dict) -> list:
+        if list_type == "law":
+            return extract_law_list(parsed)
+        if list_type == "items":
+            items = extract_items_list(parsed, state["category"])
+            if not items:
+                # Fallback: item_category didn't match the response's
+                # list key (e.g. target "ttSpecialDecc" vs list key "decc").
+                # If the response has exactly one list-of-dicts, use it.
+                detected = detect_items_key(parsed)
+                if detected:
+                    state["category"] = detected
+                    items = extract_items_list(parsed, detected)
+            return items
+        items = parsed.get(list_type, [])
+        return items if isinstance(items, list) else ([items] if items else [])
+
+    def store(parsed: dict, rows: list) -> dict:
+        if list_type == "law":
+            parsed = update_law_list(parsed, rows)
+            parsed["numOfRows"] = str(original_display)
+        elif list_type == "items":
+            parsed = update_items_list(parsed, rows, state["category"])
+            parsed["display"] = str(original_display)
+        else:
+            parsed[list_type] = rows
+            parsed["numOfRows"] = str(original_display)
+        parsed["page"] = str(page)
+        return parsed
+
+    def load(resp: dict):
+        parsed = parse(resp)
+        if not parsed:
+            return None
+        return parsed, extract(parsed)
+
+    applied = None
+    if use_paging:
+        response, parsed_data, rows, applied = run_ranked_paging(
+            fetch=fetch, upstream_params=upstream_params, page=page, display=display,
+            over_fetch_key=over_fetch_key, response_type=response_type, load=load,
+            rank=lambda items: rank_search_results(items, query, ranking_field),
+        )
+        if parsed_data is not None:
+            response["ranked_data"] = store(parsed_data, rows)
+            if list_type == "law" and rows:
+                resolver.learn_from_results(rows)
+            if post_rank_hook and rows:
+                post_rank_hook(rows)
+    else:
+        response = fetch(upstream_params)
+        if response.get("status") == "ok" and response_type in ("XML", "JSON"):
+            parsed_data = parse(response)
             if parsed_data:
                 if ranking_enabled:
-                    if list_type == "law":
-                        items = extract_law_list(parsed_data)
-                    elif list_type == "items":
-                        items = extract_items_list(parsed_data, item_category)
-                        if not items:
-                            # Fallback: item_category didn't match the response's
-                            # list key (e.g. target "ttSpecialDecc" vs list key "decc").
-                            # If the response has exactly one list-of-dicts, use it.
-                            detected = detect_items_key(parsed_data)
-                            if detected:
-                                item_category = detected
-                                items = extract_items_list(parsed_data, item_category)
-                    else:
-                        items = parsed_data.get(list_type, [])
-                        if not isinstance(items, list):
-                            items = [items] if items else []
-
+                    items = extract(parsed_data)
                     if items:
+                        # display >= 100 (or over_fetch off): rank within the page upstream returned
                         ranked_items = rank_search_results(items, query, ranking_field)
-
                         if len(ranked_items) > original_display:
                             ranked_items = ranked_items[:original_display]
-                            logger.debug(f"Trimmed results from {len(items)} to {original_display}")
-
-                        if list_type == "law":
-                            parsed_data = update_law_list(parsed_data, ranked_items)
-                            parsed_data["numOfRows"] = str(original_display)
-                        elif list_type == "items":
-                            parsed_data = update_items_list(parsed_data, ranked_items, item_category)
-                            parsed_data["display"] = str(original_display)
-                        else:
-                            parsed_data[list_type] = ranked_items
-                            parsed_data["numOfRows"] = str(original_display)
-
-                        response["ranked_data"] = parsed_data
-
-                        # Learn aliases from law search results
+                        response["ranked_data"] = store(parsed_data, ranked_items)
                         if list_type == "law" and ranked_items:
                             resolver.learn_from_results(ranked_items)
-
                         if post_rank_hook:
                             post_rank_hook(ranked_items)
+                    else:
+                        response["ranked_data"] = parsed_data  # empty page: still expose it
                 else:
                     response["ranked_data"] = parsed_data
 
+    if applied is not None:
+        response["ranking_applied"] = applied
+    add_no_more_results_hint(response, page, display)
+    add_no_results_guidance(
+        response,
+        body_search=str(snake_params.get("search", "")) in ("1", "2") and target != "aiSearch",
+    )
     if finalize_ids:
         rename_row_ids_to_rank(response)
     return slim_response(response)
@@ -459,18 +645,43 @@ def run_service(
 # Public Legal Assistance Helpers
 # ============================================================
 
-# Outcome keywords for Korean court decisions
-OUTCOME_KEYWORDS = {
-    "인용": "accepted",
-    "기각": "rejected",
-    "파기환송": "overturned_remanded",
-    "파기자판": "overturned_self_decided",
-    "파기": "overturned",
-    "각하": "dismissed",
-    "취소": "cancelled",
-    "일부인용": "partially_accepted",
-    "일부기각": "partially_rejected",
-}
+OUTCOME_NOTE = "휴리스틱 추정이며 인용 가능한 판결 결과가 아닙니다. 판결요지에는 주문이 없는 경우가 많아 '불명'이 흔합니다."
+
+# Position-based outcome detection. Each rule is (label, priority, regex with a
+# named group "k" marking the keyword, post-check(text, match) -> bool). The earliest
+# keyword position wins; ties go to the lower priority number. Every regex needs a
+# disposition ending, so negations/modals (기각하지 아니한다, 기각할 수 없다,
+# 인용될 수 없다, 기각될 것이다, 각하되어야 한다, 파기사유가 없...) never match.
+# All patterns are linear: no nested quantifiers, bounded look-around done in code.
+_VERB = r"(?:한다|하였|했|하고|하며|합니다|함(?!에|으로|께))"
+_APPLICANT_RE = re.compile(r"청구|상고|항소|신청|재심|심판|이의|재항고|항고|주장")
+
+
+def _has_applicant(text: str, m: "re.Match") -> bool:
+    start = m.start("k")
+    return bool(_APPLICANT_RE.search(text, max(0, start - 40), start))
+
+
+def _remand_follows(text: str, m: "re.Match") -> bool:
+    return "환송" in text[m.end():m.end() + 40]
+
+
+_OUTCOME_RULES = [
+    ("파기환송", 0, re.compile(r"(?P<k>파기)\s*환송"), None),
+    ("파기환송", 0, re.compile(rf"(?P<k>파기)\s*(?:하고|하며|하여|[,，])"), _remand_follows),
+    ("파기자판", 1, re.compile(r"(?P<k>파기)\s*자판"), None),
+    ("파기", 2, re.compile(rf"(?P<k>파기)\s*{_VERB}"), None),
+    ("일부인용", 0, re.compile(r"(?P<k>일부)\s*(?:를|만을|만|은|는)?\s*인용(?!\s*(?:하지|되지|할\s*수|될\s*수))"), None),
+    ("일부기각", 0, re.compile(r"(?P<k>일부)\s*(?:를|만을|만|은|는)?\s*기각(?!\s*(?:하지|되지|할\s*수|될\s*수))"), None),
+    ("각하", 3, re.compile(rf"(?<!기)(?P<k>각하)\s*(?:{_VERB}|판결|결정)"), None),
+    ("각하", 3, re.compile(r"(?:청구|상고|항소|항고|신청)\s*(?P<k>각하)(?!\s*(?:하지|할|되|사유|이유))"), None),
+    ("기각", 3, re.compile(rf"(?P<k>기각)\s*(?:{_VERB}|판결|결정)"), None),
+    ("기각", 3, re.compile(r"(?:청구|상고|항소|항고|신청)\s*(?P<k>기각)(?!\s*(?:하지|할|되|사유|이유))"), None),
+    ("인용", 3, re.compile(rf"(?<!일부)(?<!일부 )(?P<k>인용)\s*(?:{_VERB}|하는\s*(?:판결|결정)|판결|결정)"), _has_applicant),
+    ("취소", 3, re.compile(rf"(?P<k>취소)\s*(?:{_VERB}|판결|결정)"), None),
+    ("취소", 3, re.compile(r"처분[을를]\s*(?P<k>취소)(?!\s*(?:하지|할|되|해야|하여야|를|소송))"), None),
+]
+
 
 # Legal term suffix patterns (Korean legal jargon indicators)
 LEGAL_TERM_SUFFIXES = re.compile(
@@ -479,13 +690,28 @@ LEGAL_TERM_SUFFIXES = re.compile(
 
 
 def extract_outcome(text: str) -> str:
-    """Extract court decision outcome from 판결요지 text using keyword matching."""
+    """Extract court decision outcome from 판결요지 text (position-based).
+
+    Heuristic, not a citable result: the earliest genuine disposition wins
+    ("항소를 기각하고 상고를 각하한다" -> 기각). A keyword counts only with a
+    disposition ending (기각한다/하였다/하고/함, 파기하고 ...); negations and
+    modals (하지 아니, 할 수 없, 될 수 없, 될 것, 되어야, 사유가 없) and
+    mentions such as "취소소송", "원심판결 인용" are ignored. 파기 followed by
+    환송 within 40 characters is 파기환송; "일부를 인용" is 일부인용.
+    Returns "불명" when unclear (common, since 판결요지 often has no 주문).
+    """
     if not text:
         return "불명"
-    for keyword in OUTCOME_KEYWORDS:
-        if keyword in text:
-            return keyword
-    return "불명"
+    best = None  # (position, priority, label)
+    for label, priority, pattern, check in _OUTCOME_RULES:
+        for m in pattern.finditer(text):
+            if check is not None and not check(text, m):
+                continue
+            cand = (m.start("k"), priority, label)
+            if best is None or cand < best:
+                best = cand
+            break  # first valid hit is the earliest for this rule
+    return best[2] if best else "불명"
 
 
 def extract_key_factors(text: str) -> list[str]:
