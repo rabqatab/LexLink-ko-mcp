@@ -31,7 +31,7 @@ from .resolver import get_resolver
 from ._helpers import (
     TOOL_ANNOTATIONS, stringify_id, handle_tool_error, ToolValidationError,
     slim_response, run_search, run_service, annotate_prec_body_availability,
-    extract_outcome, extract_key_factors, extract_legal_terms, compute_text_diff, run_coroutine_sync,
+    extract_order, classify_order, extract_key_factors, extract_legal_terms, compute_text_diff, run_coroutine_sync,
     compact_limit, low_relevance_warning,
     rename_row_ids_to_rank, run_ranked_paging, validate_paging, OVER_FETCH_WINDOW,
     add_no_more_results_hint, add_no_results_guidance,
@@ -139,7 +139,7 @@ Use `sections="full"` only when the complete judgment text is specifically neede
 **Guided Workflows (Prompts):**
 - analyze-legal-situation: Describe your situation in plain Korean → get applicable laws, rights, and action steps
 - explain-legal-document: Paste a legal document → get plain Korean explanation
-- check-legal-precedent: Ask a yes/no legal question → get precedent-backed answer with success rate
+- check-legal-precedent: Ask a yes/no legal question → get precedent-backed answer (outcome distribution, not a win rate)
 
 ## Tool Selection for Casual Users
 
@@ -3487,10 +3487,11 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         ctx: Context = None,
     ) -> dict:
         """
-        Find precedent statistics and key outcome factors for a legal question (판례 승률 분석).
+        Find precedent statistics and key outcome factors for a legal question (판례 결과 분포).
 
-        Searches court precedents, analyzes outcomes (인용/기각/파기), and extracts
-        key factors that influenced decisions. Useful for assessing legal odds.
+        Searches court precedents, classifies each case's 주문 (disposition, e.g. 파기환송/
+        상고기각/항소기각/각하/일부인용; 불명 when unclear) and extracts key factors. This is a
+        distribution of dispositions, NOT a win rate: see outcome_note before drawing conclusions.
 
         Args:
             query: Legal question or keywords (e.g., "택배 파손 보상", "임대차 보증금 반환")
@@ -3550,7 +3551,6 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             svc_result = run_service(
                 get_client=_get_client, target="prec",
                 snake_params=svc_params, response_type=type,
-                sections="summary", full_text_fields=["판례내용"],
             )
 
             # Body unavailable (NOT_FOUND etc.): skip, try the next candidate
@@ -3562,6 +3562,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             raw = svc_result.get("raw_content", "")
             holding = ""
             summary_text = ""
+            body_text = ""  # 판례내용: the only place the 주문 lives
 
             if raw and type == "JSON":
                 try:
@@ -3570,6 +3571,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                     root = list(jd.values())[0] if jd else {}
                     holding = root.get("판시사항", "")
                     summary_text = root.get("판결요지", "")
+                    body_text = root.get("판례내용", "")
                 except:
                     pass
             elif raw:
@@ -3580,13 +3582,18 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                     holding = h_match.group(1).strip()
                 if s_match:
                     summary_text = s_match.group(1).strip()
+                b_match = _re.search(r'<판례내용>(.*?)</판례내용>', raw, _re.DOTALL)
+                if b_match:
+                    body_text = b_match.group(1).strip()
 
             # Upstream prose carries <br/> tags; strip them before analysis/output
             holding = strip_html(holding)
             summary_text = strip_html(summary_text)
 
             # Extract outcome and factors
-            outcome = extract_outcome(summary_text)
+            # Outcome comes from the 주문 only; recitals/판결요지 are never read
+            order = extract_order(body_text)
+            outcome = classify_order(order)
             outcomes[outcome] = outcomes.get(outcome, 0) + 1
             factors = [strip_html(f) for f in extract_key_factors(holding)]
             all_factors.extend(f for f in factors if f)
@@ -3598,6 +3605,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 "case_number": item.get("사건번호", ""),
                 "court": item.get("법원명", ""),
                 "outcome": outcome,
+                "order": order[:compact_limit(300)] if order else "",
                 "holding": holding[:compact_limit(500)] if holding else "",
                 "summary": summary_text[:compact_limit(500)] if summary_text else "",
             })
@@ -4242,6 +4250,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             "precedent_analysis": {
                 "total_found": odds.get("total_found", 0),
                 "outcome_summary": odds.get("outcome_summary", {}),
+                "outcome_note": odds.get("outcome_note", OUTCOME_NOTE),
                 "key_factors": odds.get("key_factors", []),
                 "representative_cases": odds.get("representative_cases", [])[:compact_limit(3)],
                 "search_mode": odds.get("search_mode", ""),
@@ -4934,7 +4943,7 @@ Tool selection priority for unclear queries:
 1. **관련 법령 찾기**: legal_resolver 도구를 사용하여 종합 분석을 수행하세요.
    - legal_resolver(situation="{situation}")
 
-2. **판례 확인**: check_precedent_odds 도구로 유사 판례와 승률을 확인하세요.
+2. **판례 확인**: check_precedent_odds 도구로 유사 판례의 결과 분포(승률 아님; outcome_note 참고)를 확인하세요.
    - check_precedent_odds(query="{situation}")
 
 3. **결과 정리**: 다음 형식으로 응답하세요:
@@ -5012,7 +5021,7 @@ Tool selection priority for unclear queries:
 
     @server.prompt(
         name="check-legal-precedent",
-        description="Ask a yes/no legal question → get precedent-backed answer with success rate"
+        description="Ask a yes/no legal question → get precedent-backed answer (outcome distribution, not a win rate)"
     )
     def check_legal_precedent(question: str) -> list:
         """
@@ -5042,7 +5051,7 @@ Tool selection priority for unclear queries:
 - 예 / 아니오 / 경우에 따라 다름 — 법적 근거와 함께
 
 **📊 판례 통계**
-- 전체 N건 중 인용 M건 (N건 분석)
+- 분석한 N건의 주문 분포(예: 파기환송 a건, 상고기각 b건, 불명 c건). 승소율/성공률로 환산하지 말고 outcome_note의 해석 주의를 그대로 전달
 - 핵심 판단 요소 나열
 
 **📋 대표 판례**
