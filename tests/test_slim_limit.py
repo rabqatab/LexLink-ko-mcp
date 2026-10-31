@@ -100,3 +100,59 @@ def test_no_truncated_flag_by_default(default_env, tools):
     ):
         out = tools(name, **kw)
         assert "truncated" not in out and "truncated_notes" not in out, name
+
+
+def _wire(out) -> int:
+    text = json.dumps(out, ensure_ascii=False, indent=2)
+    return len(json.dumps(text, ensure_ascii=False).encode("utf-8"))
+
+
+@pytest.mark.unit
+def test_raw_content_stays_a_json_string(slim_env):
+    rows = [{"조문번호": str(i), "조문내용": "제" + "가나다 \"인용\" " * 60} for i in range(400)]
+    big = {"status": "ok", "request_id": "r1", "raw_content": json.dumps({"법령": {"조문": rows}}, ensure_ascii=False)}
+    out = enforce_slim_limit(big)
+    assert isinstance(out["raw_content"], str) and "content" not in out
+    parsed = json.loads(out["raw_content"])  # still valid JSON
+    assert 0 < len(parsed["법령"]["조문"]) < 400
+    assert out["truncated"] is True and _wire(out) <= SLIM_MAX_BYTES
+    assert "raw_content_partial" not in out
+
+
+@pytest.mark.unit
+def test_xml_raw_content_cut_at_closing_tag(slim_env):
+    xml = "<법령>" + "".join(f"<조문><내용>{'가' * 100}</내용></조문>" for i in range(2000)) + "</법령>"
+    out = enforce_slim_limit({"status": "ok", "raw_content": xml})
+    assert out["raw_content_partial"] is True
+    assert out["raw_content"].endswith("</조문>") or out["raw_content"].endswith("</내용>")
+    assert _wire(out) <= SLIM_MAX_BYTES
+
+
+@pytest.mark.unit
+def test_flat_dict_of_scalar_strings_fits(slim_env):
+    big = {"status": "ok", "id": "42", "request_id": "r"}
+    big.update({f"k{i}": "가" * 201 for i in range(400)})
+    out = enforce_slim_limit(big)
+    assert _wire(out) <= SLIM_MAX_BYTES and out["truncated"] is True
+    assert (out["status"], out["id"], out["request_id"]) == ("ok", "42", "r")
+
+
+@pytest.mark.unit
+def test_budget_counts_wire_escaping(slim_env):
+    big = {"status": "ok", "rows": [{"t": '"' * 300} for _ in range(100)]}
+    assert _wire(enforce_slim_limit(big)) <= SLIM_MAX_BYTES
+
+
+@pytest.mark.unit
+def test_note_names_only_real_params(slim_env):
+    import inspect
+    import lexlink.server as server_mod
+    from lexlink._helpers import slim_hint
+    server = server_mod.create_server()
+
+    def hint(name):
+        return slim_hint(inspect.signature(server._tool_manager.get_tool(name).fn).parameters)
+
+    assert "jo" in hint("law_service")
+    assert "jo" not in hint("trty_service") and "SLIM_RESPONSE 해제" in hint("trty_service")
+    assert 'sections="summary"' in hint("prec_service")
