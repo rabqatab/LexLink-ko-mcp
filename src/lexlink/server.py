@@ -132,7 +132,7 @@ Use `sections="full"` only when the complete judgment text is specifically neede
 
 **Public Legal Assistance:**
 - legal_resolver: Given a situation, find all applicable laws, precedents, and interpretations in one call
-- simplify_article: Get a law article with legal terms replaced by everyday Korean (쉬운 법률)
+- simplify_article: Get a law article with a glossary of database synonym links for its legal terms (text is not rewritten)
 - check_precedent_odds: Find precedent statistics and key outcome factors for a legal question
 - law_amendment_summary: See all revisions of a law in a date range
 - article_amendment_diff: Compare how a specific article changed between two versions
@@ -3843,11 +3843,12 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         ctx: Context = None,
     ) -> dict:
         """
-        Get a law article with legal terms replaced by everyday Korean (쉬운 법률 읽기).
+        Get a law article plus a glossary of its legal terms (쉬운 법률 읽기).
 
         Fetches a law article (heading + 항 + 호 + 목, from the 현행 version of the
-        law) and annotates legal jargon with plain Korean equivalents using the
-        official 법제처 legal terminology database.
+        law) and lists, in term_glossary, exact 동의어 links from the 법제처 legal
+        terminology database. The article text is never rewritten: simplified_text
+        equals original_text, and the links may differ from the legal meaning.
 
         Args:
             law_name: Law name (e.g., "민법", "근로기준법")
@@ -3858,7 +3859,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             type: Response format - "JSON" (default), "XML", or "HTML"
 
         Returns:
-            Original text, simplified text with inline annotations, and term glossary
+            Original text (unchanged), and a term glossary of database synonym links
 
         Examples:
             >>> simplify_article(law_name="민법", article=750)
@@ -3885,16 +3886,16 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         client = _get_client()
 
         # Step 3: Extract legal terms
-        terms = extract_legal_terms(original_text)
+        terms = list(dict.fromkeys(extract_legal_terms(original_text)))
 
         # Step 4: Look up each term in knowledge base
         glossary = []
-        simplified = original_text
         terms_mapped = 0
 
         for term in terms:
             plain_korean = ""
             relation = ""
+            ambiguous = False
             source = "not_found"
 
             # Try 법령용어→일상용어
@@ -3911,7 +3912,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                     import json as _json
                     td = _json.loads(term_raw)
                     root = list(td.values())[0] if td else {}
-                    plain_korean, relation = pick_linked_term(root, "일상용어명")
+                    plain_korean, relation, ambiguous = pick_linked_term(root, "일상용어명", term)
                     if plain_korean:
                         source = "법령용어DB"
             except:
@@ -3931,22 +3932,26 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                         import json as _json
                         td2 = _json.loads(term_raw2)
                         root2 = list(td2.values())[0] if td2 else {}
-                        plain_korean, relation = pick_linked_term(root2, "법령용어명", exclude=term)
+                        plain_korean, relation, amb2 = pick_linked_term(root2, "법령용어명", term)
+                        ambiguous = ambiguous or amb2
                         if plain_korean:
                             source = "일상용어DB"
                 except:
                     pass
 
-            glossary.append({
+            entry = {
                 "term": term,
                 "plain_korean": plain_korean,
                 "relation": relation,
                 "source": source,
-            })
+            }
+            if ambiguous and not plain_korean:
+                entry["source"] = "ambiguous"
+                entry["note"] = "동음이의어가 여러 개라 뜻을 특정할 수 없어 연결하지 않았습니다"
+            glossary.append(entry)
 
             if plain_korean:
                 terms_mapped += 1
-                simplified = simplified.replace(term, f"{term}({plain_korean})")
 
         article_display = f"제{article}조" if article_branch == 0 else f"제{article}조의{article_branch}"
 
@@ -3965,17 +3970,17 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 "law_type": current.get("법령구분명", ""),
             },
             "original_text": original_text,
-            "simplified_text": simplified,
+            "simplified_text": original_text,
             "term_glossary": glossary,
             "terms_found": len(terms),
             "terms_mapped": terms_mapped,
             "disclaimer": "용어 해설은 법제처 법령용어 데이터베이스 기준이며, 맥락에 따라 의미가 다를 수 있습니다.",
         }
-        if terms and not terms_mapped:
-            result["note"] = (
-                "추출된 용어에 대해 법령용어DB에 동의어·상위어 연계가 없어 본문을 바꾸지 않았습니다 "
-                "(반의어·하위어·연관어는 오해를 줄 수 있어 주석에 쓰지 않습니다)."
-            )
+        result["note"] = (
+            "simplified_text는 법률 원문과 같으며 본문을 바꾸지 않았습니다. term_glossary의 항목은 "
+            "법령용어DB의 동의어 연결일 뿐 법적 의미와 다를 수 있으므로 원문 해석에 쓰지 마세요."
+            + ("" if terms_mapped else " 이번 조문에서는 연결된 용어가 없었습니다.")
+        )
         return result
 
     # ==================== TOOL 48: law_amendment_summary ====================

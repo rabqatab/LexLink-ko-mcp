@@ -144,23 +144,74 @@ def test_committee_service_real_body_is_ok(monkeypatch):
 
 LSTRM_ROOT = {
     "검색결과개수": "1", "target": "lstrmRlt",
-    "법령용어": {"id": "1", "연계용어": [
+    "법령용어": {"id": "1", "법령용어명": "임대인", "연계용어": [
         {"일상용어명": "범죄", "용어관계": "연관어"},
         {"일상용어명": "노동자", "용어관계": "하위어"},
         {"일상용어명": "세입자", "용어관계": "상위어"},
-        {"일상용어명": "임차인", "용어관계": "동의어"},
+        {"일상용어명": "집주인", "용어관계": "동의어"},
     ]},
 }
 
 
 @pytest.mark.unit
-def test_pick_linked_term_reads_nested_links_and_prefers_synonyms():
-    assert pick_linked_term(LSTRM_ROOT, "일상용어명") == ("임차인", "동의어")
-    only_loose = {"법령용어": {"연계용어": [{"일상용어명": "범죄", "용어관계": "연관어"}]}}
-    assert pick_linked_term(only_loose, "일상용어명") == ("", "")
+def test_pick_linked_term_only_exact_synonyms():
+    assert pick_linked_term(LSTRM_ROOT, "일상용어명", "임대인") == ("집주인", "동의어", False)
+    loose = {"법령용어": {"연계용어": [{"일상용어명": "범죄", "용어관계": "연관어"},
+                                      {"일상용어명": "세입자", "용어관계": "상위어"}]}}
+    assert pick_linked_term(loose, "일상용어명", "x") == ("", "", False)
     single = {"법령용어": {"연계용어": {"일상용어명": "정당이용", "용어관계": "동의어"}}}
-    assert pick_linked_term(single, "일상용어명") == ("정당이용", "동의어")
-    assert pick_linked_term(single, "일상용어명", exclude="정당이용") == ("", "")
+    assert pick_linked_term(single, "일상용어명", "공정한이용") == ("정당이용", "동의어", False)
+    assert pick_linked_term(single, "일상용어명", "정당이용") == ("", "", False)
+    # entity named differently from the requested term: not an exact match
+    assert pick_linked_term(LSTRM_ROOT, "일상용어명", "다른말") == ("", "", False)
+
+
+@pytest.mark.unit
+def test_pick_linked_term_homonym_list_is_ambiguous():
+    root = {"법령용어": [
+        {"id": "1", "법령용어명": "채권", "연계용어": {"일상용어명": "빚", "용어관계": "동의어"}},
+        {"id": "2", "법령용어명": "채권", "연계용어": {"일상용어명": "증권", "용어관계": "동의어"}},
+    ]}
+    assert pick_linked_term(root, "일상용어명", "채권") == ("", "", True)
+    one = {"법령용어": [root["법령용어"][0]]}
+    assert pick_linked_term(one, "일상용어명", "채권") == ("빚", "동의어", False)
+
+
+@pytest.mark.unit
+def test_body_is_all_null_ignores_nested_real_values():
+    nested = json.dumps({"S": {"사건명": "null", "결정문일련번호": "9",
+                               "주문": {"내용": "피심인은 시정명령을 받는다"}}}, ensure_ascii=False)
+    assert not body_is_all_null(nested, "JSON", "9")
+    listed = json.dumps({"S": {"사건명": "null", "목록": [{"내용": "실제 값"}]}}, ensure_ascii=False)
+    assert not body_is_all_null(listed, "JSON", "9")
+
+
+@pytest.mark.unit
+def test_prec_search_xml_raw_content_trimmed(monkeypatch):
+    rows = "".join(
+        f'<prec id="{i + 1}"><사건명>손해배상 {i}</사건명><판례일련번호>{1000 + i}</판례일련번호></prec>'
+        for i in range(100))
+    body = f'<?xml version="1.0" encoding="UTF-8"?><PrecSearch><totalCnt>100</totalCnt>{rows}</PrecSearch>'
+    out = _tool(monkeypatch, "prec_search", body)(query="손해배상", display=3, type="XML")
+    assert out["raw_content"].count("<prec ") == 3
+    assert len(out["raw_content"]) < 2000
+    assert "<판례일련번호>" in out["raw_content"]
+
+
+@pytest.mark.unit
+def test_simplify_article_never_rewrites_text(monkeypatch):
+    from test_amendment import FakeClient
+
+    def make_client(*a, **k):
+        return FakeClient()
+
+    monkeypatch.setattr(server_mod, "LawAPIClient", make_client)
+    monkeypatch.setattr(server_mod, "extract_legal_terms", lambda text: ["공정한이용", "공정한이용"])
+    out = server_mod.create_server()._tool_manager.get_tool("simplify_article").fn(
+        law_name="저작권법", article=35, article_branch=5)
+    assert out["simplified_text"] == out["original_text"]
+    assert [g["term"] for g in out["term_glossary"]] == ["공정한이용"]  # no repeated entries
+    assert "법적 의미와 다를 수 있" in out["note"]
 
 
 DRLAW_HTML = """<html><body><div class="lelitop"><div class="num">총<strong>981</strong>건</div></div>

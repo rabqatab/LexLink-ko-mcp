@@ -221,7 +221,17 @@ def body_is_all_null(raw: str, response_type: str, echo_id: str = "") -> bool:
     root = next(iter(data.values())) if isinstance(data, dict) and len(data) == 1 else data
     if not isinstance(root, dict):
         return False
-    values = [str(v).strip() for v in root.values() if isinstance(v, (str, int)) and str(v).strip() != echo_id]
+    def leaves(obj):
+        if isinstance(obj, dict):
+            for v in obj.values():
+                yield from leaves(v)
+        elif isinstance(obj, list):
+            for v in obj:
+                yield from leaves(v)
+        elif obj is not None:
+            yield str(obj).strip()
+
+    values = [v for v in leaves(root) if v != echo_id]
     return "null" in values and all(v in ("", "null") for v in values)
 
 
@@ -231,13 +241,17 @@ def trim_raw_to_ranked(response: dict, response_type: str) -> dict:
     ``run_search`` over-fetches up to 100 rows to re-rank; without this the whole
     window (or, past the end, an unrelated upstream page) stays in ``raw_content``
     next to the requested page. Rows keep every upstream field (including ``id``).
-    XML/HTML bodies, errors and responses without ``ranked_data`` are left as is.
+    XML keeps the matching ``<tag id="n">`` elements in ranked order (left as is when
+    they cannot be matched by ``id``). HTML bodies, errors and responses without
+    ``ranked_data`` are left as is.
     """
     ranked = response.get("ranked_data")
     raw = response.get("raw_content")
-    if (response_type != "JSON" or response.get("status") != "ok"
+    if (response_type not in ("JSON", "XML") or response.get("status") != "ok"
             or not isinstance(ranked, dict) or not isinstance(raw, str)):
         return response
+    if response_type == "XML":
+        return _trim_xml_raw(response, ranked, raw)
     try:
         data = json.loads(raw)
     except ValueError:
@@ -248,6 +262,35 @@ def trim_raw_to_ranked(response: dict, response_type: str) -> dict:
     if not isinstance(data[root_key], dict):
         return response
     response["raw_content"] = json.dumps({root_key: ranked}, ensure_ascii=False)
+    return response
+
+
+def _trim_xml_raw(response: dict, ranked: dict, raw: str) -> dict:
+    import xml.etree.ElementTree as ET
+
+    try:
+        root = ET.fromstring(raw)
+    except ET.ParseError:
+        return response
+    for key, value in ranked.items():
+        rows = value if isinstance(value, list) else [value]
+        if not (rows and all(isinstance(r, dict) and r.get("id") for r in rows)):
+            continue
+        elems = {e.get("id"): e for e in root.findall(key)}
+        if not elems or any(str(r["id"]) not in elems for r in rows):
+            return response
+        for e in list(elems.values()):
+            root.remove(e)
+        for r in rows:
+            root.append(elems[str(r["id"])])
+        response["raw_content"] = '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(root, encoding="unicode")
+        return response
+    # no rows (e.g. past the end): drop any stray rows of the over-fetched page
+    for key, value in ranked.items():
+        if isinstance(value, list) and not value:
+            for e in root.findall(key):
+                root.remove(e)
+            response["raw_content"] = '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(root, encoding="unicode")
     return response
 
 

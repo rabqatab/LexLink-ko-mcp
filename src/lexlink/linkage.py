@@ -194,30 +194,43 @@ def attach_parsed_data(response: dict, response_type: str) -> dict:
     return response
 
 
-# Relations safe to show as a plain-language gloss; 반의어/하위어/연관어 would mislead.
-GLOSS_RELATIONS = ("동의어", "상위어")
+# Only exact synonyms are reported: 상위어/하위어/연관어/반의어 links can invert or shift the legal sense.
+GLOSS_RELATIONS = ("동의어",)
 
 
-def pick_linked_term(root: Any, name_key: str, exclude: str = "") -> tuple[str, str]:
-    """Pick a gloss from a lstrmRlt/dlytrmRlt body root as ``(name, relation)``.
+def pick_linked_term(root: Any, name_key: str, term: str = "") -> tuple[str, str, bool]:
+    """Pick a synonym from a lstrmRlt/dlytrmRlt body root as ``(name, relation, ambiguous)``.
 
-    The upstream shape is ``root[<법령용어|일상용어>]["연계용어"]`` (list, or a dict
-    for a single link). Only 동의어, then 상위어 links are used; ``("", "")`` if none.
+    The upstream shape is ``root[<법령용어|일상용어>]`` = one dict, or a list of dicts
+    for homonyms, each holding ``연계용어`` (list, or a dict for a single link).
+    Entities whose own name differs from ``term`` are ignored (exact match only). With
+    several homonym entities the sense is unknown, so nothing is picked and
+    ``ambiguous`` is True. Only 동의어 links are used; a link equal to ``term`` is skipped.
     """
     if not isinstance(root, dict):
-        return "", ""
-    links: list = []
+        return "", "", False
+    entities: list = []
     for value in root.values():
-        if isinstance(value, dict) and "연계용어" in value:
-            linked = value["연계용어"]
-            links.extend(linked if isinstance(linked, list) else [linked])
+        for entity in (value if isinstance(value, list) else [value]):
+            if not (isinstance(entity, dict) and "연계용어" in entity):
+                continue
+            own = str(entity.get("법령용어명") or entity.get("일상용어명") or "").strip()
+            if term and own and own != term:
+                continue
+            entities.append(entity)
+    if len(entities) > 1:
+        return "", "", True
+    if not entities:
+        return "", "", False
+    linked = entities[0]["연계용어"]
+    links = linked if isinstance(linked, list) else [linked]
     for relation in GLOSS_RELATIONS:
         for link in links:
             if isinstance(link, dict) and link.get("용어관계") == relation:
                 name = str(link.get(name_key) or "").strip()
-                if name and name != exclude:
-                    return name, relation
-    return "", ""
+                if name and name != term:
+                    return name, relation, False
+    return "", "", False
 
 
 def parse_drlaw_html(html: str) -> Optional[dict]:
