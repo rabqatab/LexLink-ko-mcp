@@ -1,0 +1,30 @@
+{
+  "licBylSearch": {
+    "resultMsg": "success",
+    "licbyl": {
+      "관련법령명": "일본ㆍ중국 및 핀란드산 도공(Coated) 인쇄용지에 대한 덤핑방지관세 부과에 관한 규칙",
+      "관련법령ID": "014631",
+      "소관부처명": "재정경제부",
+      "공포번호": "01040",
+      "별표서식파일링크": "/LSW/flDownload.do?flSeq=138693321",
+      "법령종류": "기획재정부령",
+      "제개정구분명": "제정",
+      "id": "1",
+      "별표일련번호": "16228175",
+      "별표법령상세링크": "/DRF/lawService.do?OC=test&target=licbyl&ID=16228175&type=HTML&mobileYn=",
+      "별표종류": "별표",
+      "별표번호": "000000",
+      "별표서식PDF파일링크": "/LSW/flDownload.do?flSeq=138693323",
+      "별표명": "부과대상 물품의 공급자별 덤핑방지관세율(제3조 관련)",
+      "관련법령일련번호": "261255",
+      "공포일자": "20240318"
+    },
+    "키워드": "a",
+    "page": "1",
+    "resultCode": "00",
+    "target": "licbyl",
+    "totalCnt": "1",
+    "section": "lawNm",
+    "numOfRows": "1"
+  }
+}

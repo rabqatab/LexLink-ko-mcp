@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+import xml.etree.ElementTree as ET
 from typing import Annotated, Optional, Union
 from urllib.parse import unquote
 
@@ -28,6 +29,16 @@ from .validation import (
     response_has_article, extract_law_name, format_article_number,
 )
 from .parser import parse_xml_response, extract_law_list, update_law_list
+from .cache import get_cache
+from .law_extras import (
+    DEL_HST_KINDS, LICBYL_KINDS, LICBYL_SEARCH, LSTRM_DIC_KINDS, LSTRM_SORTS,
+    as_list, filter_abbreviations, normalize_jo_info, normalize_ranked_rows,
+    normalize_thdcmp_knd, oldnew_has_none, oldnew_versions, parse_json_root,
+    parse_lstrm_xml, select_thdcmp_article, thdcmp_anchor, thdcmp_has_no_comparison,
+    thdcmp_mismatch, total_count, validate_choice, validate_digits, validate_display,
+    validate_law_list_filters, validate_list_type, validate_org, validate_yyyymmdd,
+    validate_ymd_range,
+)
 from .ranking import detect_query_language, should_apply_ranking, rank_search_results
 from .resolver import get_resolver
 from ._helpers import (
@@ -36,7 +47,7 @@ from ._helpers import (
     extract_order, classify_order, extract_key_factors, extract_legal_terms, compute_text_diff, run_coroutine_sync,
     compact_limit, slim_limited, slim_enabled, mark_slim_cut, low_relevance_warning,
     rename_row_ids_to_rank, run_ranked_paging, validate_paging, OVER_FETCH_WINDOW,
-    add_no_more_results_hint, add_no_results_guidance, body_is_all_null,
+    add_no_more_results_hint, add_no_results_guidance, body_is_all_null, NO_MORE_RESULTS_HINT,
     trim_raw_to_ranked,
     NO_RESULTS_MESSAGE, NO_RESULTS_HINTS, NO_RESULTS_BODY_HINT, OUTCOME_NOTE,
 )
@@ -136,6 +147,14 @@ Use `sections="full"` only when the complete judgment text is specifically neede
 
 **Special Administrative Appeals (특별행정심판):**
 - special_decc_search/service: Decisions from 4 special tribunals
+
+**Amendment History & Comparison (개정 이력·신구법·3단 비교):**
+- oldAndNew_search/service: 신구법 대비 (old vs new articles of one revision)
+- thdCmp_search/service: 3단 비교 (법률-시행령-시행규칙); very large without `jo`, always pass jo
+- lsJoHstInf_search: laws whose articles changed on a date/period; lsHstInf_search: laws changed on a day
+- delHst_search: deleted-data log; lsAbrv_search: law-name abbreviations (filtered here, upstream returns 2.3 MB)
+- licbyl_search: 별표·서식 list (links only, no file content)
+- lstrm_search/service: legal-term DICTIONARY with definitions (lstrm_ai_search gives related-term links, no definitions)
 
 **Public Legal Assistance:**
 - legal_resolver: Given a situation, find all applicable laws, precedents, and interpretations in one call
@@ -5370,6 +5389,852 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         out["caveats"] = caveats
         return out
 
+    # ==================== PHASE 11: HISTORY, COMPARISON, APPENDIX, DICTIONARY ====================
+
+    def _run_list(target: str, snake_params: dict, response_type: str, display: int, *, query: str = "") -> dict:
+        """run_search without ranking or alias resolution (``query`` is only passed for law-name lists)."""
+        return run_search(
+            get_client=_get_client, target=target, query=query,
+            snake_params=snake_params, response_type=response_type, display=display,
+        )
+
+    def _guard_past_last_page(response: dict, page: int, first_page) -> dict:
+        """lsJoHstInf / lsHstInf / delHst answer a page past the end with totalCnt 0, which
+        add_no_results_guidance would report as "no results". Re-ask for page 1 to tell them apart."""
+        if page <= 1 or response.get("status") != "ok" or total_count(response) != 0:
+            return response
+        first = first_page()
+        total = total_count(first)
+        if first.get("status") != "ok" or not total:
+            return response
+        response.pop("message", None)
+        response["warning"] = "page_out_of_range"
+        response["hints"] = [
+            f"page={page}는 마지막 페이지를 넘었습니다 (전체 {total}건). 더 낮은 page를 사용하세요",
+            NO_MORE_RESULTS_HINT,
+        ]
+        if isinstance(response.get("ranked_data"), dict):
+            response["ranked_data"]["totalCnt"] = str(total)
+        return response
+
+    # ==================== TOOL 56: oldAndNew_search ====================
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
+    def oldAndNew_search(
+        query: Optional[str] = None,
+        display: int = 20,
+        page: int = 1,
+        sort: Optional[str] = None,
+        ef_yd: Optional[str] = None,
+        anc_yd: Optional[str] = None,
+        date: Optional[Union[str, int]] = None,
+        nb: Optional[Union[str, int]] = None,
+        anc_no: Optional[str] = None,
+        rr_cls_cd: Optional[Union[str, int]] = None,
+        org: Optional[str] = None,
+        knd: Optional[Union[str, int]] = None,
+        gana: Optional[str] = None,
+        oc: Optional[str] = None,
+        type: str = "JSON",
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Search laws that have an old/new comparison table (신구법 대비 목록 조회).
+
+        Each row is one law revision; its 신구법일련번호 is the MST to pass to
+        oldAndNew_service (신구법ID is the 법령ID). `query` is a substring match on
+        the law name: "민법" also returns "난민법", so compare 신구법명 yourself.
+
+        Args:
+            query: Law name keyword (optional; omit to list everything)
+            display: Number of results per page (max 100, default 20)
+            page: Page number (1-based, default 1)
+            sort: lasc/ldes (law name), dasc/ddes (공포일자), nasc/ndes (공포번호), efasc/efdes (시행일자)
+            ef_yd: 시행일자 range YYYYMMDD~YYYYMMDD
+            anc_yd: 공포일자 range YYYYMMDD~YYYYMMDD
+            date: 공포일자 YYYYMMDD
+            nb: 공포번호
+            anc_no: 공포번호 or range (10000~20000)
+            rr_cls_cd: 제개정 종류 코드 (300201 제정, 300202 일부개정, 300203 전부개정, 300204 폐지,
+                300205 폐지제정, 300206 일괄개정, 300207 일괄폐지, 300208 기타, 300209 타법개정, 300210 타법폐지)
+            org: 소관부처코드
+            knd: 법령종류 코드
+            gana: Dictionary-order initial (ga, na, da, ...)
+            oc: Optional OC override (defaults to env var)
+            type: Response format - "JSON" (default), "XML", or "HTML"
+            ctx: MCP context (injected automatically)
+
+        Returns:
+            ranked_data.oldAndNew (always a list; zero rows is a normal `ok` with
+            warning "no_results"), or a structured error. Bad dates or codes are
+            VALIDATION_ERROR (the upstream would answer them with 0 results).
+
+        Examples:
+            >>> oldAndNew_search(query="가사소송법")
+            >>> oldAndNew_search(ef_yd="20260101~20261231", rr_cls_cd="300203")
+        """
+        type = validate_list_type(type, tool="oldAndNew_search")
+        page, display = validate_display(page, display)
+        filters = validate_law_list_filters(
+            sort=sort, ef_yd=ef_yd, anc_yd=anc_yd, date=date, nb=nb, anc_no=anc_no,
+            rr_cls_cd=rr_cls_cd, org=org, knd=knd, gana=gana,
+        )
+        resolved_oc = resolve_oc(override_oc=oc)
+        snake_params = {
+            "oc": resolved_oc, "target": "oldAndNew", "type": type,
+            "display": display, "page": page, **filters,
+        }
+        q = (query or "").strip()
+        if q:
+            snake_params["query"] = q
+        response = _run_list("oldAndNew", snake_params, type, display, query=q)
+        return normalize_ranked_rows(response, "oldAndNew")
+
+    # ==================== TOOL 57: oldAndNew_service ====================
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
+    def oldAndNew_service(
+        id: Optional[Union[str, int]] = None,
+        mst: Optional[Union[str, int]] = None,
+        oc: Optional[str] = None,
+        type: str = "JSON",
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Old/new article comparison of one law revision (신구법 대비 본문 조회).
+
+        Shows the articles of a revision (신조문목록) next to the articles they
+        replaced (구조문목록), plus the base info of both revisions. The upstream
+        offers no article selector; a body is typically 2-10 KB.
+
+        An unknown id/mst, and a revision that has no comparison table, both give
+        NOT_FOUND: the upstream does not tell them apart.
+
+        Args:
+            id: 법령ID (either id or mst is required). Without mst the upstream picks
+                the revision itself (observed: the current one); use mst for a given revision.
+            mst: 법령일련번호 = 신구법일련번호 from oldAndNew_search
+            oc: Optional OC override (defaults to env var)
+            type: Response format - "JSON" (default), "XML", or "HTML"
+            ctx: MCP context (injected automatically)
+
+        Returns:
+            raw_content plus `versions` (old/new law_id, mst, 시행일자, 공포일자) from the
+            JSON body, or a structured error.
+
+        Examples:
+            >>> oldAndNew_service(mst="284415")   # 민법
+            >>> oldAndNew_service(id="001206")    # 가사소송법
+        """
+        (id, mst) = stringify_id(id, mst)
+        id = validate_digits(id, "id")
+        mst = validate_digits(mst, "mst")
+        if not id and not mst:
+            raise ValueError("Either 'id' or 'mst' parameter is required")
+        type = validate_list_type(type, tool="oldAndNew_service")
+        resolved_oc = resolve_oc(override_oc=oc)
+        snake_params = {"oc": resolved_oc, "target": "oldAndNew", "type": type}
+        if id: snake_params["id"] = id
+        if mst: snake_params["mst"] = mst
+        response = run_service(get_client=_get_client, target="oldAndNew",
+                               snake_params=snake_params, response_type=type)
+        if response.get("status") != "ok" or type != "JSON":
+            return response
+        _, root = parse_json_root(response.get("raw_content", ""))
+        if root is None:
+            return response
+        if oldnew_has_none(root):
+            return create_error_response(
+                ErrorCode.NOT_FOUND, "이 법령(개정본)에는 신구법 대비표가 없습니다.",
+                hints=["신구법 목록(oldAndNew_search)에 나온 신구법일련번호(MST)를 사용하세요"],
+                request_id=response.get("request_id"),
+            )
+        response = dict(response)
+        versions = oldnew_versions(root)
+        response["versions"] = versions
+        if mst and versions.get("new", {}).get("mst") not in ("", None, mst):
+            response["warning"] = (f"요청한 MST {mst}와 응답의 신조문 법령일련번호 "
+                                   f"{versions['new']['mst']}가 다릅니다. versions를 확인하세요")
+        return response
+
+    # ==================== TOOL 58: lsJoHstInf_search ====================
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
+    def lsJoHstInf_search(
+        reg_dt: Optional[Union[str, int]] = None,
+        from_reg_dt: Optional[Union[str, int]] = None,
+        to_reg_dt: Optional[Union[str, int]] = None,
+        id: Optional[Union[str, int]] = None,
+        jo: Optional[Union[str, int]] = None,
+        org: Optional[str] = None,
+        display: int = 20,
+        page: int = 1,
+        oc: Optional[str] = None,
+        type: str = "JSON",
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Laws whose articles were amended on a date or in a period (일자별 조문 개정 이력 목록 조회).
+
+        One row per law revision, with the changed articles in `조문정보.jo[]`
+        (조문번호 6 digits, 변경사유, 조문개정일, 조문시행일, links). For the change history
+        of ONE article across all revisions use `chain_amendment_track` /
+        `article_amendment_diff` (they call the per-article half of this target).
+
+        A date is required: without reg_dt or from_reg_dt/to_reg_dt the upstream
+        answers 0 rows, which would read as "no amendments". `totalCnt` counts laws,
+        not articles. `jo` filters only the 조문정보 content: revisions where that article
+        did not change are still listed, with an empty `조문정보.jo`.
+
+        Args:
+            reg_dt: 조문 개정일 YYYYMMDD (exclusive with from_reg_dt/to_reg_dt)
+            from_reg_dt: Period start YYYYMMDD (alone: from that day on)
+            to_reg_dt: Period end YYYYMMDD
+            id: 법령ID filter (e.g., "001706" 민법)
+            jo: Article filter (35, "35의5", "제35조의5", "003505")
+            org: 소관부처코드
+            display: Number of results per page (max 100, default 20)
+            page: Page number (1-based, default 1)
+            oc: Optional OC override (defaults to env var)
+            type: Response format - "JSON" (default) or "XML" (HTML is not supported)
+            ctx: MCP context (injected automatically)
+
+        Returns:
+            ranked_data.law (always a list; 조문정보.jo always a list) or a structured error.
+
+        Examples:
+            >>> lsJoHstInf_search(id="001706", from_reg_dt="20200101", to_reg_dt="20261231")
+            >>> lsJoHstInf_search(reg_dt="20250401", org="1352000")
+        """
+        type = validate_list_type(type, ("JSON", "XML"), "lsJoHstInf_search")
+        page, display = validate_display(page, display)
+        reg_dt = validate_yyyymmdd(reg_dt, "reg_dt") if reg_dt not in (None, "") else None
+        from_reg_dt = validate_yyyymmdd(from_reg_dt, "from_reg_dt") if from_reg_dt not in (None, "") else None
+        to_reg_dt = validate_yyyymmdd(to_reg_dt, "to_reg_dt") if to_reg_dt not in (None, "") else None
+        if not (reg_dt or from_reg_dt or to_reg_dt):
+            raise ToolValidationError(
+                "reg_dt or from_reg_dt/to_reg_dt is required",
+                hints=["날짜 없이 호출하면 업스트림이 0건을 응답해 '개정 없음'으로 오해될 수 있어 막았습니다"],
+            )
+        if reg_dt and (from_reg_dt or to_reg_dt):
+            raise ToolValidationError("Use either reg_dt or from_reg_dt/to_reg_dt, not both")
+        if from_reg_dt and to_reg_dt and from_reg_dt > to_reg_dt:
+            raise ToolValidationError(f"from_reg_dt must be <= to_reg_dt, got: {from_reg_dt} > {to_reg_dt}")
+        (id, jo) = stringify_id(id, jo)
+        id = validate_digits(id, "id")
+        jo = _normalize_jo_arg(jo)
+        org = validate_org(org)
+        resolved_oc = resolve_oc(override_oc=oc)
+        snake_params = {
+            "oc": resolved_oc, "target": "lsJoHstInf", "type": type,
+            "display": display, "page": page,
+        }
+        for key, value in (("reg_dt", reg_dt), ("from_reg_dt", from_reg_dt), ("to_reg_dt", to_reg_dt),
+                           ("id", id), ("jo", jo), ("org", org)):
+            if value: snake_params[key] = value
+        response = _run_list("lsJoHstInf", snake_params, type, display)
+        response = _guard_past_last_page(
+            response, page, lambda: _run_list("lsJoHstInf", {**snake_params, "page": 1}, type, display))
+        if type == "JSON":
+            normalize_ranked_rows(response, "law")
+            normalize_jo_info(response)
+        if jo and response.get("status") == "ok":
+            response["note"] = ("jo는 조문정보만 걸러냅니다: 해당 조문이 바뀌지 않은 개정본도 조문정보.jo가 빈 채로 "
+                                "목록에 나옵니다. jo가 비어 있지 않은 행만 그 조문의 개정입니다.")
+        return response
+
+    # ==================== TOOL 59: lsHstInf_search ====================
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
+    def lsHstInf_search(
+        reg_dt: Union[str, int],
+        org: Optional[str] = None,
+        display: int = 20,
+        page: int = 1,
+        oc: Optional[str] = None,
+        type: str = "JSON",
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Laws whose data changed on a given day (법령 변경이력 목록 조회).
+
+        Lists every law revision that law.go.kr registered or changed on `reg_dt`
+        (법령 변경일). The change day is not 공포일자 or 시행일자: a revision can be
+        registered before it is promulgated, so compare those columns yourself.
+        Rows carry 법령ID, 법령일련번호 (MST), 현행연혁코드 (현행/연혁/시행예정),
+        제개정구분명 and the dates. For what changed inside a law use
+        lsJoHstInf_search, oldAndNew_service or law_amendment_summary.
+
+        Args:
+            reg_dt: Change day YYYYMMDD (required; the upstream answers 0 rows without it)
+            org: 소관부처코드
+            display: Number of results per page (max 100, default 20)
+            page: Page number (1-based, default 1)
+            oc: Optional OC override (defaults to env var)
+            type: Response format - "JSON" (default), "XML", or "HTML"
+            ctx: MCP context (injected automatically)
+
+        Returns:
+            ranked_data.law (always a list; zero rows is `ok` with warning "no_results")
+            or a structured error. A page past the last one is reported as
+            warning "page_out_of_range" (the upstream says totalCnt 0 there).
+
+        Examples:
+            >>> lsHstInf_search(reg_dt="20260317", display=50)
+        """
+        type = validate_list_type(type, tool="lsHstInf_search")
+        page, display = validate_display(page, display)
+        reg_dt = validate_yyyymmdd(reg_dt, "reg_dt")
+        org = validate_org(org)
+        resolved_oc = resolve_oc(override_oc=oc)
+        snake_params = {
+            "oc": resolved_oc, "target": "lsHstInf", "type": type,
+            "reg_dt": reg_dt, "display": display, "page": page,
+        }
+        if org: snake_params["org"] = org
+        response = _run_list("lsHstInf", snake_params, type, display)
+        response = _guard_past_last_page(
+            response, page, lambda: _run_list("lsHstInf", {**snake_params, "page": 1}, type, display))
+        return normalize_ranked_rows(response, "law")
+
+    # ==================== TOOL 60: delHst_search ====================
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
+    def delHst_search(
+        knd: Optional[Union[str, int]] = None,
+        del_dt: Optional[Union[str, int]] = None,
+        frm_dt: Optional[Union[str, int]] = None,
+        to_dt: Optional[Union[str, int]] = None,
+        display: int = 20,
+        page: int = 1,
+        oc: Optional[str] = None,
+        type: str = "JSON",
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Log of data law.go.kr deleted (삭제 데이터 목록 조회).
+
+        Each row is a deleted record: 일련번호 (the serial it had, e.g. an MST for
+        법령), 구분명 (법령/행정규칙/자치법규/학칙공단) and 삭제일자. Use it to check
+        whether a serial number you hold was removed; it carries no names or text.
+
+        Args:
+            knd: Data kind - 1 법령, 2 행정규칙, 3 자치법규, 13 학칙공단 (omit for all)
+            del_dt: Deletion day YYYYMMDD (exclusive with frm_dt/to_dt)
+            frm_dt: Range start YYYYMMDD (frm_dt and to_dt go together)
+            to_dt: Range end YYYYMMDD
+            display: Number of results per page (max 100, default 20)
+            page: Page number (1-based, default 1)
+            oc: Optional OC override (defaults to env var)
+            type: Response format - "JSON" (default) or "XML" (HTML is not supported)
+            ctx: MCP context (injected automatically)
+
+        Returns:
+            ranked_data.law (always a list; unfiltered it is about 14,000 rows, so page it)
+            or a structured error. A page past the last one is reported as
+            warning "page_out_of_range" (the upstream says totalCnt 0 there).
+
+        Examples:
+            >>> delHst_search(knd=1, frm_dt="20250101", to_dt="20251231")
+        """
+        type = validate_list_type(type, ("JSON", "XML"), "delHst_search")
+        page, display = validate_display(page, display)
+        knd = validate_choice(knd, "knd", DEL_HST_KINDS)
+        del_dt = validate_yyyymmdd(del_dt, "del_dt") if del_dt not in (None, "") else None
+        frm_dt = validate_yyyymmdd(frm_dt, "frm_dt") if frm_dt not in (None, "") else None
+        to_dt = validate_yyyymmdd(to_dt, "to_dt") if to_dt not in (None, "") else None
+        if bool(frm_dt) != bool(to_dt):
+            raise ToolValidationError("frm_dt and to_dt must be given together")
+        if del_dt and frm_dt:
+            raise ToolValidationError("Use either del_dt or frm_dt/to_dt, not both")
+        if frm_dt and frm_dt > to_dt:
+            raise ToolValidationError(f"frm_dt must be <= to_dt, got: {frm_dt} > {to_dt}")
+        resolved_oc = resolve_oc(override_oc=oc)
+        snake_params = {
+            "oc": resolved_oc, "target": "delHst", "type": type,
+            "display": display, "page": page,
+        }
+        for key, value in (("knd", knd), ("del_dt", del_dt), ("frm_dt", frm_dt), ("to_dt", to_dt)):
+            if value: snake_params[key] = value
+        response = _run_list("delHst", snake_params, type, display)
+        response = _guard_past_last_page(
+            response, page, lambda: _run_list("delHst", {**snake_params, "page": 1}, type, display))
+        return normalize_ranked_rows(response, "law")
+
+    # ==================== TOOL 61: lsAbrv_search ====================
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
+    def lsAbrv_search(
+        query: Optional[str] = None,
+        std_dt: Optional[Union[str, int]] = None,
+        end_dt: Optional[Union[str, int]] = None,
+        display: int = 20,
+        page: int = 1,
+        oc: Optional[str] = None,
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Law-name abbreviations (법률명 약칭 조회): 약칭 <-> 정식 법령명.
+
+        The upstream has no query, display or page: it always returns every
+        abbreviation (about 2,700 rows, 2.3 MB). This tool fetches that list (cached),
+        filters it by `query` and pages it itself. `query` matches 법령명한글 or
+        법령약칭명 (spaces and case ignored). Rows include 현행, 연혁 and 시행예정
+        revisions, so one 법령ID can appear several times; 법령약칭명 is empty for laws
+        without an abbreviation. To resolve an abbreviation to a law use this, then
+        eflaw_search / law_search with the 법령명한글.
+
+        The output is always JSON parsed into ranked_data (no `type` argument).
+
+        Args:
+            query: Part of the full name or of the abbreviation (omit for all)
+            std_dt: 등록일 range start YYYYMMDD
+            end_dt: 등록일 range end YYYYMMDD
+            display: Number of results per page (max 100, default 20)
+            page: Page number (1-based, default 1)
+            oc: Optional OC override (defaults to env var)
+            ctx: MCP context (injected automatically)
+
+        Returns:
+            ranked_data.law (list), ranked_data.totalCnt (after filtering) and
+            ranked_data.upstream_totalCnt (before), or a structured error.
+
+        Examples:
+            >>> lsAbrv_search(query="가족관계등록법")
+            >>> lsAbrv_search(std_dt="20260101", end_dt="20261231", display=100)
+        """
+        page, display = validate_display(page, display)
+        std_dt = validate_yyyymmdd(std_dt, "std_dt") if std_dt not in (None, "") else None
+        end_dt = validate_yyyymmdd(end_dt, "end_dt") if end_dt not in (None, "") else None
+        if std_dt and end_dt and std_dt > end_dt:
+            raise ToolValidationError(f"std_dt must be <= end_dt, got: {std_dt} > {end_dt}")
+        resolved_oc = resolve_oc(override_oc=oc)
+        upstream = map_params_to_upstream({
+            "oc": resolved_oc, "target": "lsAbrv", "type": "JSON",
+            "std_dt": std_dt, "end_dt": end_dt,
+        })
+        cache = get_cache()
+        resp = cache.get("lsAbrv", upstream)
+        if resp is None:
+            resp = _get_client().get("/DRF/lawSearch.do", upstream, "JSON")
+            cache.put("lsAbrv", upstream, resp)
+        if resp.get("status") != "ok":
+            return resp
+        _, root = parse_json_root(resp.get("raw_content", ""))
+        if root is None:
+            return create_error_response(
+                ErrorCode.UPSTREAM_ERROR, "lsAbrv 응답을 JSON으로 해석하지 못했습니다",
+                request_id=resp.get("request_id"),
+            )
+        rows = as_list(root.get("law"))
+        matched = filter_abbreviations(rows, query)
+        start = (page - 1) * display
+        page_rows = [{"rank": start + i + 1, **{k: v for k, v in r.items() if k != "id"}}
+                     for i, r in enumerate(matched[start:start + display])]
+        response = {
+            "status": "ok",
+            "request_id": resp.get("request_id"),
+            "upstream_type": "JSON",
+            "ranked_data": {
+                "target": "lsAbrv",
+                "키워드": (query or "").strip(),
+                "totalCnt": str(len(matched)),
+                "upstream_totalCnt": str(root.get("totalCnt", len(rows))),
+                "page": str(page),
+                "numOfRows": str(len(page_rows)),
+                "law": page_rows,
+            },
+        }
+        if str(root.get("totalCnt", len(rows))) != str(len(rows)):
+            response["warning"] = (f"upstream_total_mismatch: totalCnt {root.get('totalCnt')} but "
+                                   f"{len(rows)} rows returned; results may be incomplete")
+        add_no_results_guidance(response)
+        add_no_more_results_hint(response, page, display)
+        return response
+
+    # ==================== TOOL 62: licbyl_search ====================
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
+    def licbyl_search(
+        query: Optional[str] = None,
+        search: Optional[Union[str, int]] = None,
+        display: int = 20,
+        page: int = 1,
+        sort: Optional[str] = None,
+        org: Optional[str] = None,
+        mul_org: Optional[str] = None,
+        knd: Optional[Union[str, int]] = None,
+        gana: Optional[str] = None,
+        oc: Optional[str] = None,
+        type: str = "JSON",
+        ctx: Context = None,
+    ) -> dict:
+        """
+        List 별표 / 서식 attached to laws (법령 별표ㆍ서식 목록 조회).
+
+        Returns metadata and LINKS only, never the content of a 별표 or 서식: each
+        row has 별표명, 별표번호, 별표종류, 관련법령명/ID/일련번호 (MST) and
+        `별표서식파일링크` (the file, usually HWP) / `별표서식PDF파일링크` (PDF) /
+        `별표법령상세링크` (detail page). The links are relative to https://www.law.go.kr
+        and point to downloadable files or pages; this server does not fetch them, so
+        tell the user the link rather than quoting what is "in" the appendix. (Statute
+        text itself is in law_service / eflaw_service.)
+
+        Args:
+            query: Keyword (default "*" = all)
+            search: What query matches - 1 별표/서식 name (default), 2 related law name, 3 appendix text
+            display: Number of results per page (max 100, default 20)
+            page: Page number (1-based, default 1)
+            sort: lasc (name ascending, default) or ldes
+            org: 소관부처코드; several separated by commas
+            mul_org: With several org: OR (default) or AND
+            knd: 1 별표, 2 서식, 3 별지, 4 별도, 5 부록
+            gana: Dictionary-order initial (ga, na, da, ...)
+            oc: Optional OC override (defaults to env var)
+            type: Response format - "JSON" (default), "XML", or "HTML"
+            ctx: MCP context (injected automatically)
+
+        Returns:
+            ranked_data.licbyl (always a list; zero rows is `ok` with warning "no_results"),
+            `links_note`, or a structured error. A law with no 별표 simply has no rows.
+
+        Examples:
+            >>> licbyl_search(query="가족관계의 등록 등에 관한 규칙", search=2)
+            >>> licbyl_search(query="신청서", knd=2, org="1270000")
+        """
+        type = validate_list_type(type, tool="licbyl_search")
+        page, display = validate_display(page, display)
+        search = validate_choice(search, "search", LICBYL_SEARCH)
+        sort = validate_choice(sort, "sort", {"lasc", "ldes"})
+        knd = validate_choice(knd, "knd", LICBYL_KINDS)
+        mul_org = validate_choice(mul_org, "mul_org", {"OR", "AND"}, upper=True)
+        org = validate_org(org)
+        resolved_oc = resolve_oc(override_oc=oc)
+        snake_params = {
+            "oc": resolved_oc, "target": "licbyl", "type": type,
+            "display": display, "page": page,
+        }
+        q = (query or "").strip()
+        for key, value in (("query", q), ("search", search), ("sort", sort), ("org", org),
+                           ("mul_org", mul_org), ("knd", knd), ("gana", (gana or "").strip())):
+            if value: snake_params[key] = value
+        response = _run_list("licbyl", snake_params, type, display)
+        normalize_ranked_rows(response, "licbyl")
+        if response.get("status") == "ok":
+            response["links_note"] = ("별표서식파일링크, 별표서식PDF파일링크, 별표법령상세링크는 https://www.law.go.kr 기준 "
+                                      "상대 링크입니다. 파일 내용은 가져오지 않았습니다.")
+        return response
+
+    # ==================== TOOL 63: thdCmp_search ====================
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
+    def thdCmp_search(
+        query: Optional[str] = None,
+        display: int = 20,
+        page: int = 1,
+        sort: Optional[str] = None,
+        ef_yd: Optional[str] = None,
+        anc_yd: Optional[str] = None,
+        date: Optional[Union[str, int]] = None,
+        nb: Optional[Union[str, int]] = None,
+        anc_no: Optional[str] = None,
+        rr_cls_cd: Optional[Union[str, int]] = None,
+        org: Optional[str] = None,
+        knd: Optional[Union[str, int]] = None,
+        gana: Optional[str] = None,
+        oc: Optional[str] = None,
+        type: str = "JSON",
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Laws that have a 3단 비교 (법률-시행령-시행규칙 three-column comparison) (3단 비교 목록 조회).
+
+        Each row is one law revision; 삼단비교일련번호 is the MST for thdCmp_service,
+        and 법령ID is the stable id. `query` is a substring match on the law name
+        ("민법" also returns "난민법"). Filters are the same as oldAndNew_search.
+
+        Args:
+            query: Law name keyword (optional)
+            display: Number of results per page (max 100, default 20)
+            page: Page number (1-based, default 1)
+            sort: lasc/ldes (law name), dasc/ddes (공포일자), nasc/ndes (공포번호), efasc/efdes (시행일자)
+            ef_yd: 시행일자 range YYYYMMDD~YYYYMMDD
+            anc_yd: 공포일자 range YYYYMMDD~YYYYMMDD
+            date: 공포일자 YYYYMMDD
+            nb: 공포번호
+            anc_no: 공포번호 or range (10000~20000)
+            rr_cls_cd: 제개정 종류 코드 (300201 제정 ... 300210 타법폐지; see oldAndNew_search)
+            org: 소관부처코드
+            knd: 법령종류 코드
+            gana: Dictionary-order initial (ga, na, da, ...)
+            oc: Optional OC override (defaults to env var)
+            type: Response format - "JSON" (default), "XML", or "HTML"
+            ctx: MCP context (injected automatically)
+
+        Returns:
+            ranked_data.thdCmp (always a list; zero rows is `ok` with warning "no_results")
+            or a structured error.
+
+        Examples:
+            >>> thdCmp_search(query="가사소송법")
+        """
+        type = validate_list_type(type, tool="thdCmp_search")
+        page, display = validate_display(page, display)
+        filters = validate_law_list_filters(
+            sort=sort, ef_yd=ef_yd, anc_yd=anc_yd, date=date, nb=nb, anc_no=anc_no,
+            rr_cls_cd=rr_cls_cd, org=org, knd=knd, gana=gana,
+        )
+        resolved_oc = resolve_oc(override_oc=oc)
+        snake_params = {
+            "oc": resolved_oc, "target": "thdCmp", "type": type,
+            "display": display, "page": page, **filters,
+        }
+        q = (query or "").strip()
+        if q:
+            snake_params["query"] = q
+        response = _run_list("thdCmp", snake_params, type, display, query=q)
+        return normalize_ranked_rows(response, "thdCmp")
+
+    # ==================== TOOL 64: thdCmp_service ====================
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
+    def thdCmp_service(
+        knd: Union[str, int],
+        id: Optional[Union[str, int]] = None,
+        mst: Optional[Union[str, int]] = None,
+        jo: Optional[Union[str, int]] = None,
+        oc: Optional[str] = None,
+        type: str = "JSON",
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Three-column comparison of a law, its 시행령 and 시행규칙 (3단 비교 본문 조회).
+
+        ⚠️ Very large when no `jo` is given (measured tool response, knd 1/2): 가사소송법
+        89/167 KB, 가족관계의 등록 등에 관한 법률 204/251 KB, 민법 610/592 KB. Always pass `jo` for
+        one article. The upstream has no article parameter; `jo` is applied here to the
+        JSON body (type must be JSON). Under SLIM_RESPONSE the 20 KB guard cuts the rest
+        and tells you to use jo.
+
+        knd=1 (인용조문): the 법률 articles that 시행령/시행규칙 cite. knd=2 (위임조문): each
+        법률 article with the 시행령/시행규칙 articles that implement it. One article can
+        have several rows (one per delegated 시행령 article). Chapter headings (rows
+        without 조제목) are dropped by `jo`.
+
+        The result is anchored to the 법률: pass a 시행령 or 시행규칙 id/mst and the upstream
+        answers with its 모법 (the response does not echo your request), so check `anchor`
+        (law_id, law_name, mst) and `warning`. For some laws the upstream's 시행령명 is
+        unrelated (e.g. 가사소송법 -> "확정일자부 및 일자인 조제에 관한 규정"); trust the
+        article rows, not the summary line.
+
+        Args:
+            knd: 1 (인용조문) or 2 (위임조문); required, the upstream returns nothing without it
+            id: 법령ID (either id or mst is required); the upstream picks the revision
+            mst: 법령일련번호 = 삼단비교일련번호 from thdCmp_search
+            jo: One article (35, "35의5", "제35조의5", "003505"); ARTICLE_NOT_FOUND if absent
+            oc: Optional OC override (defaults to env var)
+            type: "JSON" (default); "XML"/"HTML" work only without jo
+            ctx: MCP context (injected automatically)
+
+        Returns:
+            raw_content (filtered to the article when jo is given), `anchor`, and with jo
+            `selection` {jo, matched_rows, total_rows}, or a structured error. Unknown
+            id/mst is NOT_FOUND.
+
+        Examples:
+            >>> thdCmp_service(knd=2, mst="265309", jo=2)     # 가사소송법 제2조 -> 가사소송규칙
+            >>> thdCmp_service(knd=1, id="010444", jo="제3조")
+        """
+        knd = normalize_thdcmp_knd(knd)
+        (id, mst, jo) = stringify_id(id, mst, jo)
+        id = validate_digits(id, "id")
+        mst = validate_digits(mst, "mst")
+        if not id and not mst:
+            raise ValueError("Either 'id' or 'mst' parameter is required")
+        type = validate_list_type(type, tool="thdCmp_service")
+        jo = _normalize_jo_arg(jo)
+        if jo and type != "JSON":
+            raise ToolValidationError("jo requires type='JSON' for thdCmp_service",
+                                      hints=["jo 없이 호출하거나 type='JSON'을 사용하세요"])
+        resolved_oc = resolve_oc(override_oc=oc)
+        snake_params = {"oc": resolved_oc, "target": "thdCmp", "type": type, "knd": knd}
+        if id: snake_params["id"] = id
+        if mst: snake_params["mst"] = mst
+        response = run_service(get_client=_get_client, target="thdCmp",
+                               snake_params=snake_params, response_type=type)
+        if response.get("status") != "ok" or type != "JSON":
+            return response
+        root_key, root = parse_json_root(response.get("raw_content", ""))
+        if root is None:
+            return response
+        if thdcmp_has_no_comparison(root):
+            return create_error_response(
+                ErrorCode.NOT_FOUND, "이 법령에는 3단 비교가 없습니다 (삼단비교존재여부 N).",
+                hints=["thdCmp_search 결과의 법령ID/삼단비교일련번호를 사용하세요"],
+                request_id=response.get("request_id"),
+            )
+        response = dict(response)
+        anchor = thdcmp_anchor(root)
+        response["anchor"] = anchor
+        mismatch = thdcmp_mismatch(anchor, id, mst)
+        if mismatch:
+            response["warning"] = mismatch
+        if not jo:
+            return response
+        new_root, matched, total = select_thdcmp_article(root, jo)
+        if not matched:
+            return create_error_response(
+                ErrorCode.ARTICLE_NOT_FOUND,
+                f"{describe_jo(jo)}(jo={jo}) 조문을 3단 비교에서 찾을 수 없습니다"
+                + (f" — 법령: {anchor.get('law_name')}" if anchor.get("law_name") else ""),
+                hints=[
+                    "jo는 6자리 코드(앞 4자리 조번호 + 뒤 2자리 가지번호)입니다. 예: 제35조 → 003500",
+                    "3단 비교에는 시행령·시행규칙과 연결된 법률 조문만 있을 수 있습니다. 조문 자체는 law_service로 확인하세요",
+                ],
+                request_id=response.get("request_id"), jo=jo, anchor=anchor,
+            )
+        response["raw_content"] = json.dumps({root_key: new_root}, ensure_ascii=False)
+        response["selection"] = {"jo": jo, "matched_rows": matched, "total_rows": total}
+        return response
+
+    # ==================== TOOL 65: lstrm_search ====================
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
+    def lstrm_search(
+        query: Optional[str] = None,
+        display: int = 20,
+        page: int = 1,
+        sort: Optional[str] = None,
+        reg_dt: Optional[str] = None,
+        gana: Optional[str] = None,
+        dic_knd_cd: Optional[Union[str, int]] = None,
+        oc: Optional[str] = None,
+        type: str = "JSON",
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Search the legal-term dictionary (법령용어 사전 목록 조회).
+
+        Which term tool to use:
+        - lstrm_search + lstrm_service (this): the DICTIONARY. Find a term by name,
+          then read its definition(s), 한자, source law and English equivalent.
+          Use it to answer "what does 선의 mean".
+        - lstrm_ai_search: terms with LINKS to related terms/articles (no definitions).
+          Use it to navigate relations, then lstrm_rlt_search / lstrm_rlt_jo_search.
+        Rows here are dictionary entries (법령용어명, 법령용어ID, 사전구분코드:
+        011401 법령용어사전, 011402 법령정의사전, 011403 법령한영사전, 011404 알법정비사전,
+        011405 생활용어사전); a matching keyword also returns long defined phrases that
+        merely contain it. Pass the exact 법령용어명 to lstrm_service.
+
+        Args:
+            query: Term keyword (omit for all)
+            display: Number of results per page (max 100, default 20)
+            page: Page number (1-based, default 1)
+            sort: lasc/ldes (term name), rasc/rdes (등록일자)
+            reg_dt: 등록일자 range YYYYMMDD~YYYYMMDD
+            gana: Dictionary-order initial (ga, na, da, ...)
+            dic_knd_cd: 010101 (법령) or 010102 (행정규칙)
+            oc: Optional OC override (defaults to env var)
+            type: Response format - "JSON" (default), "XML", or "HTML"
+            ctx: MCP context (injected automatically)
+
+        Returns:
+            ranked_data.lstrm (always a list; zero rows is `ok` with warning "no_results")
+            or a structured error.
+
+        Examples:
+            >>> lstrm_search(query="선의")
+            >>> lstrm_search(gana="ga", dic_knd_cd="010101", display=50)
+        """
+        type = validate_list_type(type, tool="lstrm_search")
+        page, display = validate_display(page, display)
+        sort = validate_choice(sort, "sort", LSTRM_SORTS)
+        dic_knd_cd = validate_choice(dic_knd_cd, "dic_knd_cd", LSTRM_DIC_KINDS)
+        reg_dt = validate_ymd_range(reg_dt, "reg_dt") if reg_dt not in (None, "") else None
+        resolved_oc = resolve_oc(override_oc=oc)
+        snake_params = {
+            "oc": resolved_oc, "target": "lstrm", "type": type,
+            "display": display, "page": page,
+        }
+        for key, value in (("query", (query or "").strip()), ("sort", sort), ("reg_dt", reg_dt),
+                           ("gana", (gana or "").strip()), ("dic_knd_cd", dic_knd_cd)):
+            if value: snake_params[key] = value
+        response = _run_list("lstrm", snake_params, type, display)
+        return normalize_ranked_rows(response, "lstrm")
+
+    # ==================== TOOL 66: lstrm_service ====================
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
+    def lstrm_service(
+        query: str,
+        oc: Optional[str] = None,
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Definitions of one legal term from the dictionary (법령용어 본문 조회).
+
+        Returns every dictionary entry for the exact term, usually from several
+        dictionaries (법령용어사전, 법령정의사전 = definitions in a given law with `source`,
+        법령한영사전 = English equivalent in `definition` and a sample sentence in
+        `example`, 생활용어사전, 알법정비사전). Each entry stands alone; do not merge
+        them. `definition` can contain HTML fragments (<a>, <img>) and a few entries have
+        no definition (None). For related terms/articles use lstrm_ai_search.
+
+        The upstream's JSON form collapses the entries into parallel arrays and loses
+        which 출처/용례 belongs to which entry, so this tool reads the XML and returns
+        structured `entries` (no `type` argument).
+
+        Args:
+            query: The exact term (법령용어명), e.g. "선의"; required. A term that is
+                not an exact dictionary headword is NOT_FOUND ("선" does not find "선의").
+            oc: Optional OC override (defaults to env var)
+            ctx: MCP context (injected automatically)
+
+        Returns:
+            entries[]: term_id, name_ko, name_hanja, dict_code, dict_name, definition,
+            source, example (None when absent), plus count; or a structured error.
+
+        Examples:
+            >>> lstrm_service(query="상속")
+        """
+        q = (query or "").strip()
+        if not q or q == "*":
+            raise ToolValidationError(
+                "query is required: the exact legal term",
+                hints=["lstrm_search로 법령용어명을 찾은 뒤 그대로 넘기세요"],
+            )
+        resolved_oc = resolve_oc(override_oc=oc)
+        snake_params = {"oc": resolved_oc, "target": "lstrm", "type": "XML", "query": q}
+        response = run_service(get_client=_get_client, target="lstrm",
+                               snake_params=snake_params, response_type="XML")
+        if response.get("status") != "ok":
+            return response
+        not_found = create_error_response(
+            ErrorCode.NOT_FOUND, f"법령용어 '{q}'를 찾을 수 없습니다.",
+            hints=["정확한 법령용어명이어야 합니다. lstrm_search로 먼저 검색하세요"],
+            request_id=response.get("request_id"),
+        )
+        raw = response.get("raw_content", "")
+        try:
+            entries = parse_lstrm_xml(raw)
+        except ET.ParseError:
+            if "일치하는" in raw:
+                return not_found
+            return create_error_response(
+                ErrorCode.UPSTREAM_ERROR, "lstrm 응답을 XML로 해석하지 못했습니다",
+                request_id=response.get("request_id"),
+            )
+        if not entries:
+            return not_found
+        return {
+            "status": "ok",
+            "request_id": response.get("request_id"),
+            "upstream_type": "XML",
+            "query": q,
+            "count": len(entries),
+            "entries": entries,
+        }
+
     # ==================== PROMPTS ====================
 
     @server.prompt(
@@ -5785,7 +6650,7 @@ Tool selection priority for unclear queries:
             }
         ]
 
-    logger.info("LexLink server initialized with 55 tools, 9 prompts, and 2 resources")
+    logger.info("LexLink server initialized with 66 tools, 9 prompts, and 2 resources")
     logger.info("Phase 1 & 2 Tools (15):")
     logger.info("  - eflaw_search, law_search, eflaw_service, law_service, eflaw_josub, law_josub")
     logger.info("  - elaw_search, elaw_service, admrul_search, admrul_service")
@@ -5813,6 +6678,10 @@ Tool selection priority for unclear queries:
     logger.info("  - chain_law_system, cache_stats")
     logger.info("Phase 10 Tool (1):")
     logger.info("  - law_as_of (version in force on a given date)")
+    logger.info("Phase 11 Tools (11):")
+    logger.info("  - oldAndNew_search, oldAndNew_service, thdCmp_search, thdCmp_service")
+    logger.info("  - lsJoHstInf_search, lsHstInf_search, delHst_search, lsAbrv_search")
+    logger.info("  - licbyl_search, lstrm_search, lstrm_service")
     logger.info("Prompts (9): search-korean-law, get-law-article, get-article-with-citations, analyze-law-citations, search-admin-rules, tool-selection-guide, analyze-legal-situation, explain-legal-document, check-legal-precedent")
     logger.info("Resources (2): frequently-used-laws (static), law-code-lookup (template)")
     return server

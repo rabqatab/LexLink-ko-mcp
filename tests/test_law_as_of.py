@@ -381,7 +381,7 @@ def test_unsubscribed_eflaw_falls_back_to_law_target(as_of, monkeypatch):
 def test_tool_registered_and_docs_point_to_it(as_of):
     server = server_mod.create_server()
     tools = {t.name: t for t in server._tool_manager.list_tools()}
-    assert len(tools) == 55 and "law_as_of" in tools
+    assert len(tools) == 66 and "law_as_of" in tools
     for name in ("eflaw_search", "eflaw_service", "eflaw_josub"):
         assert "law_as_of" in tools[name].description
     assert "law_as_of" in server._mcp_server.instructions

@@ -1,0 +1,41 @@
+{
+  "LsTrmSearch": {
+    "resultMsg": "success",
+    "키워드": "선의",
+    "page": "1",
+    "resultCode": "00",
+    "target": "lstrm",
+    "lstrm": [
+      {
+        "id": "1",
+        "법령용어상세링크": "/DRF/lawService.do?OC=test&target=lstrm&trmSeqs=5543412&mobile=&type=XML",
+        "법령종류코드": "010101",
+        "법령용어ID": "5543412",
+        "법령용어명": "그 밖에 총리령으로 정하는 방사선의 안전관리 및 장해방지관련 업무",
+        "법령용어상세검색": "/LSW/lsTrmInfoR.do?trmSeqs=5543412&mobile=",
+        "사전구분코드": "011402"
+      },
+      {
+        "id": "2",
+        "법령용어상세링크": "/DRF/lawService.do?OC=test&target=lstrm&trmSeqs=4010154&mobile=&type=XML",
+        "법령종류코드": "010101",
+        "법령용어ID": "4010154",
+        "법령용어명": "대한민국 비무장지대 남방한계선의 인접지역으로서 국방부령이 정하는 지역",
+        "법령용어상세검색": "/LSW/lsTrmInfoR.do?trmSeqs=4010154&mobile=",
+        "사전구분코드": "011402"
+      },
+      {
+        "id": "3",
+        "법령용어상세링크": "/DRF/lawService.do?OC=test&target=lstrm&trmSeqs=4725479,3829827,4987164,4711536&mobile=&type=XML",
+        "법령종류코드": "010102",
+        "법령용어ID": "4725479,3829827,4987164,4711536",
+        "법령용어명": "법령 및 제도 개선 의견",
+        "법령용어상세검색": "/LSW/lsTrmInfoR.do?trmSeqs=4725479,3829827,4987164,4711536&mobile=",
+        "사전구분코드": "011402"
+      }
+    ],
+    "totalCnt": "23",
+    "section": "tn_lstrm_list",
+    "numOfRows": "3"
+  }
+}

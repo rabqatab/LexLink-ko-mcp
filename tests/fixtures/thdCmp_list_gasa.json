@@ -1,0 +1,27 @@
+{
+  "thdCmpLawSearch": {
+    "resultMsg": "success",
+    "키워드": "가사소송법",
+    "thdCmp": {
+      "id": "1",
+      "법령ID": "001206",
+      "위임조문_삼단비교상세링크": "/DRF/lawService.do?OC=test&target=thdCmp&MST=265309&knd=2&type=HTML&mobileYn=",
+      "시행일자": "20260101",
+      "법령명한글": "가사소송법",
+      "법령구분명": "법률",
+      "인용조문_삼단비교상세링크": "/DRF/lawService.do?OC=test&target=thdCmp&MST=265309&knd=1&type=HTML&mobileYn=",
+      "소관부처명": "법무부",
+      "공포번호": "20432",
+      "삼단비교일련번호": "265309",
+      "제개정구분명": "타법개정",
+      "공포일자": "20240920",
+      "소관부처코드": "1270000"
+    },
+    "page": "1",
+    "resultCode": "00",
+    "target": "thdCmp",
+    "totalCnt": "1",
+    "section": "lawNm",
+    "numOfRows": "1"
+  }
+}
