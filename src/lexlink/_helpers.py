@@ -655,7 +655,13 @@ def run_service(
 # Public Legal Assistance Helpers
 # ============================================================
 
-OUTCOME_NOTE = "휴리스틱 추정이며 인용 가능한 판결 결과가 아닙니다. 판결요지에는 주문이 없는 경우가 많아 '불명'이 흔합니다."
+OUTCOME_NOTE = (
+    "결과는 각 판결의 '주문'만으로 분류한 휴리스틱이며 인용 가능한 판결 결과가 아닙니다. "
+    "주문을 찾지 못하거나 해석이 애매하면 '불명'으로 둡니다. 승소율이 아닙니다: "
+    "대법원의 '상고기각'은 원심 유지(상고인 패소)일 뿐 원고 승소를 뜻하지 않고, "
+    "'파기환송'은 최종 결론이 아니라 원심으로 되돌려 보낸 것이며, "
+    "'각하'는 본안 판단 없이 종결된 것입니다. 심급·당사자별로 해석해야 합니다."
+)
 
 # Position-based outcome detection. Each rule is (label, priority, regex with a
 # named group "k" marking the keyword, post-check(text, match) -> bool). The earliest
@@ -722,6 +728,55 @@ def extract_outcome(text: str) -> str:
                 best = cand
             break  # first valid hit is the earliest for this rule
     return best[2] if best else "불명"
+
+
+_ORDER_SECTION_RE = re.compile(
+    r"[【\[]\s*주\s*문\s*[】\]](?P<body>.*?)(?=[【\[]\s*[가-힣][가-힣 ]{0,8}[】\]]|$)", re.S
+)
+_BR_RE = re.compile(r"<br\s*/?>", re.I)
+# (label, regex) in priority order for classify_order; a hit needs a disposition
+# ending so recitals/negations ("기각하지 아니한다") never match.
+_ORDER_RULES = [
+    ("파기환송", re.compile(r"파기[^.]{0,200}?(?:환송|이송)")),
+    ("파기자판", re.compile(r"파기\s*자판|파기[^.]{0,200}?(?:다시|직접)\s*판결|파기\s*하고[^.]{0,200}?(?:기각|취소|지급하라)")),
+    ("상고기각", re.compile(r"(?:상고|재항고|특별항고)[을를]?\s*(?:모두\s*)?기각\s*(?:한다|하고|함)")),
+    ("항소기각", re.compile(r"(?:항소|항고)[을를]?\s*(?:모두\s*)?기각\s*(?:한다|하고|함)")),
+    ("각하", re.compile(r"각하\s*(?:한다|하고|함)")),
+    ("원판결변경", re.compile(r"(?:원심|제1심|원|제\s*1\s*심)\s*판결[을를]?\s*(?:다음과\s*같이\s*)?(?:변경|취소)")),
+    ("파기", re.compile(r"파기\s*(?:한다|하고|함)")),
+    ("일부인용", re.compile(r"일부\s*(?:를|만을|만)?\s*인용|나머지\s*(?:청구|항소|신청)[을를]?\s*(?:모두\s*)?기각")),
+    ("기각", re.compile(r"(?:청구|신청|심판청구|재심)[을를]?\s*(?:모두\s*)?기각\s*(?:한다|하고|함)")),
+    ("인용", re.compile(r"(?:청구|신청)[을를]?\s*인용|지급하라|이행하라|인도하라")),
+    ("취소", re.compile(r"처분[을를]\s*취소\s*(?:한다|하고|함)")),
+]
+
+
+def extract_order(text: str) -> str:
+    """Return the 주문 (disposition) section of a judgment's 판례내용, or ''."""
+    if not text:
+        return ""
+    m = _ORDER_SECTION_RE.search(text)
+    if not m:
+        return ""
+    body = _BR_RE.sub(" ", m.group("body"))
+    return re.sub(r"\s+", " ", body).strip()
+
+
+def classify_order(order: str) -> str:
+    """Classify a 주문 string into an outcome label; '불명' when unclear.
+
+    Only the 주문 is read (never recitals/이유). 파기환송, 파기자판, 상고기각,
+    항소기각, 각하, 원판결변경 (원심/제1심 판결 변경·취소), 일부인용, 기각, 인용,
+    취소 (처분), 파기. Not a win rate: 상고기각 means the lower ruling stands.
+    """
+    if not order:
+        return "불명"
+    for label, pattern in _ORDER_RULES:
+        if pattern.search(order):
+            if label == "기각" and dict(_ORDER_RULES)["인용"].search(order):
+                return "불명"  # 기각 and 인용 together (e.g. 본소/반소): don't guess
+            return label
+    return "불명"
 
 
 def extract_key_factors(text: str) -> list[str]:

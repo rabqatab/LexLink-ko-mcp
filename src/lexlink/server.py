@@ -31,7 +31,7 @@ from .resolver import get_resolver
 from ._helpers import (
     TOOL_ANNOTATIONS, stringify_id, handle_tool_error, ToolValidationError,
     slim_response, run_search, run_service, annotate_prec_body_availability,
-    extract_outcome, extract_key_factors, extract_legal_terms, compute_text_diff, run_coroutine_sync,
+    extract_order, classify_order, extract_key_factors, extract_legal_terms, compute_text_diff, run_coroutine_sync,
     compact_limit,
     rename_row_ids_to_rank, run_ranked_paging, validate_paging, OVER_FETCH_WINDOW,
     add_no_more_results_hint, add_no_results_guidance,
@@ -3500,7 +3500,6 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             svc_result = run_service(
                 get_client=_get_client, target="prec",
                 snake_params=svc_params, response_type=type,
-                sections="summary", full_text_fields=["판례내용"],
             )
 
             # Body unavailable (NOT_FOUND etc.): skip, try the next candidate
@@ -3512,6 +3511,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             raw = svc_result.get("raw_content", "")
             holding = ""
             summary_text = ""
+            body_text = ""  # 판례내용: the only place the 주문 lives
 
             if raw and type == "JSON":
                 try:
@@ -3520,6 +3520,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                     root = list(jd.values())[0] if jd else {}
                     holding = root.get("판시사항", "")
                     summary_text = root.get("판결요지", "")
+                    body_text = root.get("판례내용", "")
                 except:
                     pass
             elif raw:
@@ -3530,13 +3531,18 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                     holding = h_match.group(1).strip()
                 if s_match:
                     summary_text = s_match.group(1).strip()
+                b_match = _re.search(r'<판례내용>(.*?)</판례내용>', raw, _re.DOTALL)
+                if b_match:
+                    body_text = b_match.group(1).strip()
 
             # Upstream prose carries <br/> tags; strip them before analysis/output
             holding = strip_html(holding)
             summary_text = strip_html(summary_text)
 
             # Extract outcome and factors
-            outcome = extract_outcome(summary_text)
+            # Outcome comes from the 주문 only; recitals/판결요지 are never read
+            order = extract_order(body_text)
+            outcome = classify_order(order)
             outcomes[outcome] = outcomes.get(outcome, 0) + 1
             factors = [strip_html(f) for f in extract_key_factors(holding)]
             all_factors.extend(f for f in factors if f)
@@ -3548,6 +3554,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 "case_number": item.get("사건번호", ""),
                 "court": item.get("법원명", ""),
                 "outcome": outcome,
+                "order": order[:compact_limit(300)] if order else "",
                 "holding": holding[:compact_limit(500)] if holding else "",
                 "summary": summary_text[:compact_limit(500)] if summary_text else "",
             })

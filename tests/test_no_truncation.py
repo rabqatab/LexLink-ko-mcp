@@ -62,7 +62,8 @@ def _prec_body():
     # outcome keyword sits far beyond char 500 and 인용 (first in keyword order) is absent
     holding = "<br/>".join(f"[{i}] {_factor(i)}" for i in range(15))
     summary = "가" * 900 + " 원심판결을 파기환송한다."
-    return {"PrecService": {"사건명": "x", "판시사항": holding, "판결요지": summary, "판례내용": "본문"}}
+    return {"PrecService": {"사건명": "x", "판시사항": holding, "판결요지": summary,
+                            "판례내용": "【주    문】<br/>원심판결을 파기하고, 사건을 서울고등법원에 환송한다.<br/><br/>【이    유】<br/>본문"}}
 
 
 def _ai_rows():
