@@ -7,6 +7,7 @@ error normalization, and request logging.
 
 import json
 import logging
+import os
 import re
 import time
 import traceback
@@ -119,6 +120,25 @@ def redact_oc(text: str, oc: str | None = None) -> str:
                 "***", text,
             )
     return text
+
+
+class _OCRedactingFilter(logging.Filter):
+    """Redact the OC credential from log messages (e.g. httpx request URLs at DEBUG/INFO)."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            message = record.getMessage()
+        except Exception:
+            return True
+        redacted = redact_oc(message, os.environ.get("OC"))
+        if redacted != message:
+            record.msg, record.args = redacted, None
+        return True
+
+
+# Not only the level: whoever sets these loggers to DEBUG still never sees OC.
+for _name in ("httpx", "httpcore"):
+    logging.getLogger(_name).addFilter(_OCRedactingFilter())
 
 
 # ---------------------------------------------------------------------------
