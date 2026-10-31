@@ -106,3 +106,41 @@ def test_extract_citations_counts_end_to_end(monkeypatch):
     monkeypatch.setattr(ex, "fetch_article_html", fake_html)
     result = asyncio.run(ex.extract_citations("1", "건축법", 11))
     assert (result.internal_count, result.external_count) == (0, 2)
+
+
+def test_same_law_with_plain_text_prefix_never_named_beop():
+    body = (f"{_law('상법')} {_a('sfon2', '제360조의2')} 같은 {_a('sfon1', '법')} {_a('sfon2', '제360조의5')} "
+            f"{_a('sfon1', '법')} {_a('sfon2', '제9조')}")
+    cits = _extract(body)
+    assert [(c.citation_type, c.target_law_name) for c in cits[:2]] == [
+        ("external", "상법"), ("external", "상법")]
+    assert cits[1].target_article == 360 and cits[1].target_article_branch == 5
+    assert "법" not in [c.target_law_name for c in cits]
+
+
+def test_range_connectors_keep_same_external_law():
+    body = (f"{_law('도로법')} {_a('sfon2', '제56조')}부터 {_a('sfon2', '제62조')}까지 및 "
+            f"{_a('sfon2', '제76조')}부터 {_a('sfon2', '제82조')}까지, {_a('sfon2', '제90조의2')}")
+    cits = _extract(body)
+    assert [(c.citation_type, c.target_article) for c in cits] == [
+        ("external", 56), ("external", 62), ("external", 76),
+        ("external", 82), ("external", 90)]
+
+
+def test_same_article_reference_inherits_article():
+    body = (f"{_law('산림보호법')} {_a('sfon2', '제9조')}{_a('sfon3', '제1항')} 및 "
+            f"{_a('sfon2', '같은 조')} {_a('sfon3', '제2항')}{_a('sfon4', '제1호')}")
+    cits = _extract(body)
+    assert _summary(cits)[-1][:3] == ("external", "산림보호법", 9)
+    assert cits[-1].target_paragraph == 2 and cits[-1].target_item == 1
+
+
+def test_bare_article_in_later_clause_not_merged_into_articleless_law():
+    body = (f"{_law('국토의 계획 및 이용에 관한 법률')}에 따른 지구. "
+            f"② {_a('sfon2', '제11조')}{_a('sfon3', '제5항')} 및 {_a('sfon3', '제6항')}을 준용한다")
+    cits = _extract(body)
+    assert _summary(cits) == [
+        ("external", "국토의 계획 및 이용에 관한 법률", None, None, None),
+        ("internal", None, 11, None, 5),
+        ("internal", None, 11, None, 6),
+    ]

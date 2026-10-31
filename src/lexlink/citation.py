@@ -132,7 +132,11 @@ class CitationExtractor:
     LAW_NAME_PATTERN = re.compile(r'「([^」]+)」')
     FNCPOP_PATTERN = re.compile(r"fncLsLawPop\s*\(\s*['\"](\d+)['\"].*?['\"](\w+)['\"]")
     LSI_SEQ_PATTERN = re.compile(r'lsiSeq=(\d+)')
-    LIST_CONNECTORS = (",", "ㆍ", "및", "와", "과", "또는", ", 및", ", 또는")
+    # Gap between two article links that keeps them in one list, e.g. ", ",
+    # " 및 ", "부터 ", "까지, ", "까지 및 "
+    LIST_CONNECTOR_PATTERN = re.compile(
+        r'(?:부터|까지)?\s*(?:(?:,|ㆍ|및|와|과|또는)\s*(?:및|또는)?)?'
+    )
 
     def __init__(self, timeout: int = 15, request_delay: float = 0.1):
         """
@@ -270,6 +274,18 @@ class CitationExtractor:
 
             if citation.link_class == 'sfon1':
                 text = citation.target_text
+                if text in ('법', '영', '규칙'):
+                    # "같은 [법]": the 같은/이 prefix is plain text before the link
+                    prefix = citation.gap_before.rstrip()
+                    if prefix.endswith('같은'):
+                        text = '같은 법' + {'법': '', '영': ' 시행령', '규칙': ' 시행규칙'}[text]
+                    elif prefix.endswith('이') and text == '법':
+                        text = '이 법'
+                    else:
+                        text = '이 법'  # never report a law named "법"/"영"
+                    citation.target_text = text
+                    citation.citation_type = "internal"
+                    citation.target_law_name = source_law_name
                 if self.LAW_NAME_PATTERN.search(text):
                     last_named_law = citation.target_law_name
                 elif '같은 법' in text and '이 법' not in text:
@@ -417,8 +433,25 @@ class CitationExtractor:
                     last = consolidated[-1]
                     if (last.citation_type == "external" and
                         last.target_law_name == current_external_law):
-                        # Check if external law already has an article
-                        if last.target_article is None:
+                        # "같은 조" (no 제N조 in the link): same article as before
+                        if (citation.target_article is None and
+                                last.target_article is not None):
+                            consolidated.append(Citation(
+                                target_text=citation.target_text,
+                                target_ref_id=citation.target_ref_id,
+                                target_type=citation.target_type,
+                                target_law_name=last.target_law_name,
+                                target_article=last.target_article,
+                                target_article_branch=last.target_article_branch,
+                                citation_type="external",
+                                link_class=citation.link_class
+                            ))
+                            continue
+                        # Check if external law already has an article. An
+                        # article-less law only takes an article that follows
+                        # it directly, not one from a later clause.
+                        if (last.target_article is None and
+                                citation.gap_before.strip() in ('', '시행령', '시행규칙')):
                             # Merge article into external law citation
                             last.target_article = citation.target_article
                             last.target_article_branch = citation.target_article_branch
@@ -427,7 +460,8 @@ class CitationExtractor:
                             continue
                         # "「법」 제14조와 제15조": a bare article joined by a
                         # connector belongs to the same external law
-                        if citation.gap_before.strip() in self.LIST_CONNECTORS:
+                        gap = citation.gap_before.strip()
+                        if gap and self.LIST_CONNECTOR_PATTERN.fullmatch(gap):
                             consolidated.append(Citation(
                                 target_text=citation.target_text,
                                 target_ref_id=citation.target_ref_id,
