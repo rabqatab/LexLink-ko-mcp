@@ -32,7 +32,7 @@ from ._helpers import (
     TOOL_ANNOTATIONS, stringify_id, handle_tool_error, ToolValidationError,
     slim_response, run_search, run_service, annotate_prec_body_availability,
     extract_outcome, extract_key_factors, extract_legal_terms, compute_text_diff, run_coroutine_sync,
-    compact_limit,
+    compact_limit, low_relevance_warning,
     rename_row_ids_to_rank, run_ranked_paging, validate_paging, OVER_FETCH_WINDOW,
     add_no_more_results_hint, add_no_results_guidance,
     NO_RESULTS_MESSAGE, NO_RESULTS_HINTS, NO_RESULTS_BODY_HINT, OUTCOME_NOTE,
@@ -2112,10 +2112,17 @@ For article_citation: you MUST first call eflaw_search to get the current MST (ë
             "oc": resolved_oc, "target": "aiSearch", "type": type,
             "query": query, "search": search, "display": display, "page": page,
         }
-        return run_search(
+        result = run_search(
             get_client=_get_client, target="aiSearch", query=query,
             snake_params=snake_params, response_type=type, display=display,
         )
+        if result.get("status") == "ok":
+            rows = next((v for v in (result.get("ranked_data") or {}).values()
+                         if isinstance(v, list)), [])
+            low = low_relevance_warning(query, rows)
+            if low:
+                result["warnings"] = list(result.get("warnings") or []) + [low]
+        return result
 
     # ==================== TOOL 26: aiRltLs_search ====================
     @server.tool(annotations=TOOL_ANNOTATIONS)
@@ -3682,6 +3689,11 @@ For article_citation: you MUST first call eflaw_search to get the current MST (ë
                 articles = val
                 break
 
+        resolver_warnings: list[str] = []
+        low = None if _e else low_relevance_warning(situation, articles[:display])
+        if low:
+            resolver_warnings.append(low)
+
         law_names_seen = set()
         for art in articles[:display]:
             law_name = art.get("ë²•ë ¹ëª…", "")
@@ -3729,7 +3741,6 @@ For article_citation: you MUST first call eflaw_search to get the current MST (ë
 
         # Step 3: Citation network for top article
         citations = []
-        resolver_warnings: list[str] = []
         if applicable_laws:
             top = applicable_laws[0]
             mst = ""
