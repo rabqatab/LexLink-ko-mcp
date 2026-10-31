@@ -3320,14 +3320,28 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         best["all_failed"] = succeeded == 0
         return best
 
+    def _upstream_failure_response(law_name: str, failure: dict) -> dict:
+        return create_error_response(
+            error_code=failure["error_code"],
+            message=f"법령 '{law_name}' 조회 중 upstream 오류가 발생했습니다 ({failure['source']}={failure['error_code']}). Upstream request failed.",
+            hints=["법령이 없는 것이 아니라 조회가 실패했습니다. 잠시 후 다시 시도하세요",
+                   "OC 승인 및 해당 API 신청 여부(open.law.go.kr)와 네트워크 상태를 확인하세요"],
+            success=False,
+            failed_sources=[dict(failure)],
+        )
+
     def _resolve_law_versions(law_name: str, resolved_oc: str, response_type: str,
                               need_history: bool = False) -> dict:
         """Resolve a law name to one 법령ID and (optionally) all of its versions.
 
         Step 1: eflaw search by name → rows for the best-matching 법령ID
                 (exact 법령명한글, 법률 preferred unless the user named a 시행령/시행규칙).
-        Step 2 (need_history): eflaw search filtered by LID (paged) → every
-                연혁/현행/시행예정 row of that law, de-duplicated by MST.
+        Step 2 (need_history): eflaw search filtered by LID (paged, nw=1,2,3: JSON
+                returns only the 현행 row without it) → every 연혁/현행/시행예정 row
+                of that law, de-duplicated by MST.
+
+        An upstream failure returns the error response itself (``status == "error"``)
+        so callers can pass it on instead of reporting "법령을 찾을 수 없습니다".
         """
         search_params = {
             "oc": resolved_oc, "target": "eflaw", "type": response_type,
@@ -3339,6 +3353,9 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             ranking_field="법령명한글", list_type="law",
             over_fetch_key="numOfRows",
         )
+        err = _result_error(search_result, "eflaw 법령 검색")
+        if err:
+            return _upstream_failure_response(law_name, err)
         rows = select_law_rows(law_rows(search_result), law_name)
         if not rows:
             raise ToolValidationError(
@@ -3361,13 +3378,16 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             while page <= 3:
                 lid_params = {
                     "oc": resolved_oc, "target": "eflaw", "type": response_type,
-                    "lid": law_id, "display": 100, "page": page,
+                    "lid": law_id, "display": 100, "page": page, "nw": "1,2,3",
                 }
                 lid_result = run_search(
                     get_client=_get_client, target="eflaw", query="",
                     snake_params=lid_params, response_type=response_type, display=100,
                     ranking_field=None, list_type=None,
                 )
+                err = _result_error(lid_result, "eflaw 연혁 조회")
+                if err:
+                    return _upstream_failure_response(law_name, err)
                 page_rows = [r for r in law_rows(lid_result) if r.get("법령ID") == law_id]
                 fetched.extend(page_rows)
                 _, total = _items_from_result(lid_result, response_type)
@@ -3839,6 +3859,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         # Step 1: Resolve the law and pick its 현행 version (not the first row,
         # which is typically a 시행예정 MST)
         law_info = _resolve_law_versions(law_name, resolved_oc, fmt)
+        if law_info.get("status") == "error":
+            return law_info
         current = law_info["current"]
         mst = str(current.get("법령일련번호", ""))
         if not mst:
@@ -3990,6 +4012,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
 
         # Resolve to one 법령ID and fetch all of its versions (eflaw, LID filter)
         law_info = _resolve_law_versions(law_name, resolved_oc, fmt, need_history=True)
+        if law_info.get("status") == "error":
+            return law_info
 
         revisions = [
             revision_record(row) for row in law_info["versions"]
@@ -4245,6 +4269,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
 
         # Step 1: Resolve the law and list every version of that single 법령ID
         law_info = _resolve_law_versions(law_name, resolved_oc, fmt, need_history=True)
+        if law_info.get("status") == "error":
+            return law_info
         all_versions = [revision_record(r) for r in law_info["versions"]]
         revisions = [r for r in all_versions if date_from <= r["date"] <= date_to]
         current = law_info.get("current") or {}
@@ -4450,6 +4476,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         # Step 1: Find the law — one 법령ID, 현행 version preferred over 시행예정
         fmt = _internal_format(type)
         resolved = _resolve_law_versions(law_name, resolved_oc, fmt)
+        if resolved.get("status") == "error":
+            return resolved
         law_info = resolved["current"]
         law_id = resolved["law_id"]
         mst = str(law_info.get("법령일련번호", ""))
@@ -4465,7 +4493,10 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             "ministry": law_info.get("소관부처명", ""),
         }
 
+        warnings: list[str] = []
+
         # Step 2: Get delegation tree
+        delegated_entries: list = []
         if law_id or mst:
             del_params = {
                 "oc": resolved_oc, "target": "lsDelegated", "type": type,
@@ -4482,62 +4513,64 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 result["delegation_tree"] = compact_delegation_tree(
                     del_r.get("raw_content", ""), type, max_entries=compact_limit(80),
                 )
+                delegated_entries = compact_delegation_tree(
+                    del_r.get("raw_content", ""), type,
+                ).get("entries", [])
             else:
                 result["delegation_tree"] = {
                     "entries": [], "entry_count": 0,
                     "note": del_r.get("message", "lsDelegated 조회 실패"),
                 }
+                warnings.append(
+                    f"lsDelegated 조회 실패 ({del_r.get('error_code') or ErrorCode.UPSTREAM_ERROR}): "
+                    "admin_rules를 확인하지 못했습니다"
+                )
 
-        # Step 3: Linked ordinances
-        lnk_params = {
-            "oc": resolved_oc, "target": "lnkLs", "type": type,
-            "query": law_info.get("법령명한글", law_name), "display": 10, "page": 1,
-        }
-        lnk_r = run_search(
-            get_client=_get_client, target="lnkLs",
-            query=law_info.get("법령명한글", law_name),
-            snake_params=lnk_params, response_type=type, display=10,
-            ranking_field="법령명한글", list_type="law",
-            over_fetch_key="numOfRows", over_fetch=False,
-        )
-        lnk_ranked = lnk_r.get("ranked_data", {})
-        linked_laws = []
-        for k, v in lnk_ranked.items():
-            if isinstance(v, list):
-                for item in v[:10]:
-                    linked_laws.append({
-                        "name": item.get("법령명한글", ""),
-                        "id": item.get("법령ID", ""),
-                        "type": item.get("법령구분명", ""),
+        # Step 3: Linked ordinances (자치법규) — lnkLsOrd lists the ordinances
+        # that implement this law (lnkLs would list laws, not ordinances).
+        linked_ordinances: list = []
+        if law_id:
+            lnk_params = {
+                "oc": resolved_oc, "target": "lnkLsOrd", "type": type,
+                "knd": law_id, "display": 10, "page": 1,
+            }
+            lnk_r = run_search(
+                get_client=_get_client, target="lnkLsOrd", query="*",
+                snake_params=lnk_params, response_type=type, display=10,
+                ranking_field="자치법규명", list_type="law",
+                over_fetch_key="display",
+            )
+            lnk_err = _result_error(lnk_r, "lnkLsOrd 연계 자치법규")
+            if lnk_err:
+                warnings.extend(_failure_warnings([lnk_err]))
+            else:
+                _, lnk_total = _items_from_result(lnk_r, type)
+                for item in law_rows(lnk_r)[:10]:
+                    linked_ordinances.append({
+                        "name": item.get("자치법규명", ""),
+                        "id": item.get("자치법규ID", ""),
+                        "type": item.get("자치법규종류", ""),
                     })
-                break
-        result["linked_ordinances"] = linked_laws
+                result["linked_ordinances_total"] = lnk_total
+        result["linked_ordinances"] = linked_ordinances
 
-        # Step 4: Related admin rules
-        admrul_params = {
-            "oc": resolved_oc, "target": "admrul", "type": type,
-            "query": law_info.get("법령명한글", law_name),
-            "display": 5, "page": 1, "nw": 1, "search": 1,
-        }
-        admrul_r = run_search(
-            get_client=_get_client, target="admrul",
-            query=law_info.get("법령명한글", law_name),
-            snake_params=admrul_params, response_type=type, display=5,
-            ranking_field="행정규칙명", list_type="admrul",
-            over_fetch_key="numOfRows",
-        )
-        admrul_ranked = admrul_r.get("ranked_data", {})
-        admin_rules = []
-        for k, v in admrul_ranked.items():
-            if isinstance(v, list):
-                for item in v[:5]:
-                    admin_rules.append({
-                        "name": item.get("행정규칙명", ""),
-                        "type": item.get("행정규칙종류", ""),
-                        "ministry": item.get("소관부처명", ""),
-                    })
-                break
+        # Step 4: Admin rules — the 위임행정규칙 entries of the delegation tree.
+        # (admrul title search for the law name returns nothing for most laws,
+        # e.g. 건축법, and the body search returns unrelated rules.)
+        admin_rules: list = []
+        seen_rules: set = set()
+        for entry in delegated_entries:
+            if entry.get("kind") != "위임행정규칙" or entry.get("target") in seen_rules:
+                continue
+            seen_rules.add(entry.get("target"))
+            admin_rules.append({
+                "name": entry.get("target", ""),
+                "id": entry.get("target_id", ""),
+                "article": entry.get("article", ""),
+            })
         result["admin_rules"] = admin_rules
+        if warnings:
+            result["warnings"] = warnings
 
         return result
 
