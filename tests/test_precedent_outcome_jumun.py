@@ -91,6 +91,13 @@ def test_odds_classifies_by_jumun_not_recital(odds):
     ("1. 제1심 심판 중 상대방 패소 부분을 취소하고, 그 취소 부분에 해당하는 청구를 기각한다. 2. 청구인의 항고를 기각한다.", "원판결변경"),
     ("중앙노동위원회가 한 재심판정을 취소한다. 소송비용은 피고가 부담한다.", "취소"),
     ("피고인을 징역 3년에 각 처한다.", "유죄"),
+    # review round 3
+    ("서울고등법원 2025. 3. 7.자 2024라1234 결정을 취소하고, 사건을 서울고등법원에 환송한다.", "파기환송"),
+    ("1. 소를 각하한다. 2. 피고가 2024. 1. 2. 원고에 대하여 한 처분을 모두 취소한다.", "불명"),
+    ("즉시항고를 기각한다.", "항고기각"),
+    ("이 사건 항고를 기각한다. 항고비용은 항고인이 부담한다.", "항고기각"),
+    ("원심판결을 파기한다. 이 사건 공소사실에 대하여 피고인을 면소한다.", "파기자판"),
+    ("원심판결을 파기한다. 피고인에 대하여 형을 면제한다.", "파기자판"),
     # review round 2 (minimal text from real cases)
     ("원심판결 중 피고 패소 부분을 파기한다. 위 파기 부분에 대한 피고의 항소를 기각한다. 나머지 상고를 기각한다.", "파기자판"),
     ("원심결정을 파기하고, 항고를 기각한다.", "파기자판"),
@@ -127,3 +134,14 @@ def test_extract_order_variants():
     assert extract_order("이유만 있음") == ""
     assert extract_order("[주    문]<br/>상고를 기각한다.<br/>[이    유]x") == "상고를 기각한다."
     assert extract_order("【주문】 소를 각하한다.【이유】x") == "소를 각하한다."
+
+
+@pytest.mark.unit
+def test_outcome_note_explains_every_label_and_surfaces_are_not_win_rates():
+    for word in ("유죄", "무죄", "공소기각", "항소기각", "항고기각", "원판결변경", "파기자판", "파기환송", "각하", "승소율이 아닙니다"):
+        assert word in OUTCOME_NOTE, word
+    doc = server_mod.create_server()._tool_manager.get_tool("check_precedent_odds").description
+    assert "승률 분석" not in doc and "NOT a win rate" in doc
+    src = open(server_mod.__file__, encoding="utf-8").read()
+    assert "전체 N건 중 인용 M건" not in src and "with success rate" not in src
+    assert '"outcome_note": odds.get("outcome_note", OUTCOME_NOTE)' in src

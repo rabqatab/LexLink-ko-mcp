@@ -139,7 +139,7 @@ Use `sections="full"` only when the complete judgment text is specifically neede
 **Guided Workflows (Prompts):**
 - analyze-legal-situation: Describe your situation in plain Korean → get applicable laws, rights, and action steps
 - explain-legal-document: Paste a legal document → get plain Korean explanation
-- check-legal-precedent: Ask a yes/no legal question → get precedent-backed answer with success rate
+- check-legal-precedent: Ask a yes/no legal question → get precedent-backed answer (outcome distribution, not a win rate)
 
 ## Tool Selection for Casual Users
 
@@ -3437,10 +3437,11 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         ctx: Context = None,
     ) -> dict:
         """
-        Find precedent statistics and key outcome factors for a legal question (판례 승률 분석).
+        Find precedent statistics and key outcome factors for a legal question (판례 결과 분포).
 
-        Searches court precedents, analyzes outcomes (인용/기각/파기), and extracts
-        key factors that influenced decisions. Useful for assessing legal odds.
+        Searches court precedents, classifies each case's 주문 (disposition, e.g. 파기환송/
+        상고기각/항소기각/각하/일부인용; 불명 when unclear) and extracts key factors. This is a
+        distribution of dispositions, NOT a win rate: see outcome_note before drawing conclusions.
 
         Args:
             query: Legal question or keywords (e.g., "택배 파손 보상", "임대차 보증금 반환")
@@ -4188,6 +4189,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             "precedent_analysis": {
                 "total_found": odds.get("total_found", 0),
                 "outcome_summary": odds.get("outcome_summary", {}),
+                "outcome_note": odds.get("outcome_note", OUTCOME_NOTE),
                 "key_factors": odds.get("key_factors", []),
                 "representative_cases": odds.get("representative_cases", [])[:compact_limit(3)],
                 "search_mode": odds.get("search_mode", ""),
@@ -4859,7 +4861,7 @@ Tool selection priority for unclear queries:
 1. **관련 법령 찾기**: legal_resolver 도구를 사용하여 종합 분석을 수행하세요.
    - legal_resolver(situation="{situation}")
 
-2. **판례 확인**: check_precedent_odds 도구로 유사 판례와 승률을 확인하세요.
+2. **판례 확인**: check_precedent_odds 도구로 유사 판례의 결과 분포(승률 아님; outcome_note 참고)를 확인하세요.
    - check_precedent_odds(query="{situation}")
 
 3. **결과 정리**: 다음 형식으로 응답하세요:
@@ -4937,7 +4939,7 @@ Tool selection priority for unclear queries:
 
     @server.prompt(
         name="check-legal-precedent",
-        description="Ask a yes/no legal question → get precedent-backed answer with success rate"
+        description="Ask a yes/no legal question → get precedent-backed answer (outcome distribution, not a win rate)"
     )
     def check_legal_precedent(question: str) -> list:
         """
@@ -4967,7 +4969,7 @@ Tool selection priority for unclear queries:
 - 예 / 아니오 / 경우에 따라 다름 — 법적 근거와 함께
 
 **📊 판례 통계**
-- 전체 N건 중 인용 M건 (N건 분석)
+- 분석한 N건의 주문 분포(예: 파기환송 a건, 상고기각 b건, 불명 c건). 승소율/성공률로 환산하지 말고 outcome_note의 해석 주의를 그대로 전달
 - 핵심 판단 요소 나열
 
 **📋 대표 판례**

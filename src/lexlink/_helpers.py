@@ -658,9 +658,11 @@ def run_service(
 OUTCOME_NOTE = (
     "결과는 각 판결의 '주문'만으로 분류한 휴리스틱이며 인용 가능한 판결 결과가 아닙니다. "
     "주문을 찾지 못하거나 해석이 애매하면 '불명'으로 둡니다. 승소율이 아닙니다: "
-    "대법원의 '상고기각'은 원심 유지(상고인 패소)일 뿐 원고 승소를 뜻하지 않고, "
-    "'파기환송'은 최종 결론이 아니라 원심으로 되돌려 보낸 것이며, "
-    "'각하'는 본안 판단 없이 종결된 것입니다. 심급·당사자별로 해석해야 합니다."
+    "상고기각·항소기각·항고기각은 아래 심급 판단이 유지된 것일 뿐 원고 승소를 뜻하지 않고(대법원 상고기각은 원심 유지), "
+    "파기환송·파기자판은 원심을 뒤집은 것이지만 파기환송은 최종 결론이 아니며, "
+    "원판결변경은 제1심/원심 판결이 바뀐 것으로 어느 쪽이 이겼는지 이 라벨만으로는 알 수 없고, "
+    "각하·공소기각은 본안 판단 없이 종결된 것이며, "
+    "유죄(1심 유죄 선고)·무죄는 형사 결과로 민사의 승소와 다릅니다. 심급·당사자별로 해석해야 합니다."
 )
 
 # Legal term suffix patterns (Korean legal jargon indicators)
@@ -681,11 +683,12 @@ _BR_RE = re.compile(r"<br\s*/?>", re.I)
 _PAGI_RE = re.compile(r"파기\s*(?:한다|하고|하며|하여|함|환송|자판|[,，])")
 _REMAND_RE = re.compile(
     r"파기.{0,300}?(?:환송|이송)\s*(?:한다|하고|함)"
-    r"|(?:원심|제1심|원)\s*(?:판결|결정)[^.]{0,100}?취소.{0,300}?환송\s*(?:한다|하고|함)"
+    r"|(?:판결|결정)[을를]?\s*(?:중.{0,150}?)?취소.{0,300}?환송\s*(?:한다|하고|함)"
 )
-_PAGI_DISPOSED_RE = re.compile(r"파기\s*자판|파기.{0,300}?(?:기각|취소|지급하라|처한다|정한다|무죄|각하)")
+_PAGI_DISPOSED_RE = re.compile(r"파기\s*자판|파기.{0,300}?(?:기각|취소|지급하라|처한다|정한다|무죄|각하|면소|면제|공소)")
 _CHANGE_RE = re.compile(r"(?:원심|제1심|원|제\s*1\s*심)\s*(?:판결|결정|명령|심판)[^.]{0,100}?(?:변경|취소)")
-_APPEAL_REJECT_RE = re.compile(r"(?:항소|(?<!재)(?<!특별)항고)[을를]?\s*(?:모두\s*)?기각\s*(?:한다|하고|함)")
+_APPEAL_REJECT_RE = re.compile(r"항소[을를]?\s*(?:모두\s*)?기각\s*(?:한다|하고|함)")
+_PETITION_REJECT_RE = re.compile(r"(?<!재)(?<!특별)항고[을를]?\s*(?:모두\s*)?기각\s*(?:한다|하고|함)")
 _SUPREME_REJECT_RE = re.compile(r"(?:상고|재항고|특별항고)[을를]?\s*(?:모두\s*)?기각\s*(?:한다|하고|함)")
 _PROSECUTION_REJECT_RE = re.compile(r"공소[을를]?\s*기각")
 _CRIMINAL_RE = re.compile(r"배상명령|에 처한다|무죄|선고를 유예|집행을 유예|추징|몰수|피고인")
@@ -695,7 +698,7 @@ _GRANT_RE = re.compile(r"(?:청구|신청)[을를]?\s*(?:모두\s*)?인용|지�
 _PARTIAL_RE = re.compile(r"일부\s*(?:를|만을|만)?\s*(?:인용|기각)|나머지\s*[가-힣 ]{0,10}[을를]?\s*(?:모두\s*)?기각")
 _REJECT_RE = re.compile(r"(?:청구|신청|심판청구|재심)[을를]?\s*(?:모두\s*)?기각\s*(?:한다|하고|함)")
 _DISMISS_RE = re.compile(r"각하\s*(?:한다|하고|함)")
-_REVOKE_RE = re.compile(r"(?:처분|판정|재결|심결)[을를]\s*취소\s*(?:한다|하고|함)")
+_REVOKE_RE = re.compile(r"(?:처분|판정|재결|심결)[을를]\s*(?:모두\s*)?취소\s*(?:한다|하고|함)")
 
 
 def extract_order(text: str) -> str:
@@ -732,7 +735,7 @@ def classify_order(order: str) -> str:
     grant = bool(_GRANT_RE.search(order))
     reject = bool(_REJECT_RE.search(order))
     dismiss = bool(_DISMISS_RE.search(order))
-    for pattern, label in ((_APPEAL_REJECT_RE, "항소기각"), (_SUPREME_REJECT_RE, "상고기각")):
+    for pattern, label in ((_APPEAL_REJECT_RE, "항소기각"), (_PETITION_REJECT_RE, "항고기각"), (_SUPREME_REJECT_RE, "상고기각")):
         if pattern.search(order):
             # civil: 항소기각 plus a grant/dismissal is a compound order -> don't guess
             return "불명" if (grant or dismiss) and not criminal else label
@@ -742,7 +745,7 @@ def classify_order(order: str) -> str:
         return found[0] if len(found) == 1 else "불명"
     if _PARTIAL_RE.search(order) and (grant or reject):
         return "일부인용" if grant or "인용" in order else "불명"
-    if grant + reject + dismiss > 1:
+    if grant + reject + dismiss + bool(_REVOKE_RE.search(order)) > 1:
         return "불명"
     if grant:
         return "인용"
