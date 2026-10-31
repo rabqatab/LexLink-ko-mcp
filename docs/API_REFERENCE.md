@@ -193,9 +193,9 @@ for t in asyncio.run(create_server().list_tools()):
 |---|---|---|
 | `version` | `1` | 계약 버전 |
 | `category` | `law`, `law_history`, `law_compare`, `admin_rule`, `ordinance`, `treaty`, `precedent`, `constitutional`, `interpretation`, `admin_appeal`, `committee`, `knowledge`, `chain`, `assist`, `meta` | 도구 분류 |
-| `evidence` | `primary` / `derived` / `heuristic` / `none` | `primary`: 응답의 법령·결정 본문 필드(조문 본문, 판시사항, 법령명, ID, 날짜 등)가 업스트림 텍스트 그대로이다. 정렬·필터·재페이지, 별도 필드에 담긴 LexLink 계산값(`in_force`, 플래그, diff)은 여전히 `primary`. `derived`: 원문 표현 자체를 편집·재구성해 글자가 원문과 다를 수 있다(`oldAndNew_service`). `heuristic`: 추정·통계·요약(`check_precedent_odds`, `simplify_article`). `none`: 법률 내용 없음(`cache_stats`) |
+| `evidence` | `primary` / `derived` / `heuristic` / `none` | `primary`: 응답의 법령·결정 본문 필드(조문 본문, 판시사항, 법령명, ID, 날짜 등)가 업스트림 표현을 담는다. primary 텍스트에서 LexLink는 공백 정리와 조·항·호·목 연결(`article_unit_text`)만 할 수 있고 글자는 바꾸지 않는다. 정렬·필터·재페이지, 별도 필드에 담긴 LexLink 계산값(`in_force`, 플래그, diff)은 여전히 `primary`. `derived`: 원문 표현 자체를 편집·재구성해 글자가 원문과 다를 수 있다(`oldAndNew_service`). `heuristic`: 추정·통계·요약(`check_precedent_odds`, `simplify_article`). `none`: 법률 내용 없음(`cache_stats`) |
 | `size` | `normal` / `large` | `large`: 대표 측정 크기가 약 100KB 이상이고 제공되는 제어(`jo`, `sections`, `display`, `id` 등)로도 그 아래로 줄일 수 없음 |
-| `upstream_calls` | 정수 | 도구 1회 호출당 law.go.kr 요청 수의 통상 최대(캐시 없음, 안티봇 리다이렉트·추가 페이지 제외). 더 큰 상한은 `notes` |
+| `upstream_calls` | 정수 | 통상적인 법령·질의 1건에서 도구 1회 호출당 law.go.kr 요청 수의 통상 최대(캐시 없음). 안티봇 리다이렉트 홉은 세지 않고, 대형 법령의 이력 페이지 추가 등 더 큰 상한은 `notes`에 적는다 |
 | `may_expose_credential` | bool | OC 등 자격 증명이 클라이언트 리댁션 후에도 응답에 있을 수 있으면 true |
 | `notes` | 문자열(선택) | 짧은 주의 |
 
