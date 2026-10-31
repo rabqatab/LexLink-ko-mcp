@@ -137,8 +137,19 @@ def test_table_matches_documented_cases():
     assert TOOL_POLICIES["check_precedent_odds"]["evidence"] == "heuristic"
     assert TOOL_POLICIES["simplify_article"]["evidence"] == "heuristic"
     assert TOOL_POLICIES["cache_stats"]["evidence"] == "none"
+    # evidence: primary = upstream text fields unchanged (lists, sorted/filtered/repaged rows and
+    # LexLink-computed side fields included); derived = wording edited or reconstructed
+    assert TOOL_POLICIES["law_as_of"]["evidence"] == "primary"
+    assert TOOL_POLICIES["eflaw_search"]["evidence"] == "primary"
+    assert TOOL_POLICIES["thdCmp_service"]["evidence"] == "derived"
+    assert TOOL_POLICIES["article_citation"]["evidence"] == "derived"
+    assert TOOL_POLICIES["elaw_search"]["evidence"] == "derived"
+    # size: large = representative size ~100KB or more and no control brings it below
     assert TOOL_POLICIES["lsDelegated_service"]["size"] == "large"
     assert TOOL_POLICIES["elaw_service"]["size"] == "large"
+    assert TOOL_POLICIES["lstrm_rlt_jo_search"]["size"] == "large"
+    for name in ("eflaw_service", "law_service", "thdCmp_service", "ordin_service", "lsJoHstInf_search"):
+        assert TOOL_POLICIES[name]["size"] == "normal"
 
 
 # ---- real clients ------------------------------------------------------------------------

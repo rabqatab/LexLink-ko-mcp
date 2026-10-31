@@ -193,13 +193,13 @@ for t in asyncio.run(create_server().list_tools()):
 |---|---|---|
 | `version` | `1` | 계약 버전 |
 | `category` | `law`, `law_history`, `law_compare`, `admin_rule`, `ordinance`, `treaty`, `precedent`, `constitutional`, `interpretation`, `admin_appeal`, `committee`, `knowledge`, `chain`, `assist`, `meta` | 도구 분류 |
-| `evidence` | `primary` / `derived` / `heuristic` / `none` | `primary` 법령·결정 원문 그대로. `derived` 업스트림 또는 LexLink가 편집·계산한 산출물(목록, 신구조문표, 비교, 인용 추출). `heuristic` 추정·통계·요약(`check_precedent_odds`, `simplify_article`). `none` 법률 내용 없음(`cache_stats`) |
-| `size` | `normal` / `large` | `large`: 응답이 보통 50KB 이상이거나 `sections`/`jo`/`display`로도 줄일 수 없음 |
+| `evidence` | `primary` / `derived` / `heuristic` / `none` | `primary`: 응답의 법령·결정 본문 필드(조문 본문, 판시사항, 법령명, ID, 날짜 등)가 업스트림 텍스트 그대로이다. 정렬·필터·재페이지, 별도 필드에 담긴 LexLink 계산값(`in_force`, 플래그, diff)은 여전히 `primary`. `derived`: 원문 표현 자체를 편집·재구성해 글자가 원문과 다를 수 있다(`oldAndNew_service`). `heuristic`: 추정·통계·요약(`check_precedent_odds`, `simplify_article`). `none`: 법률 내용 없음(`cache_stats`) |
+| `size` | `normal` / `large` | `large`: 대표 측정 크기가 약 100KB 이상이고 제공되는 제어(`jo`, `sections`, `display`, `id` 등)로도 그 아래로 줄일 수 없음 |
 | `upstream_calls` | 정수 | 도구 1회 호출당 law.go.kr 요청 수의 통상 최대(캐시 없음, 안티봇 리다이렉트·추가 페이지 제외). 더 큰 상한은 `notes` |
 | `may_expose_credential` | bool | OC 등 자격 증명이 클라이언트 리댁션 후에도 응답에 있을 수 있으면 true |
 | `notes` | 문자열(선택) | 짧은 주의 |
 
-분류 규칙: 모든 `*_search`/목록 도구는 LexLink가 재정렬·재페이지하므로 `derived`, 원문을 그대로 돌려주는 `*_service`/`*_josub`는 `primary`. `jo`/`sections`로 큰 본문을 50KB 아래로 줄일 수 있는 도구(`eflaw_service`, `law_service`, `prec_service`, `thdCmp_service`)는 `normal`이고 `notes`에 호출 방법을 적습니다. 값은 코드를 읽고 실제 응답을 측정해 정했습니다. 새 도구는 표에 항목이 없으면 서버가 시작되지 않습니다([DEVELOPMENT.md](DEVELOPMENT.md#adding-a-tool)).
+분류 규칙: `*_search`/목록 도구도 업스트림 필드를 그대로 돌려주면 `primary`입니다(원문을 고쳐 쓰는 `elaw_search`(강조 마크업 제거)와 HTML을 표로 재구성하는 `drlaw_search`만 `derived`). `article_citation`(HTML 스크래핑)과 `thdCmp_service`(`eflaw_service`와 개정 표기·따옴표 문자가 다름: 14개 조문 중 8개)도 `derived`입니다. `jo`/`sections`를 안 주면 매우 커도 그 제어로 줄어드는 도구(`eflaw_service`, `law_service`, `prec_service`, `thdCmp_service`)는 `normal`이고 `notes`에 측정 범위와 제어를 적습니다. 값은 코드를 읽고 실제 응답을 측정해 정했습니다. 새 도구는 표에 항목이 없으면 서버가 시작되지 않습니다([DEVELOPMENT.md](DEVELOPMENT.md#adding-a-tool)).
 
 ---
 
