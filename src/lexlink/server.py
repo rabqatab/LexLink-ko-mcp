@@ -13,10 +13,11 @@ import json
 import logging
 import os
 import re
-from typing import Optional, Union
+from typing import Annotated, Optional, Union
 from urllib.parse import unquote
 
 from mcp.server.fastmcp import FastMCP, Context
+from pydantic import Field
 
 from . import __version__
 from .client import LawAPIClient, redact_oc
@@ -544,18 +545,16 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         oc: Optional[str] = None,
         type: str = "JSON",
         sort: Optional[str] = None,
-        ef_yd: Optional[str] = None,
+        ef_yd: Annotated[Optional[str], Field(description="시행일자(YYYYMMDD) 범위 필터 'YYYYMMDD~YYYYMMDD'. 시행일자가 이 범위에 드는 법령 행만 나열한다 (단일 날짜는 거부). '그 날 시행 중인 법령'이 아니다 → 기준일 시점 조회는 law_as_of. Range filter on 시행일자, NOT 'in force on D'.")] = None,
         org: Optional[str] = None,
         knd: Optional[str] = None,
+        nw: Annotated[Optional[str], Field(description="상태 필터(쉼표 구분): 1=연혁(과거), 2=현행, 3=시행예정. 예: '1,2,3'. 생략하면 현행 행만. Version status filter; omit = 현행 only.")] = None,
         ctx: Context = None,
     ) -> dict:
         """
-        Search current laws by effective date (시행일 기준 현행법령 검색).
+        Search laws listed by 시행일 (시행일 기준 법령 목록 검색). ef_yd is a 시행일 RANGE filter (YYYYMMDD~YYYYMMDD), NOT "in force on D": for the law/article text as of a date D use law_as_of.
 
-        This tool searches Korean laws organized by effective date.
-        Use this when you need to find laws that are currently in effect.
-        For "which version/article text applied on date D" use law_as_of instead
-        (this tool's ef_yd is a 시행일 range filter, not an as-of-date selector).
+        Lists 현행 rows by default; pass nw="1,2,3" to include 연혁 (past) and 시행예정 (scheduled) versions.
 
         Args:
             query: Search keyword (law name or content)
@@ -569,6 +568,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 "the version in force on a day" (for that use law_as_of). Only 현행-status rows are searched.
             org: Ministry/department code filter
             knd: Law type filter
+            nw: Status filter, comma separated: 1=연혁, 2=현행, 3=시행예정 (e.g. "1,2,3"; default 현행 only)
 
         Returns:
             Search results with law list or error
@@ -587,10 +587,13 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         resolved_oc = resolve_oc(override_oc=oc)
         if ef_yd:
             validate_date_range(ef_yd, "ef_yd")
+        if nw is not None and nw != "" and not re.fullmatch(r"[123](,[123])*", str(nw).replace(" ", "")):
+            raise ValueError("nw must be a comma separated subset of 1,2,3 (1=연혁, 2=현행, 3=시행예정), e.g. '1,2,3'")
         snake_params = {
             "oc": resolved_oc, "target": "eflaw", "type": type,
             "query": query, "display": display, "page": page,
         }
+        if nw: snake_params["nw"] = str(nw).replace(" ", "")
         if sort: snake_params["sort"] = sort
         if ef_yd: snake_params["ef_yd"] = ef_yd
         if org: snake_params["org"] = org
@@ -676,9 +679,9 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
     @server.tool(annotations=TOOL_ANNOTATIONS)
     @handle_tool_error
     def eflaw_service(
-        id: Optional[Union[str, int]] = None,
-        mst: Optional[Union[str, int]] = None,
-        ef_yd: Optional[Union[str, int]] = None,
+        id: Annotated[Optional[Union[str, int]], Field(description="법령ID. id만 주면 항상 '현재' 시행본이며 시행일을 고를 수 없다. 특정 날짜 시점 본문은 law_as_of 사용. Law ID: returns the CURRENT revision only.")] = None,
+        mst: Annotated[Optional[Union[str, int]], Field(description="법령일련번호(MST; eflaw_search / law_amendment_summary / law_as_of 결과의 mst). 특정 개정본을 지정한다. Revision serial number.")] = None,
+        ef_yd: Annotated[Optional[Union[str, int]], Field(description="시행일자 YYYYMMDD. 사건일/기준일이 아니다. 반드시 mst와 함께 쓰고 그 MST 자신의 시행일자 중 하나와 정확히 일치해야 한다(불일치 시 오류). id와 함께 주면 upstream이 무시하거나 빈 응답을 주므로 이 도구는 VALIDATION_ERROR를 돌려준다. 'D일 당시 본문'은 law_as_of(law_name, as_of=D). NOT the incident date; must equal the MST's own 시행일.")] = None,
         jo: Optional[Union[str, int]] = None,
         chr_cls_cd: Optional[str] = None,
         oc: Optional[str] = None,
@@ -686,9 +689,9 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         ctx: Context = None,
     ) -> dict:
         """
-        Retrieve full law content by effective date (시행일 기준 법령 본문 조회).
+        Retrieve ONE revision's law text (시행일 기준 법령 본문 조회). ef_yd must be that mst's own 시행일, NOT the incident date; for the text in force on a date D use law_as_of.
 
-        Retrieves the complete text of a law organized by effective date.
+        Retrieves the complete text of the revision identified by mst + ef_yd (id alone = the current revision).
 
         **IMPORTANT: For specific article queries (e.g., "제174조"), ALWAYS use the `jo` parameter.
         Some laws (e.g., 자본시장법) have 400+ articles and the full response can exceed 1MB.
@@ -724,6 +727,12 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         resolved_oc = resolve_oc(override_oc=oc)
         if not id and not mst:
             raise ValueError("Either 'id' or 'mst' parameter is required")
+        if ef_yd and not mst:
+            raise ToolValidationError(
+                "ef_yd는 mst와 함께만 유효합니다. id와 함께 주면 upstream이 ef_yd를 무시하거나 빈 응답을 돌려줍니다.",
+                hints=["특정 날짜(D) 시점의 본문/조문은 law_as_of(law_name, as_of=D, article=...)를 사용하세요.",
+                       "특정 개정본은 mst와 그 MST 자신의 시행일자를 ef_yd로 함께 지정하세요 (law_amendment_summary / law_as_of 결과)."],
+            )
         jo = _normalize_jo_arg(jo)
         snake_params = {"oc": resolved_oc, "target": "eflaw", "type": type}
         if id: snake_params["id"] = id
@@ -739,11 +748,11 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
     @server.tool(annotations=TOOL_ANNOTATIONS)
     @handle_tool_error
     def law_service(
-        id: Optional[Union[str, int]] = None,
-        mst: Optional[Union[str, int]] = None,
-        lm: Optional[str] = None,
-        ld: Optional[int] = None,
-        ln: Optional[int] = None,
+        id: Annotated[Optional[Union[str, int]], Field(description="법령ID. id만 주면 항상 '현재' 시행본이며 시행일을 고를 수 없다. 특정 날짜 시점 본문은 law_as_of 사용. Law ID: returns the CURRENT revision only.")] = None,
+        mst: Annotated[Optional[Union[str, int]], Field(description="법령일련번호(MST; eflaw_search / law_amendment_summary / law_as_of 결과의 mst). 특정 개정본을 지정한다. Revision serial number.")] = None,
+        lm: Annotated[Optional[str], Field(description="법령명 보조 파라미터(거의 불필요). Law-name helper; not a date selector.")] = None,
+        ld: Annotated[Optional[int], Field(description="공포일자 YYYYMMDD(ln과 함께). 날짜 시점 선택용이 아니며 id와 함께 쓰면 upstream이 무시한다(현재본 반환). 'D일 당시 본문'은 law_as_of. NOT an as-of-date selector.")] = None,
+        ln: Annotated[Optional[int], Field(description="공포번호(ld와 함께). 날짜 시점 선택용이 아님. Announcement number, not a date selector.")] = None,
         jo: Optional[Union[str, int]] = None,
         lang: Optional[str] = None,
         oc: Optional[str] = None,
@@ -751,9 +760,9 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         ctx: Context = None,
     ) -> dict:
         """
-        Retrieve full law content by announcement date (공포일 기준 법령 본문 조회).
+        Retrieve full law text (공포일 기준 법령 본문 조회): id = current revision, mst = that revision. It cannot select by date; for the law/article in force on a date D use law_as_of.
 
-        Retrieves the complete text of a law organized by announcement (publication) date.
+        Retrieves the complete text of a law (current revision via id, a specific revision via mst).
 
         **IMPORTANT: For specific article queries (e.g., "제174조"), ALWAYS use the `jo` parameter.
         Some laws (e.g., 자본시장법) have 400+ articles and the full response can exceed 1MB.
@@ -805,9 +814,9 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
     @server.tool(annotations=TOOL_ANNOTATIONS)
     @handle_tool_error
     def eflaw_josub(
-        id: Optional[Union[str, int]] = None,
-        mst: Optional[Union[str, int]] = None,
-        ef_yd: Optional[Union[str, int]] = None,
+        id: Annotated[Optional[Union[str, int]], Field(description="법령ID. id만 주면 항상 '현재' 시행본이며 시행일을 고를 수 없다. 특정 날짜 시점 본문은 law_as_of 사용. Law ID: returns the CURRENT revision only.")] = None,
+        mst: Annotated[Optional[Union[str, int]], Field(description="법령일련번호(MST; eflaw_search / law_amendment_summary / law_as_of 결과의 mst). 특정 개정본을 지정한다. Revision serial number.")] = None,
+        ef_yd: Annotated[Optional[Union[str, int]], Field(description="시행일자 YYYYMMDD. 사건일/기준일이 아니다. 반드시 mst와 함께 쓰고 그 MST 자신의 시행일자 중 하나와 정확히 일치해야 한다(불일치 시 오류). id와 함께 주면 upstream이 무시하거나 빈 응답을 주므로 이 도구는 VALIDATION_ERROR를 돌려준다. 'D일 당시 본문'은 law_as_of(law_name, as_of=D). NOT the incident date; must equal the MST's own 시행일.")] = None,
         jo: Optional[Union[str, int]] = None,
         hang: Optional[str] = None,
         ho: Optional[str] = None,
@@ -817,7 +826,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         ctx: Context = None,
     ) -> dict:
         """
-        Query specific article/paragraph by effective date (시행일 기준 조·항·호·목 조회).
+        Query one article/paragraph of ONE revision (시행일 기준 조·항·호·목 조회). ef_yd must be that mst's own 시행일, NOT the incident date; for the article in force on a date D use law_as_of.
 
         **BEST TOOL for querying specific articles like "제174조", "제3조" etc.**
         This returns only the requested article/paragraph, avoiding large full-law responses.
@@ -854,6 +863,12 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         resolved_oc = resolve_oc(override_oc=oc)
         if not id and not mst:
             raise ValueError("Either 'id' or 'mst' parameter is required")
+        if ef_yd and not mst:
+            raise ToolValidationError(
+                "ef_yd는 mst와 함께만 유효합니다. id와 함께 주면 upstream이 ef_yd를 무시하거나 빈 응답을 돌려줍니다.",
+                hints=["특정 날짜(D) 시점의 본문/조문은 law_as_of(law_name, as_of=D, article=...)를 사용하세요.",
+                       "특정 개정본은 mst와 그 MST 자신의 시행일자를 ef_yd로 함께 지정하세요 (law_amendment_summary / law_as_of 결과)."],
+            )
         jo = _normalize_jo_arg(jo)
         snake_params = {"oc": resolved_oc, "target": "eflawjosub", "type": type}
         if id: snake_params["id"] = id
@@ -871,8 +886,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
     @server.tool(annotations=TOOL_ANNOTATIONS)
     @handle_tool_error
     def law_josub(
-        id: Optional[Union[str, int]] = None,
-        mst: Optional[Union[str, int]] = None,
+        id: Annotated[Optional[Union[str, int]], Field(description="법령ID. id만 주면 항상 '현재' 시행본이며 시행일을 고를 수 없다. 특정 날짜 시점 본문은 law_as_of 사용. Law ID: returns the CURRENT revision only.")] = None,
+        mst: Annotated[Optional[Union[str, int]], Field(description="법령일련번호(MST; eflaw_search / law_amendment_summary / law_as_of 결과의 mst). 특정 개정본을 지정한다. Revision serial number.")] = None,
         jo: Optional[Union[str, int]] = None,
         hang: Optional[str] = None,
         ho: Optional[str] = None,
@@ -882,7 +897,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         ctx: Context = None,
     ) -> dict:
         """
-        Query specific article/paragraph by announcement date (공포일 기준 조·항·호·목 조회).
+        Query one article/paragraph (공포일 기준 조·항·호·목 조회): id = current revision, mst = that revision. It cannot select by date; for the article in force on a date D use law_as_of.
 
         **BEST TOOL for querying specific articles like "제174조", "제3조" etc.**
         This returns only the requested article/paragraph, avoiding large full-law responses.
@@ -3225,7 +3240,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         end_of_current_year, strip_html, compact_delegation_tree,
     )
     from ._helpers import ToolValidationError, slim_enabled
-    from .as_of import normalize_as_of, build_candidates, select_as_of, describe, day_before
+    from .as_of import normalize_as_of, build_candidates, select_as_of, describe, day_before, is_repeal
+    PERIOD_MAX = 12  # law_as_of period mode: max revisions fetched
     from .validation import format_article_number
 
     def _internal_format(response_type: str) -> str:
@@ -4024,14 +4040,15 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
     @handle_tool_error
     def law_amendment_summary(
         law_name: str,
-        date_from: str = "20100101",
-        date_to: Optional[str] = None,
+        date_from: Annotated[str, Field(description="시작일 YYYYMMDD (기본 20100101). 기본적으로 '공포일' 기준이며 시행일이 아님 (date_basis로 변경). Start of range.")] = "20100101",
+        date_to: Annotated[Optional[str], Field(description="종료일 YYYYMMDD (기본: 올해 말). 기본은 공포일 기준. End of range.")] = None,
         oc: Optional[str] = None,
         type: str = "JSON",
+        date_basis: Annotated[str, Field(description="date_from/date_to를 무엇에 적용할지: 'announced'(기본, 공포일자) 또는 'effective'(시행일자; 이 경우 date_from 당시 시행 중이던 개정본도 in_force_at_period_start=true로 포함해 좁은 구간에서도 누락되지 않음). Which date the range filters.")] = "announced",
         ctx: Context = None,
     ) -> dict:
         """
-        List all revisions of a law within a date range (법령 개정 이력 조회).
+        List a law's revisions (법령 개정 이력 조회). date_from/date_to filter by 공포일 (announcement) by default, NOT 시행일; use date_basis="effective" to filter by 시행일 and keep the revision in force at date_from. For the text as of a date use law_as_of.
 
         Resolves the name to a single 법령ID (법률 preferred over 시행령/시행규칙
         unless you name the 시행령) and lists every version of that law —
@@ -4044,10 +4061,14 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             date_to: End date YYYYMMDD (default: end of the current year)
             oc: Optional OC override
             type: Response format - "JSON" (default), "XML", or "HTML"
+            date_basis: "announced" (default; range applies to 공포일자) or "effective" (range applies to
+                each (MST, 시행일자); the revision in force at date_from is also returned, marked
+                in_force_at_period_start)
 
         Returns:
             Revisions (date, effective_date, type, announcement_no, mst, status,
-            law_type) sorted by announcement date, newest first
+            law_type) sorted by announcement date, newest first; with date_basis="effective"
+            one record per (MST, 시행일자), newest 시행일 first
 
         Examples:
             >>> law_amendment_summary(law_name="근로기준법", date_from="20200101")
@@ -4063,10 +4084,25 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         if law_info.get("status") == "error":
             return law_info
 
-        revisions = [
-            revision_record(row) for row in law_info["versions"]
-            if date_from <= (row.get("공포일자", "") or "") <= date_to
-        ]
+        basis = (date_basis or "announced").strip().lower()
+        if basis not in ("announced", "effective"):
+            raise ValueError("date_basis must be 'announced' (공포일) or 'effective' (시행일).")
+        if basis == "effective":
+            ecands = build_candidates(law_info["rows"])
+            in_range = [c for c in ecands if date_from <= c["effective_date"] <= date_to]
+            start = select_as_of(ecands, date_from)["selected"]
+            revisions = []
+            if start is not None and all(start is not c for c in in_range):
+                rec = revision_record(start["row"])
+                rec["in_force_at_period_start"] = True
+                revisions.append(rec)
+            revisions.extend(revision_record(c["row"]) for c in in_range)
+            revisions.sort(key=lambda r: (r["effective_date"], r["date"], r["announcement_no"]), reverse=True)
+        else:
+            revisions = [
+                revision_record(row) for row in law_info["versions"]
+                if date_from <= (row.get("공포일자", "") or "") <= date_to
+            ]
         current = law_info.get("current") or {}
 
         out = {
@@ -4080,6 +4116,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             "revisions": revisions,
             "total_revisions": len(revisions),
             "total_versions": len(law_info["versions"]),
+            "date_basis": basis,
+            "date_filter_field": "시행일자" if basis == "effective" else "공포일자",
             "source": "eflaw_search (target=eflaw, 법령ID filter; 현행연혁코드 = status)",
         }
         if law_info.get("warnings"):
@@ -4663,22 +4701,29 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
     @server.tool(annotations=TOOL_ANNOTATIONS)
     @handle_tool_error
     def law_as_of(
-        law_name: str,
-        as_of: Union[str, int],
-        article: Optional[Union[str, int]] = None,
-        article_branch: Union[int, str] = 0,
+        law_name: Annotated[str, Field(description=(
+            "법령명(예: '근로기준법') 또는 법령ID(예: '001872'). Law name or 6-digit 법령ID."))],
+        as_of: Annotated[Union[str, int], Field(description=(
+            "기준일 D = 사건 발생일/계약일/처분일 등 '그 날 시행 중이던' 법령을 알고 싶은 날짜. "
+            "20160503, 2016-05-03, 2016.5.3., 2016/5/3, 2016년 5월 3일 모두 허용. "
+            "The incident date D goes HERE (never into ef_yd of other tools)."))],
+        article: Annotated[Optional[Union[str, int]], Field(description=(
+            "조문(선택): 23, '제23조', '76의2', '003505'. 생략하면 법령 헤더(MST·시행일·공포일)만 반환."))] = None,
+        article_branch: Annotated[Union[int, str], Field(description=(
+            "article이 숫자일 때 가지번호(제3조의2 → article=3, article_branch=2). 기본 0."))] = 0,
+        as_of_end: Annotated[Optional[Union[str, int]], Field(description=(
+            "기간 조회 종료일(선택). 주면 as_of~as_of_end 동안 시행된 모든 개정본(시행일 기준)과 조문을 "
+            "period.revisions로 반환. 기간 중 개정이 있었는지 볼 때 사용."))] = None,
         oc: Optional[str] = None,
         type: str = "JSON",
         ctx: Context = None,
     ) -> dict:
         """
-        Law (and optionally one article) as it stood in force on a given day (기준일 시점 법령 조회).
+        Law/article text in force on date D (기준일·사건일 시점 조회): picks the revision with the latest 시행일 <= D and returns its MST, 시행일, 공포일, article text, whether it differs from the current text, and 시행예정 versions. Use this for any "as of date" question; do NOT put D into ef_yd of eflaw_service/eflaw_josub/eflaw_search.
 
-        Use this whenever the question is "what did the law/article say on date D"
-        (사건 발생일, 계약일, 처분일 기준 적용 법령). law.go.kr has no such query: its
-        ef_yd arguments are a 시행일 range filter (search) or a revision selector
-        (service), NOT "in force on D". This tool does the lookup: it lists every
-        (MST, 시행일) of the law and picks the one with the latest 시행일 <= D, then
+        law.go.kr has no "in force on D" query: its ef_yd arguments are a 시행일 range
+        filter (search) or a revision selector that must equal one of an MST's own 시행일
+        (service). This tool lists every (MST, 시행일) of the law, selects the right one and
         fetches that exact revision (lawService target=eflaw, MST + efYd).
 
         Args:
@@ -4687,16 +4732,17 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 or 2016년 5월 3일. Invalid dates (20160231) give VALIDATION_ERROR.
             article: Optional article, e.g. 23, "23", "제23조", "76의2", "003505"
             article_branch: Branch number when article is a plain number (3 for 제N조의3)
+            as_of_end: Optional end of a period; returns every revision in force between as_of and as_of_end
             oc: Optional OC override
             type: "JSON" (default) or "XML"
 
         Returns:
-            status "ok" with in_force true: version (mst, effective_date, announced_date,
-            announcement_no, revision_type, status), validity window, article text (or
-            only the law header when no article), comparison with the version in force
-            today (differs_from_current is about the article when one is given),
-            same_day_alternatives, partial_effect (a MST with several 시행일),
-            neighbors, and a plain statement naming the date and revision.
+            status "ok" with in_force true: as_of, version (mst, effective_date, announced_date,
+            announcement_no, revision_type, status), valid_from/valid_until, article (label, title,
+            text), comparison (is_current_version, differs_from_current for the article, current_version),
+            later_amendments {exists, count, next_effective_date}, scheduled_version_exists
+            (+ scheduled_versions), promulgated_not_yet_effective, same_day_alternatives, partial_effect,
+            period (with as_of_end), neighbors, statement, caveats.
             status "ok" with in_force false: reason BEFORE_FIRST_ENFORCEMENT,
             BEFORE_EARLIEST_AVAILABLE_VERSION or AFTER_REPEAL (not an error).
             status "error": VALIDATION_ERROR (bad date/article/law), ARTICLE_NOT_FOUND
@@ -4706,10 +4752,14 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         Examples:
             >>> law_as_of(law_name="근로기준법", as_of="2019-07-15", article=76, article_branch=2)
             >>> law_as_of(law_name="민법", as_of="2015.1.1.", article="제750조")
+            >>> law_as_of(law_name="근로기준법", as_of="2018-01-01", as_of_end="2020-12-31", article=53)
         """
         resolved_oc = resolve_oc(override_oc=oc)
         fmt = _internal_format(type)
         d = normalize_as_of(as_of)
+        end = normalize_as_of(as_of_end) if as_of_end not in (None, "") else None
+        if end and end < d:
+            raise ValueError(f"as_of_end ({end}) must not be earlier than as_of ({d}).")
         wanted = normalize_article(article, article_branch) if article not in (None, "") else None
         name = (law_name or "").strip()
         if not name:
@@ -4759,71 +4809,16 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         if info.get("warnings"):
             out["warnings"] = list(info["warnings"])
 
-        if sel["outcome"] == "before_first_version":
-            first = cands[0]
-            truly_new = (first["row"].get("제개정구분명", "") == "제정") and not incomplete
-            out.update({
-                "in_force": False,
-                "reason": "BEFORE_FIRST_ENFORCEMENT" if truly_new else "BEFORE_EARLIEST_AVAILABLE_VERSION",
-                "first_version": describe(first),
-                "statement": (
-                    f"{law_label}은(는) 기준일 {d}에 시행 전이었습니다. 최초 시행일은 {first['effective_date']}입니다."
-                    if truly_new else
-                    f"기준일 {d} 이전의 버전은 조회된 연혁에 없습니다(가장 이른 버전 시행일 {first['effective_date']}, "
-                    f"{first['row'].get('제개정구분명', '')}). 그 이전에 시행 중이었는지는 확인할 수 없습니다."
-                ),
-            })
-            out["caveats"] = caveats
-            return out
-
-        chosen = sel["selected"]
-        mst, eff = chosen["mst"], chosen["effective_date"]
-        version = describe(chosen)
-        if sel["outcome"] == "repealed":
-            out.update({
-                "in_force": False,
-                "reason": "AFTER_REPEAL",
-                "repealed_on": eff,
-                "repealing_version": version,
-                "last_version_before_repeal": describe(sel["previous"]),
-                "statement": f"{law_label}은(는) {eff}자로 폐지되어 기준일 {d}에는 시행 중이 아니었습니다 "
-                             f"(폐지 MST {mst}, {version['revision_type']}).",
-            })
-            out["caveats"] = caveats
-            return out
-
-        mst_dates = sorted({c["effective_date"] for c in cands if c["mst"] == mst})
-        nxt = sel["next"]
-        out.update({
-            "in_force": True,
-            "version": version,
-            "is_future_version": eff > today,
-            "valid_from": eff,
-            "valid_until": day_before(nxt["effective_date"]) if nxt else None,
-            "partial_effect": {
-                "possible": len(mst_dates) > 1,
-                "mst_effective_dates": mst_dates,
-                "note": ("이 개정(MST)은 시행일이 여러 개입니다(단계적 시행). 기준일에 해당하는 시행일 "
-                         f"{eff} 기준 본문을 조회했습니다.") if len(mst_dates) > 1 else "",
-            },
-        })
-        if sel["same_day"]:
-            out["same_day_alternatives"] = [describe(c) for c in sel["same_day"]]
-            caveats.append(
-                f"같은 시행일 {eff}에 시행되는 버전이 {len(sel['same_day']) + 1}개입니다. "
-                "공포일자가 가장 늦은 MST를 선택했습니다."
-            )
-        if eff > today:
-            caveats.append("시행예정 버전입니다. 시행일 전에 다시 개정될 수 있습니다.")
+        # 시행예정 versions (effective after today) and versions promulgated but not yet effective on D
+        scheduled = [c for c in cands if c["effective_date"] > today]
+        out["scheduled_version_exists"] = bool(scheduled)
+        pending = [c for c in cands if (c["row"].get("공포일자", "") or "") <= d < c["effective_date"]]
+        out["promulgated_not_yet_effective_exists"] = bool(pending)
         if not slim:
-            out["neighbors"] = {"previous": describe(sel["previous"]), "next": describe(nxt)}
-        is_current = bool(cur_c and cur_c["mst"] == mst and cur_c["effective_date"] == eff)
-        comparison = {
-            "is_current_version": is_current,
-            "current_version": describe(cur_c),
-            "current_state": cur["outcome"],
-        }
-        fallback_used = []
+            out["scheduled_versions"] = [describe(c) for c in scheduled]
+            out["promulgated_not_yet_effective"] = [describe(c) for c in pending]
+
+        fallback_used: list = []
 
         def fetch(c: dict):
             """(info, failure_response) for the article at one (MST, 시행일)."""
@@ -4847,20 +4842,147 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 return None, res
             return extract_article(res.get("raw_content", ""), fmt, *wanted), None
 
+        def period_block(start_c) -> dict:
+            """All revisions in force during [d, end]; article text per revision when requested."""
+            revs = [start_c] if start_c is not None and sel["outcome"] == "in_force" else []
+            efs = sorted({c["effective_date"] for c in cands
+                          if d < c["effective_date"] <= end
+                          and (not revs or c["effective_date"] > revs[0]["effective_date"])})
+            for e in efs:
+                revs.append(select_as_of(cands, e)["selected"])
+            truncated = len(revs) > PERIOD_MAX
+            revs = revs[:PERIOD_MAX]
+            rows_out = []
+            for i, c in enumerate(revs):
+                nxt_c = revs[i + 1] if i + 1 < len(revs) else None
+                until = day_before(nxt_c["effective_date"]) if nxt_c else None
+                if nxt_c is None:
+                    later = [x for x in cands if x["effective_date"] > c["effective_date"]]
+                    until = day_before(later[0]["effective_date"]) if later else None
+                entry = {"version": describe(c), "valid_from": max(c["effective_date"], d),
+                         "valid_until": min(until, end) if until else end}
+                if is_repeal(c["row"]):
+                    entry["repealed"] = True
+                elif wanted:
+                    try:
+                        a, fail = fetch(c)
+                    except ArticleNotFoundError:
+                        entry["article_status"] = ErrorCode.ARTICLE_NOT_FOUND
+                    else:
+                        if fail is not None:
+                            entry["article_status"] = fail.get("error_code") or ErrorCode.UPSTREAM_ERROR
+                        else:
+                            entry["article"] = {"label": a["article"], "title": a["title"], "text": a["text"]}
+                rows_out.append(entry)
+            block = {"from": d, "to": end, "revision_count": len(rows_out), "revisions": rows_out}
+            if wanted:
+                texts = {re.sub(r"\s+", "", e["article"]["text"]) if "article" in e else "\0absent"
+                         for e in rows_out}
+                block["article_changed_within_period"] = len(texts) > 1
+            if truncated:
+                block["truncated"] = True
+                caveats.append(f"기간 내 개정본이 많아 처음 {PERIOD_MAX}개만 조회했습니다.")
+            return block
+
+        if sel["outcome"] == "before_first_version":
+            first = cands[0]
+            truly_new = (first["row"].get("제개정구분명", "") == "제정") and not incomplete
+            out.update({
+                "in_force": False,
+                "reason": "BEFORE_FIRST_ENFORCEMENT" if truly_new else "BEFORE_EARLIEST_AVAILABLE_VERSION",
+                "first_version": describe(first),
+                "statement": (
+                    f"{law_label}은(는) 기준일 {d}에 시행 전이었습니다. 최초 시행일은 {first['effective_date']}입니다."
+                    if truly_new else
+                    f"기준일 {d} 이전의 버전은 조회된 연혁에 없습니다(가장 이른 버전 시행일 {first['effective_date']}, "
+                    f"{first['row'].get('제개정구분명', '')}). 그 이전에 시행 중이었는지는 확인할 수 없습니다."
+                ),
+            })
+            if end:
+                out["period"] = period_block(None)
+            out["caveats"] = caveats
+            return out
+
+        chosen = sel["selected"]
+        mst, eff = chosen["mst"], chosen["effective_date"]
+        version = describe(chosen)
+        if sel["outcome"] == "repealed":
+            out.update({
+                "in_force": False,
+                "reason": "AFTER_REPEAL",
+                "repealed_on": eff,
+                "repealing_version": version,
+                "last_version_before_repeal": describe(sel["previous"]),
+                "statement": f"{law_label}은(는) {eff}자로 폐지되어 기준일 {d}에는 시행 중이 아니었습니다 "
+                             f"(폐지 MST {mst}, {version['revision_type']}).",
+            })
+            if end:
+                out["period"] = period_block(chosen)
+            out["caveats"] = caveats
+            return out
+
+        mst_dates = sorted({c["effective_date"] for c in cands if c["mst"] == mst})
+        nxt = sel["next"]
+        later_all = [c for c in cands if c["effective_date"] > eff]
+        out.update({
+            "in_force": True,
+            "version": version,
+            "is_future_version": eff > today,
+            "valid_from": eff,
+            "valid_until": day_before(nxt["effective_date"]) if nxt else None,
+            "later_amendments": {
+                "exists": bool(later_all),
+                "count": len({(c["mst"], c["effective_date"]) for c in later_all}),
+                "next_effective_date": nxt["effective_date"] if nxt else None,
+            },
+            "partial_effect": {
+                "possible": len(mst_dates) > 1,
+                "mst_effective_dates": mst_dates,
+                "note": ("이 개정(MST)은 시행일이 여러 개입니다(단계적 시행). 기준일에 해당하는 시행일 "
+                         f"{eff} 기준 본문을 조회했습니다.") if len(mst_dates) > 1 else "",
+            },
+        })
+        if sel["same_day"]:
+            out["same_day_alternatives"] = [describe(c) for c in sel["same_day"]]
+            caveats.append(
+                f"같은 시행일 {eff}에 시행되는 버전이 {len(sel['same_day']) + 1}개입니다. "
+                "공포일자가 가장 늦은 MST를 선택했습니다."
+            )
+        if eff > today:
+            caveats.append("시행예정 버전입니다. 시행일 전에 다시 개정될 수 있습니다.")
+        if pending:
+            caveats.append(
+                "기준일 현재 공포되었으나 아직 시행 전인 개정이 있습니다(promulgated_not_yet_effective): "
+                + ", ".join(f"MST {c['mst']}(시행 {c['effective_date']})" for c in pending)
+                + ". 기준일에 적용되는 것은 위 version입니다."
+            )
+        if not slim:
+            out["neighbors"] = {"previous": describe(sel["previous"]), "next": describe(nxt)}
+        is_current = bool(cur_c and cur_c["mst"] == mst and cur_c["effective_date"] == eff)
+        comparison = {
+            "is_current_version": is_current,
+            "current_version": describe(cur_c),
+            "current_state": cur["outcome"],
+        }
+
+        art = None
         if wanted:
             label = article_label(*wanted)
             try:
                 art, failure = fetch(chosen)
             except ArticleNotFoundError as e:
-                return create_error_response(
-                    error_code=ErrorCode.ARTICLE_NOT_FOUND,
-                    message=(f"{law_label} {label}: 기준일 {d}에 시행 중인 버전(MST {mst}, 시행일 {eff})에 "
-                             f"해당 조문이 없습니다. Article not found in the version in force on {d}."),
-                    hints=["조문이 신설되기 전이거나 삭제된 시점일 수 있습니다. 다른 기준일로 다시 조회하거나 "
-                           "law_amendment_summary로 개정 이력을 확인하세요.",
-                           *(e.hints or [])],
-                    as_of=d, version=version, law_name=law_label, article=label,
-                )
+                if not end:
+                    return create_error_response(
+                        error_code=ErrorCode.ARTICLE_NOT_FOUND,
+                        message=(f"{law_label} {label}: 기준일 {d}에 시행 중인 버전(MST {mst}, 시행일 {eff})에 "
+                                 f"해당 조문이 없습니다. Article not found in the version in force on {d}."),
+                        hints=["조문이 신설되기 전이거나 삭제된 시점일 수 있습니다. 다른 기준일로 다시 조회하거나 "
+                               "law_amendment_summary로 개정 이력을 확인하세요.",
+                               *(e.hints or [])],
+                        as_of=d, version=version, law_name=law_label, article=label,
+                    )
+                art, failure = None, None
+                out["article_status"] = ErrorCode.ARTICLE_NOT_FOUND
             if failure is not None:
                 code = failure.get("error_code") or ErrorCode.UPSTREAM_ERROR
                 return create_error_response(
@@ -4871,11 +4993,12 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                     hints=["잠시 후 다시 시도하세요", "OC 승인 및 API 신청 여부(open.law.go.kr)를 확인하세요"],
                     success=False, as_of=d, version=version, law_name=law_label, article=label,
                 )
-            out["article"] = {
-                "label": art["article"], "title": art["title"], "text": art["text"],
-                "upstream_article_effective_date": art["effective"],
-                "upstream_changed_flag": art["changed"],
-            }
+            if art is not None:
+                out["article"] = {
+                    "label": art["article"], "title": art["title"], "text": art["text"],
+                    "upstream_article_effective_date": art["effective"],
+                    "upstream_changed_flag": art["changed"],
+                }
             if is_current:
                 comparison["differs_from_current"] = False
             elif cur_c is None:
@@ -4885,29 +5008,35 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 try:
                     cur_art, cur_fail = fetch(cur_c)
                 except ArticleNotFoundError:
-                    comparison["differs_from_current"] = True
+                    comparison["differs_from_current"] = art is not None
                     comparison["note"] = f"현재 버전(MST {cur_c['mst']})에는 이 조문이 없습니다."
                 else:
                     if cur_fail is not None:
                         comparison["differs_from_current"] = None
                         comparison["note"] = (f"현재 버전 본문 조회 실패({cur_fail.get('error_code')}): "
                                               "비교하지 못했습니다.")
+                    elif art is None:
+                        comparison["differs_from_current"] = True
                     else:
                         same = re.sub(r"\s+", "", cur_art["text"]) == re.sub(r"\s+", "", art["text"])
                         comparison["differs_from_current"] = not same
                         if not slim and not same:
                             comparison["current_article_text"] = cur_art["text"]
-            what = f"{law_label} {art['article']}"
+            what = f"{law_label} {art['article'] if art else label}"
         else:
             comparison["differs_from_current"] = None
             comparison["note"] = "조문을 지정하지 않아 법령 헤더만 반환했습니다(조문 비교 없음)."
             what = law_label
         out["comparison"] = comparison
+        if end:
+            out["period"] = period_block(chosen)
         out["statement"] = (
             f"기준일 {d} 현재 시행 중인 {what}은(는) MST {mst} "
             f"(시행일 {eff}, 공포일 {version['announced_date']}, 공포번호 {version['announcement_no']}, "
             f"{version['revision_type']}) 기준입니다."
             + (f" 이 버전은 {out['valid_until']}까지 유효합니다." if out["valid_until"] else " 이후 시행 예정 개정은 없습니다.")
+            + (" 이후 개정이 있습니다." if later_all else "")
+            + (" 시행예정 버전이 있습니다." if scheduled else "")
         )
         out["caveats"] = caveats
         return out
