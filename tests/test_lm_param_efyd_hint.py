@@ -73,3 +73,27 @@ def test_eflaw_mst_with_ef_yd_and_id_alone_still_call_upstream(tool):
     tool("eflaw_service", id="001706", type="XML")
     assert len(RecordingClient.calls) == 2
     assert RecordingClient.calls[0][1]["efYd"] == 20260317
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("name", ["prec_service", "detc_service"])
+def test_id_plus_lm_drops_LM(tool, name):
+    tool(name, id="228541", lm="x", type="XML")
+    (_, params), = RecordingClient.calls
+    assert params["ID"] == "228541"
+    assert "LM" not in params and "lm" not in params
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("name,kw", [
+    ("admrul_service", {}),
+    ("prec_service", {"id": ""}),
+    ("detc_service", {"id": ""}),
+    ("expc_service", {"id": "315191"}),
+    ("decc_service", {"id": "245011"}),
+])
+def test_lm_forwarded_as_LM_without_id_filter(tool, name, kw):
+    tool(name, lm="이름", type="XML", **kw)
+    (_, params), = RecordingClient.calls
+    assert params["LM"] == "이름"
+    assert "lm" not in params

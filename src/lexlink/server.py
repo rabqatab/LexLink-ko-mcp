@@ -1076,7 +1076,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         Args:
             id: Law ID (required if mst not provided)
             mst: Law master number (required if id not provided)
-            lm: Law name (alternative search method)
+            lm: Korean law name (exact; English names do not match). Alone it is enough
+                (alternative to id/mst).
             ld: Announcement date (YYYYMMDD)
             ln: Announcement number
             oc: Optional OC override (defaults to env var)
@@ -1564,7 +1565,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
 
         Args:
             id: Precedent sequence number (판례일련번호, not the search row number)
-            lm: Precedent name (optional)
+            lm: Precedent name; must be the exact title and is only used without id
+                (ignored when id is given, since a mismatch makes upstream report no match)
             sections: Response detail level:
                 - "summary": Returns 판시사항, 판결요지, 참조조문, 참조판례 only (~5KB).
                   Excludes 판례내용 (full judgment text, often 15-25KB).
@@ -1588,7 +1590,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             "oc": resolved_oc, "target": "prec",
             "id": str(id), "type": type,
         }
-        if lm: snake_params["lm"] = lm
+        if lm and not id: snake_params["lm"] = lm
         return run_service(get_client=_get_client, target="prec",
                           snake_params=snake_params, response_type=type,
                           sections=sections,
@@ -1679,7 +1681,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
 
         Args:
             id: Constitutional Court decision sequence number (헌재결정례일련번호, not the search row number)
-            lm: Decision name (optional)
+            lm: Decision name; must be the exact title and is only used without id
+                (ignored when id is given, since a mismatch makes upstream report no match)
             sections: "summary" to exclude 전문 (full text), or "full"/None for everything.
                 **Recommended: "summary" for PlayMCP** to stay under 20KB.
             oc: Optional OC override
@@ -1697,7 +1700,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             "oc": resolved_oc, "target": "detc",
             "id": str(id), "type": type,
         }
-        if lm: snake_params["lm"] = lm
+        if lm and not id: snake_params["lm"] = lm
         return run_service(get_client=_get_client, target="detc",
                           snake_params=snake_params, response_type=type,
                           sections=sections,
