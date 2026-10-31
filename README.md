@@ -715,6 +715,7 @@ lexlink-ko-mcp/
 │   ├── citation.py      # Article citation extraction (Phase 4)
 │   ├── client.py        # HTTP client for law.go.kr API (+ upstream error detection)
 │   ├── errors.py        # Error codes & responses
+│   ├── http_security.py # HTTP auth, rate limit, host validation
 │   ├── raw_logger.py    # PlayMCP traffic logging
 │   └── log_processor.py # Log format converter
 ├── tests/                # 122 offline tests
