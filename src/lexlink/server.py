@@ -67,7 +67,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
 
 2. **Citations**: ALWAYS use `article_citation` to get referenced laws
    - Parameters: mst, law_name, article number
-   - This provides 100% accurate citation data
+   - Parsed from the official law.go.kr hyperlinks (not LLM-based); "같은 법" is resolved heuristically, so verify against the article text when it matters
 
 3. **Response**: Include citation summary
    - Total count, external vs internal
@@ -1962,7 +1962,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
 
         This tool extracts all legal citations referenced by a specific law article.
         It parses the official hyperlinked citations from law.go.kr HTML pages,
-        providing 100% accurate citation data with zero API cost.
+        with zero API cost. "같은 법" and article lists are resolved heuristically
+        (not guaranteed), so verify against the article text when it matters.
 
         The tool identifies:
         - External citations (references to other laws)

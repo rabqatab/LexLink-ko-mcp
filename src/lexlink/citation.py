@@ -2,7 +2,8 @@
 HTML-based Citation Extractor for Korean Laws.
 
 Extracts citations directly from law.go.kr HTML pages using pre-linked
-citation data. This approach provides 100% accuracy with zero API cost.
+citation data with zero API cost. Back-references such as "같은 법" are resolved
+heuristically from the most recently named law, so results are not guaranteed.
 
 Usage:
     extractor = CitationExtractor()
@@ -43,6 +44,7 @@ class Citation:
     # Classification
     citation_type: str = "unknown"            # internal/external
     link_class: str = ""                      # sfon1/sfon2/sfon3/sfon4
+    gap_before: str = ""                      # Plain text since the previous link (parsing aid)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -130,6 +132,7 @@ class CitationExtractor:
     LAW_NAME_PATTERN = re.compile(r'「([^」]+)」')
     FNCPOP_PATTERN = re.compile(r"fncLsLawPop\s*\(\s*['\"](\d+)['\"].*?['\"](\w+)['\"]")
     LSI_SEQ_PATTERN = re.compile(r'lsiSeq=(\d+)')
+    LIST_CONNECTORS = (",", "ㆍ", "및", "와", "과", "또는", ", 및", ", 또는")
 
     def __init__(self, timeout: int = 15, request_delay: float = 0.1):
         """
@@ -256,12 +259,54 @@ class CitationExtractor:
             class_=lambda x: x and 'link' in x and 'sfon' in x
         )
 
+        # Most recently named external law (「법명」), used to resolve "같은 법".
+        last_named_law: Optional[str] = None
+
         for link in link_elements:
             citation = self._parse_single_link(link, source_law_name)
-            if citation:
-                citations.append(citation)
+            if not citation:
+                continue
+            citation.gap_before = self._gap_before(link)
+
+            if citation.link_class == 'sfon1':
+                text = citation.target_text
+                if self.LAW_NAME_PATTERN.search(text):
+                    last_named_law = citation.target_law_name
+                elif '같은 법' in text and '이 법' not in text:
+                    # "같은 법" = the law named most recently, not the source law
+                    if last_named_law and last_named_law != source_law_name:
+                        suffix = self._same_law_suffix(link, text)
+                        citation.target_law_name = last_named_law + suffix
+                        citation.citation_type = "external"
+                elif '이 법' in text:
+                    # "이 법" = the source law; later "같은 법" refers to it
+                    last_named_law = None
+
+            citations.append(citation)
 
         return citations
+
+    @staticmethod
+    def _gap_before(link) -> str:
+        """Plain text between the previous citation link and this one."""
+        parts = []
+        for sib in link.previous_siblings:
+            if getattr(sib, 'name', None) == 'a':
+                break
+            parts.append(sib.get_text() if hasattr(sib, 'get_text') else str(sib))
+        return "".join(reversed(parts))
+
+    def _same_law_suffix(self, link, text: str) -> str:
+        """Return ' 시행령'/' 시행규칙' for "같은 법 시행령" forms, else ''."""
+        following = ""
+        sib = link.next_sibling
+        if sib is not None and getattr(sib, 'name', None) != 'a':
+            following = str(sib).lstrip()
+        for suffix in (" 시행규칙", " 시행령"):
+            word = suffix.strip()
+            if word in text or following.startswith(word):
+                return suffix
+        return ""
 
     def _parse_single_link(
         self,
@@ -379,6 +424,20 @@ class CitationExtractor:
                             last.target_article_branch = citation.target_article_branch
                             last.target_text += " " + citation.target_text
                             current_internal_article_idx = None
+                            continue
+                        # "「법」 제14조와 제15조": a bare article joined by a
+                        # connector belongs to the same external law
+                        if citation.gap_before.strip() in self.LIST_CONNECTORS:
+                            consolidated.append(Citation(
+                                target_text=citation.target_text,
+                                target_ref_id=citation.target_ref_id,
+                                target_type=citation.target_type,
+                                target_law_name=last.target_law_name,
+                                target_article=citation.target_article,
+                                target_article_branch=citation.target_article_branch,
+                                citation_type="external",
+                                link_class=citation.link_class
+                            ))
                             continue
                         # Else: external law already has article, treat as new internal
 
