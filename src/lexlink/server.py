@@ -666,6 +666,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         ef_yd: Optional[int] = None,
         jo: Optional[Union[str, int]] = None,
         chr_cls_cd: Optional[str] = None,
+        lm: Optional[str] = None,
         oc: Optional[str] = None,
         type: str = "JSON",
         ctx: Context = None,
@@ -680,9 +681,10 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         Using `jo` returns only the requested article, which is much faster and cleaner.**
 
         Args:
-            id: Law ID (either id or mst is required)
+            id: Law ID (either id, mst or lm is required)
             mst: Law serial number (MST/lsi_seq)
-            ef_yd: Effective date (YYYYMMDD) - required when using mst
+            ef_yd: Effective date (YYYYMMDD) - required when using mst without id
+            lm: Law name (alternative to id/mst)
             jo: **REQUIRED for specific articles.** Article number. Accepts 35, "35", "35의5",
                 "제35조의5", "35-5" or the 6-digit code "003505" (all normalized to XXXXXX:
                 first 4 digits = article number zero-padded, last 2 digits = branch suffix, 00=main).
@@ -704,12 +706,20 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         """
         (id, mst, jo) = stringify_id(id, mst, jo)
         resolved_oc = resolve_oc(override_oc=oc)
-        if not id and not mst:
-            raise ValueError("Either 'id' or 'mst' parameter is required")
+        if not id and not mst and not lm:
+            raise ValueError("One of 'id', 'mst' or 'lm' parameter is required")
+        if mst and not id and not ef_yd:
+            # Upstream answers MST-only eflaw requests with the misleading
+            # "미신청" page; ef_yd is what it actually needs.
+            raise ValueError(
+                "'ef_yd' (effective date, YYYYMMDD) is required when using 'mst' without 'id'. "
+                "Take it from eflaw_search (시행일자) or pass 'id' instead."
+            )
         jo = _normalize_jo_arg(jo)
         snake_params = {"oc": resolved_oc, "target": "eflaw", "type": type}
         if id: snake_params["id"] = id
         if mst: snake_params["mst"] = mst
+        if lm: snake_params["lm"] = lm
         if ef_yd: snake_params["ef_yd"] = ef_yd
         if jo: snake_params["jo"] = jo
         if chr_cls_cd: snake_params["chr_cls_cd"] = chr_cls_cd
@@ -768,8 +778,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         """
         (id, mst, jo) = stringify_id(id, mst, jo)
         resolved_oc = resolve_oc(override_oc=oc)
-        if not id and not mst:
-            raise ValueError("Either 'id' or 'mst' parameter is required")
+        if not id and not mst and not lm:
+            raise ValueError("One of 'id', 'mst' or 'lm' parameter is required")
         jo = _normalize_jo_arg(jo)
         snake_params = {"oc": resolved_oc, "target": "law", "type": type}
         if id: snake_params["id"] = id
@@ -1066,7 +1076,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         Args:
             id: Law ID (required if mst not provided)
             mst: Law master number (required if id not provided)
-            lm: Law name (alternative search method)
+            lm: Korean law name (exact; English names do not match). Alone it is enough
+                (alternative to id/mst).
             ld: Announcement date (YYYYMMDD)
             ln: Announcement number
             oc: Optional OC override (defaults to env var)
@@ -1084,8 +1095,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             >>> elaw_service(mst="127280", type="XML")
         """
         (id, mst) = stringify_id(id, mst)
-        if not id and not mst:
-            raise ValueError("Either 'id' or 'mst' parameter is required")
+        if not id and not mst and not lm:
+            raise ValueError("One of 'id', 'mst' or 'lm' parameter is required")
         resolved_oc = resolve_oc(override_oc=oc)
         snake_params = {"oc": resolved_oc, "target": "elaw", "type": type}
         if id: snake_params["id"] = id
@@ -1554,7 +1565,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
 
         Args:
             id: Precedent sequence number (판례일련번호, not the search row number)
-            lm: Precedent name (optional)
+            lm: Precedent name; must be the exact title and is only used without id
+                (ignored when id is given, since a mismatch makes upstream report no match)
             sections: Response detail level:
                 - "summary": Returns 판시사항, 판결요지, 참조조문, 참조판례 only (~5KB).
                   Excludes 판례내용 (full judgment text, often 15-25KB).
@@ -1578,7 +1590,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             "oc": resolved_oc, "target": "prec",
             "id": str(id), "type": type,
         }
-        if lm: snake_params["lm"] = lm
+        if lm and not id: snake_params["lm"] = lm
         return run_service(get_client=_get_client, target="prec",
                           snake_params=snake_params, response_type=type,
                           sections=sections,
@@ -1669,7 +1681,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
 
         Args:
             id: Constitutional Court decision sequence number (헌재결정례일련번호, not the search row number)
-            lm: Decision name (optional)
+            lm: Decision name; must be the exact title and is only used without id
+                (ignored when id is given, since a mismatch makes upstream report no match)
             sections: "summary" to exclude 전문 (full text), or "full"/None for everything.
                 **Recommended: "summary" for PlayMCP** to stay under 20KB.
             oc: Optional OC override
@@ -1687,7 +1700,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             "oc": resolved_oc, "target": "detc",
             "id": str(id), "type": type,
         }
-        if lm: snake_params["lm"] = lm
+        if lm and not id: snake_params["lm"] = lm
         return run_service(get_client=_get_client, target="detc",
                           snake_params=snake_params, response_type=type,
                           sections=sections,
