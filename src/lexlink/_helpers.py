@@ -699,6 +699,43 @@ LEGAL_TERM_SUFFIXES = re.compile(
 )
 
 
+LOW_RELEVANCE_WARNING = (
+    "low_relevance: 질의어와 겹치는 표현이 검색 결과에 전혀 없습니다. 의미 검색이 "
+    "무관한 조문을 반환했을 수 있으니 결과를 답으로 사용하기 전에 질의를 확인하세요"
+)
+
+
+def _query_grams(query: str) -> set:
+    """Character bigrams of each word (1-char words kept); digit-only words are
+    skipped since they match dates and article numbers by accident."""
+    grams: set = set()
+    for word in re.findall(r"[0-9A-Za-zㄱ-ㆎ가-힣]+", query.lower()):
+        if word.isdigit():
+            continue
+        if len(word) == 1:
+            grams.add(word)
+        grams.update(word[i:i + 2] for i in range(len(word) - 1))
+    return grams
+
+
+def low_relevance_warning(query: str, rows: list) -> Optional[str]:
+    """Warning text when no result row shares any character bigram with the query.
+
+    aiSearch exposes no relevance score, so this is a lexical heuristic: semantic
+    hits usually still share a few characters with the question, while gibberish
+    queries get arbitrary articles that share none. Never drops data.
+    """
+    grams = _query_grams(query or "")
+    rows = [r for r in rows if isinstance(r, dict)]
+    if not grams or not rows:
+        return None
+    for row in rows:
+        text = " ".join(str(v) for v in row.values()).lower()
+        if any(g in text for g in grams):
+            return None
+    return LOW_RELEVANCE_WARNING
+
+
 def extract_outcome(text: str) -> str:
     """Extract court decision outcome from 판결요지 text (position-based).
 
