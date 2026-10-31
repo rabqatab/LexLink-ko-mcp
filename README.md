@@ -52,7 +52,7 @@ LexLink is an MCP (Model Context Protocol) server that exposes the Korean Nation
 
 | Metric | Status |
 |--------|--------|
-| **Tools Implemented** | 54/54 (100%) ✅ |
+| **Tools Implemented** | 55/55 (100%) ✅ |
 | **Semantic Validation** | 26/26 (Phase 1-5 tools) ✅ |
 | **MCP Prompts** | 9/9 (100%) ✅ |
 | **MCP Resources** | 2 (1 static + 1 template) ✅ |
@@ -63,7 +63,7 @@ LexLink is an MCP (Model Context Protocol) server that exposes the Korean Nation
 
 **Latest:** v2.2.0 — audit fixes: knowledge-base linkage tools now call `lawService.do`, `ordinLsCon_search` redesigned (3 modes), ministry interpretations use the `{code}CgmExpc` target (39 ministries), `jo` normalization (`35`, `35의5`, `제35조의5`, `003505`), structured upstream error codes, format-aware cache key, and 122 offline tests. See CHANGELOG.md.
 
-**v2.1.0** — 54 tools (Phase 9 added), intelligent caching (`cache.py`), law name resolution (`resolver.py`), chain tools for multi-step research workflows.
+**v2.1.0** — 55 tools (Phase 9 added; law_as_of for as-of-date lookups), intelligent caching (`cache.py`), law name resolution (`resolver.py`), chain tools for multi-step research workflows.
 
 ## Prerequisites
 
@@ -699,7 +699,7 @@ These examples demonstrate real-world conversation flows showing how LLMs intera
 ```
 lexlink-ko-mcp/
 ├── src/lexlink/
-│   ├── server.py        # Main MCP server with 54 tools
+│   ├── server.py        # Main MCP server with 55 tools
 │   ├── _helpers.py      # Shared helpers: run_search, run_service, TOOL_ANNOTATIONS
 │   ├── cache.py         # Intelligent per-tool TTL caching (~183 lines)
 │   ├── resolver.py      # Korean law name/abbreviation resolution (~225 lines)
@@ -747,7 +747,7 @@ uv run pytest -m e2e
 
 ### Adding New Tools
 
-**Current Status:** 54/54 tools implemented (Phase 1-9 complete). Phase 1-5 tools validated.
+**Current Status:** 55/55 tools implemented (Phase 1-9 complete). Phase 1-5 tools validated.
 
 For implementing additional tools from the 124+ remaining APIs:
 1. Follow the pattern established in `src/lexlink/server.py`

@@ -2,7 +2,7 @@
 # 국가법령정보 공동활용 Open API — 완전한 API 사양서
 
 > **목적:** LLM/에이전트가 그대로 ingest / parse / convert 할 수 있도록 통일된 포맷의 스펙 제공
-> **범위:** All 195 APIs available from law.go.kr Open API guide (54 implemented in LexLink; 2026-10-25 re-audit, was 191)
+> **범위:** All 195 APIs available from law.go.kr Open API guide (55 implemented in LexLink; 2026-10-25 re-audit, was 191)
 > **Source:** https://open.law.go.kr/LSO/openApi/guideList.do
 > **Last Updated:** 2026-10-25 (v2.2.0)
 
@@ -29,7 +29,7 @@
 | **사전컨설팅 의견서 (Pre-consulting Opinions)** | 2 | 0 | Not implemented (NEW, 감사원 `baiPvcs`; JSON verified) |
 | **Custom (article_citation)** | 1 | 1 | ✅ HTML parsing tool |
 | **Custom (chain tools + cache_stats)** | 5 | 5 | ✅ chain_full_research, chain_amendment_track, chain_dispute_prep, chain_law_system, cache_stats |
-| **Total** | **195+** | **54** | **~28% coverage** |
+| **Total** | **195+** | **55** | **~28% coverage** |
 
 > v2.2.0 note: 모든 업스트림 target 이름·엔드포인트는 2026-10-25 점검(`AUDIT_CHECKLIST_2026-10-25.md`)에서 직접 호출로 재검증했다. 미구현 API 중 JSON 동작을 확인한 목록은 Appendix D 참조.
 

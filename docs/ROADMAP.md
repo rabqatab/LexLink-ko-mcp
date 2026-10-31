@@ -1,7 +1,7 @@
 # LexLink API Implementation Roadmap
 
 **Last Updated:** 2026-03-30
-**Status:** All 54 tools + 2 resources + 9 prompts implemented (v2.1.0)
+**Status:** All 55 tools + 2 resources + 9 prompts implemented (v2.1.0)
 
 ---
 

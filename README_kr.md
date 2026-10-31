@@ -14,7 +14,7 @@ LexLink는 대한민국 국가법령정보 API ([open.law.go.kr](https://open.la
 
 ## 주요 기능
 
-- **54개의 MCP 도구 + 2개의 MCP 리소스**로 포괄적인 한국 법령 정보 접근
+- **55개의 MCP 도구 + 2개의 MCP 리소스**로 포괄적인 한국 법령 정보 접근
   - 한국 법령 검색 및 조회 (시행일 & 공포일 기준)
   - 영문 번역 법령 검색 및 조회
   - 행정규칙 검색 및 조회 (훈령, 예규, 고시, 공고, 지침)
@@ -50,7 +50,7 @@ LexLink는 대한민국 국가법령정보 API ([open.law.go.kr](https://open.la
 
 | 지표 | 상태 |
 |--------|--------|
-| **구현된 도구** | 54/54 (100%) ✅ |
+| **구현된 도구** | 55/55 (100%) ✅ |
 | **의미론적 검증** | 26/26 (Phase 1-5 도구) ✅ |
 | **MCP 프롬프트** | 9/9 (100%) ✅ |
 | **MCP 리소스** | 2개 (정적 1 + 템플릿 1) ✅ |
@@ -61,7 +61,7 @@ LexLink는 대한민국 국가법령정보 API ([open.law.go.kr](https://open.la
 
 **최근:** v2.2.0 — 감사 수정: 지식베이스 연계 도구가 `lawService.do`를 호출, `ordinLsCon_search` 재설계(3가지 모드), 부처 해석 `{code}CgmExpc` target(39개 부처), `jo` 정규화(`35`, `35의5`, `제35조의5`, `003505`), 구조화된 업스트림 오류 코드, 응답 형식을 포함한 캐시 키, 오프라인 테스트 122개. CHANGELOG.md 참조.
 
-**v2.1.0** — 54개 도구 (Phase 9 추가), 지능형 캐싱 (`cache.py`), 법령약칭 해석 (`resolver.py`), 다단계 조사를 위한 체인 도구.
+**v2.1.0** — 55개 도구 (Phase 9 추가), 지능형 캐싱 (`cache.py`), 법령약칭 해석 (`resolver.py`), 다단계 조사를 위한 체인 도구.
 
 ## 사전 요구사항
 
@@ -698,7 +698,7 @@ result = eflaw_search(query="test")
 ```
 lexlink-ko-mcp/
 ├── src/lexlink/
-│   ├── server.py        # 54개 도구가 포함된 메인 MCP 서버
+│   ├── server.py        # 55개 도구가 포함된 메인 MCP 서버
 │   ├── _helpers.py      # 공통 헬퍼: run_search, run_service, TOOL_ANNOTATIONS
 │   ├── cache.py         # 지능형 도구별 TTL 캐싱 (~183줄)
 │   ├── resolver.py      # 법령명/약칭 해석 (~225줄)
@@ -746,7 +746,7 @@ uv run pytest -m e2e
 
 ### 새로운 도구 추가
 
-**현재 상태:** 54/54 도구 구현 완료 (Phase 1-9 완료), Phase 1-5 도구 검증 완료
+**현재 상태:** 55/55 도구 구현 완료 (Phase 1-9 완료), Phase 1-5 도구 검증 완료
 
 124개 이상의 남은 API에서 추가 도구를 구현하려면:
 1. `src/lexlink/server.py`에 확립된 패턴 따르기
