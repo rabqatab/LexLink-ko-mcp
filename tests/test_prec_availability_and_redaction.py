@@ -135,9 +135,13 @@ def test_no_match_search_endpoint_not_flagged():
 
 
 @pytest.mark.unit
-def test_no_law_match_still_ok_with_warning():
+def test_no_law_match_is_not_found_on_service_ok_on_search():
     body = '{"Law":"일치하는 법령이 없습니다."}'
     out = _client_with_body(body).get(SERVICE, {"OC": FAKE_OC, "target": "law", "MST": "1"}, "JSON")
+    assert out["status"] == "error"
+    assert out["error_code"] == ErrorCode.NOT_FOUND
+    assert "MST" in out["message"]
+    out = _client_with_body(body).get("/DRF/lawSearch.do", {"OC": FAKE_OC, "target": "law"}, "JSON")
     assert out["status"] == "ok"
     assert out["warning"] == "no_match"
 

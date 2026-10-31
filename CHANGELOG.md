@@ -14,9 +14,22 @@ All notable changes to LexLink are documented here in both English and Korean.
 - `prec_search` marks 국세법령정보시스템 items with `본문제공: "API 미제공"`; use `dat_src_nm="대법원"` to search only sources whose body is served.
 - Section filtering (`sections="summary"`) no longer mutates the cached full response, which a later full call used to return stripped.
 - `check_precedent_odds` skips cases without a body, moves on to the next candidate, and reports `unavailable_cases`.
+- `legal_resolver` citations were always empty (coroutine run on FastMCP's already running event loop, error swallowed, and wrong citation keys read). It now runs the extraction in a worker thread, reads `target_law_name` / `type`, and reports failures in a `warnings` list (also carried by `chain_full_research`).
+- `lawService.do` bodyless successes (blank body, `{}`, or only empty values) and "일치하는 법령이 없습니다" now return `NOT_FOUND` instead of `status: ok`. `article_amendment_diff` still tries the other MST when one version is missing.
+- `elaw_service`, `admrul_search`, `admrul_service`, `lnkLs_search`, `lnkLsOrdJo_search`, `lnkDep_search`, `lsDelegated_service` now send `type`, so the cache key includes the response format.
+- `check_precedent_odds` no longer falls back to the search row number when 판례일련번호 is missing.
+- Generic `NOT_FOUND` hint no longer builds a nonexistent `<target>_search` tool name.
+- `lawService.do` "일치하는 … 없습니다" is `NOT_FOUND` only when the whole body is that message (short real bodies quoting the phrase pass); query-keyed linkage targets get a "연계 정보가 없거나 검색어를 확인하세요" hint. `id_note` is dropped with `raw_content` under `SLIM_RESPONSE`. `legal_resolver` reports `success: false` citation extractions in `warnings`.
+
+#### Changed (behaviour)
+- Search responses: in `ranked_data`, each row's `id` (upstream row number 1, 2, 3, not a key) is renamed to `rank`. `raw_content` is unchanged and, when kept, a new `id_note` explains that its `id` is a row number. Use 판례일련번호, 법령ID, 법령일련번호(MST) etc. for service calls.
+
+#### Docs
+- `docs/ISSUES.md` lists `*_service` tools without a size-control option; their docstrings now warn that responses can be large.
 
 #### Security
-- The OC credential is removed from upstream response bodies (e.g. `판례상세링크`), error messages, and debug/request logs (`has_oc` flag only); the `httpx` logger is limited to WARNING.
+- The OC credential is removed from upstream response bodies (e.g. `판례상세링크`), error messages, and debug/request logs (`has_oc` flag only); the `httpx` logger is limited to WARNING. The client's generic error path logs a redacted message plus traceback frames only. Encoded forms (`%3FOC%3D`, `&#38;OC=`, `\x26OC=`, `<OC>..</OC>`) are removed; redaction is linear-time and leaves legal text alone (`OC: "Office of Command"`, `"law" means`).
+- OC removal is now structural (hidden `name="OC"` form fields, `OC = '...'` / `"OC":"..."` assignments) regardless of the value; short literal values are replaced only when quote/`=`/`&`-delimited. Tool error messages and logs are redacted too (no `logger.exception`).
 
 ---
 
@@ -535,9 +548,21 @@ All notable changes to LexLink are documented here in both English and Korean.
 - `prec_search`가 국세법령정보시스템 항목에 `본문제공: "API 미제공"`을 표시. `dat_src_nm="대법원"`으로 본문 제공 출처만 검색 가능.
 - `sections="summary"` 필터링이 캐시된 전체 응답을 변형하여, 이후 전체 조회가 잘린 본문을 반환하던 문제 수정.
 - `check_precedent_odds`가 본문이 없는 판례를 건너뛰고 다음 후보로 넘어가며 `unavailable_cases`를 보고.
+- `legal_resolver`의 인용(citations)이 항상 비어 있던 문제 수정(이미 실행 중인 FastMCP 이벤트 루프에서 코루틴 실행 실패 + 오류 은폐 + 잘못된 인용 키 사용). 이제 작업 스레드에서 실행하고 `target_law_name` / `type` 키를 읽으며, 실패 시 `warnings` 목록으로 보고(`chain_full_research`도 전달).
+- `lawService.do`의 본문 없는 성공 응답(빈 본문, `{}`, 값이 모두 빈 객체)과 "일치하는 법령이 없습니다"가 `status: ok` 대신 `NOT_FOUND`를 반환. `article_amendment_diff`는 한 버전이 없어도 다른 MST를 계속 조회.
+- `elaw_service`, `admrul_search`, `admrul_service`, `lnkLs_search`, `lnkLsOrdJo_search`, `lnkDep_search`, `lsDelegated_service`가 `type`을 전달하여 캐시 키에 응답 형식이 포함됨.
+- `check_precedent_odds`가 판례일련번호가 없을 때 검색 행 번호를 대신 쓰지 않음.
+- 일반 `NOT_FOUND` 안내가 존재하지 않는 `<target>_search` 도구 이름을 만들지 않음.
+
+#### 변경 (동작)
+- 검색 응답의 `ranked_data`에서 각 행의 `id`(키가 아닌 업스트림 행 번호 1, 2, 3)를 `rank`로 이름 변경. `raw_content`는 그대로이며, 유지되는 경우 새 `id_note`가 `id`가 행 번호임을 안내. service 호출에는 판례일련번호·법령ID·법령일련번호(MST) 등을 사용.
+
+#### 문서
+- `docs/ISSUES.md`에 크기 제어 옵션이 없는 `*_service` 도구를 정리하고, 해당 도구 docstring에 응답이 클 수 있다는 경고를 추가.
 
 #### 보안
 - 업스트림 응답 본문(`판례상세링크` 등), 오류 메시지, 디버그/요청 로그에서 OC 인증값을 제거(로그에는 `has_oc` 플래그만 기록). `httpx` 로거는 WARNING 이상으로 제한.
+- OC 제거를 값과 무관한 구조 기반으로 확장(숨김 `name="OC"` 폼 필드, `OC = '...'` / `"OC":"..."` 할당). 짧은 값은 따옴표/`=`/`&`로 구분된 경우만 치환. 도구 오류 메시지와 로그도 마스킹(`logger.exception` 제거).
 
 ---
 

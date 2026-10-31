@@ -180,6 +180,22 @@ law.go.kr API returns HTML error pages for JSON format despite documentation cla
 
 ---
 
+## Response Size: *_service Tools Without a Size Filter
+
+These `*_service` tools have no `sections` / article filter and no new size option was added. Sizes below come from a live audit of an older build; they may differ today.
+
+| Tool | Measured size |
+|------|---------------|
+| `admrul_service` | up to ~80KB |
+| `ordin_service` | 15-25KB |
+| `lsDelegated_service` | 160-180KB |
+| `elaw_service` | ~300KB |
+| `trty_service`, `committee_service`, `special_decc_service`, `cgm_expc_service` | not measured |
+
+Each docstring carries the line "응답이 클 수 있고 크기 제어 옵션 없음".
+
+---
+
 ## Known Limitations
 
 ### Article Citation Range References
