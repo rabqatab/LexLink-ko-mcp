@@ -175,17 +175,62 @@ def bupchik_units(data: dict) -> list[dict]:
     return [u for u in (units or []) if isinstance(u, dict)]
 
 
-def scan_bupchik(units: list[dict], article: int, branch: int, d: str, limit: int = 5) -> list[dict]:
-    """부칙 passages that tie ``제N조[의B]`` to a 시행 date later than ``d``.
+_DATE_PATTERNS = (
+    re.compile(r"(\d{4})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일"),
+    re.compile(r"(?<!\d)(\d{4})\s*\.\s*(\d{1,2})\s*\.\s*(\d{1,2})\s*\.?(?!\d)"),
+    re.compile(r"(?<!\d)(\d{4})-(\d{1,2})-(\d{1,2})(?!\d)"),
+)
+_RANGE_RE = re.compile(r"제(\d+)조(?:의(\d+))?\s*부터\s*제(\d+)조(?:의(\d+))?\s*까지")
+_CLAUSE_SPLIT_RE = re.compile(r"(?<=시행하고,)\s*|(?<=시행하며,)\s*|(?<=시행하되,)\s*")
+_SENT_SPLIT_RE =re.compile(r"(?<=다)\.\s+|(?:^|\s)다만,?\s*")
 
-    A passage is a 항-sized chunk (starts at ①.., 제N조, or 부칙 header) that mentions the
-    article (not another law's article, not the 부칙's own article number), contains '시행'
-    and at least one Korean date (YYYY년 M월 D일) after ``d``. Relative dates ("공포 후
-    6개월이 경과한 날") are not evaluated. Returns the quoted passages, nothing interpreted.
+
+def _dates_in(text: str) -> set[str]:
+    text = re.sub(r"<[^>]*>", " ", text)  # drop "<개정 2018.3.20>" style annotations
+    found = set()
+    for pat in _DATE_PATTERNS:
+        for y, mo, dd in pat.findall(text):
+            try:
+                found.add(date(int(y), int(mo), int(dd)).strftime("%Y%m%d"))
+            except ValueError:
+                pass
+    return found
+
+
+def _names_article(sentence: str, article: int, branch: int, at_chunk_start: bool) -> bool:
+    """True when ``sentence`` refers to this law's 제N조[의B] (alone or inside a 부터…까지 range)."""
+    def other_law(prefix: str) -> bool:
+        prefix = prefix.rstrip()
+        if prefix.endswith(("」", "』", "부칙")):
+            return True
+        return prefix.endswith(("법", "법률", "령", "규칙")) and not prefix.endswith("이 법")
+
+    for m in _RANGE_RE.finditer(sentence):
+        if other_law(sentence[:m.start()]):
+            continue
+        lo = (int(m.group(1)), int(m.group(2) or 0))
+        hi = (int(m.group(3)), int(m.group(4) or 0))
+        if lo <= (article, branch) <= hi:
+            return True
+    ref = re.compile(rf"제{article}조" + (rf"의{branch}(?!\d)" if branch else r"(?!\d)(?!의\d)"))
+    for m in ref.finditer(sentence):
+        if at_chunk_start and m.start() == 0 and re.match(r"[\s(]", sentence[m.end():m.end() + 1] or " "):
+            continue  # "제1조(시행일)": the 부칙's own article number
+        if other_law(sentence[:m.start()]):
+            continue
+        return True
+    return False
+
+
+def scan_bupchik(units: list[dict], article: int, branch: int, d: str, limit: int = 5) -> list[dict]:
+    """부칙 clauses that tie ``제N조[의B]`` of this law to a 시행 date later than ``d``.
+
+    A chunk is one 항-sized passage (starts at ①.., 제N조, or a 부칙 header). Within it the
+    sentence naming the article (alone or in a "제A조부터 제C조까지" range; not another law's
+    article such as 「…법」 제4조, not the 부칙's own 제N조(...)) must contain '시행'. Only dates
+    of that sentence count; when it says "각 호" the following item lines belong to it.
+    Relative dates ("공포 후 6개월이 경과한 날") are not evaluated. Returns quoted text only.
     """
-    ref = re.compile(
-        rf"제{article}조" + (rf"의{branch}(?!\d)" if branch else r"(?!\d)(?!의\d)")
-    )
     hits: list[dict] = []
     for unit in units:
         lines = _flatten_lines(unit.get("부칙내용"))
@@ -197,27 +242,31 @@ def scan_bupchik(units: list[dict], article: int, branch: int, d: str, limit: in
             else:
                 chunks[-1].append(ln)
         for chunk in chunks:
-            text = "\n".join(s.strip() for s in chunk)
-            if "시행" not in text or "다음과 같이 개정한다" in text:
+            if "다음과 같이 개정한다" in "".join(chunk):
                 continue
-            ok = False
-            for m in ref.finditer(text):
-                prefix = text[:m.start()].rstrip()
-                if m.start() == 0 or prefix.endswith("부칙"):
-                    continue
-                if prefix.endswith(("법", "법률", "령", "규칙")) and not prefix.endswith("이 법"):
-                    continue
-                ok = True
-                break
-            if not ok:
-                continue
-            later = sorted({f"{int(y):04d}{int(mo):02d}{int(dd):02d}"
-                            for y, mo, dd in _KDATE_RE.findall(text)
-                            if f"{int(y):04d}{int(mo):02d}{int(dd):02d}" > d})
-            if later:
-                hits.append({"bupchik": header or unit.get("부칙공포번호", ""),
-                             "announced_date": unit.get("부칙공포일자", ""),
-                             "text": text[:600], "later_dates": later})
-                if len(hits) >= limit:
-                    return hits
+            for li, line in enumerate(chunk):
+                sentences = [seg for sent_ in _SENT_SPLIT_RE.split(line.strip())
+                             for seg in _CLAUSE_SPLIT_RE.split(sent_)]  # "…시행하고, …시행하며, …시행한다"
+                for sent in sentences:
+                    if "시행" not in sent or not _names_article(sent, article, branch, at_chunk_start=(li == 0)):
+                        continue
+                    clause = sent + ("\n" + "\n".join(s.strip() for s in chunk[li + 1:]) if "각 호" in sent else "")
+                    later = sorted(x for x in _dates_in(clause) if x > d)
+                    if later:
+                        hits.append({"bupchik": header or unit.get("부칙공포번호", ""),
+                                     "announced_date": unit.get("부칙공포일자", ""),
+                                     "text": clause[:600], "later_dates": later})
+                        if len(hits) >= limit:
+                            return hits
     return hits
+
+
+def expired_unknown(cands: list[dict]) -> bool:
+    """True when upstream lists no 현행 / 시행예정 row and the last version is not a repeal.
+
+    Such a law (한시법 expiry, partial data, ...) is not known to be in force today.
+    """
+    if not cands:
+        return False
+    statuses = {c["row"].get("현행연혁코드", "") for c in cands}
+    return not (statuses & {"현행", "시행예정"}) and not is_repeal(cands[-1]["row"])

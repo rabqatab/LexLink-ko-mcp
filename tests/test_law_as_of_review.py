@@ -18,12 +18,14 @@ def test_repeal_and_reenact_is_in_force(as_of):
 
 
 def test_later_amendments_count_is_distinct_revisions(as_of):
-    out = as_of(law_name=T, as_of="20180301")  # later: 300@20180901, 400, 410, 500
+    out = as_of(law_name=T, as_of="20180301")  # selected MST 300; later revisions: 400, 410, 500
     la = out["later_amendments"]
-    assert la["count"] == 4 and la["effective_date_count"] == 4
-    out = as_of(law_name=T, as_of="20171231")  # MST 300 has two 시행일 among the later ones
+    assert la["count"] == 3 and la["effective_date_count"] == 4   # the pair 300@20180901 is the selected MST's own
+    assert out["selected_version_later_effective_dates"] == ["20180901"]
+    out = as_of(law_name=T, as_of="20171231")  # selected MST 200; MST 300 has two 시행일
     la = out["later_amendments"]
     assert la["count"] == 4 and la["effective_date_count"] == 5
+    assert out["selected_version_later_effective_dates"] == []
 
 
 def test_renamed_law_statement_shows_both_names(as_of):
