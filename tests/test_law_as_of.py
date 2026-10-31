@@ -322,3 +322,21 @@ def test_tool_registered_and_docs_point_to_it(as_of):
     for name in ("eflaw_search", "eflaw_service", "eflaw_josub"):
         assert "law_as_of" in tools[name].description
     assert "law_as_of" in server._mcp_server.instructions
+
+
+def test_truncated_history_is_reported_and_blocks_before_first_claim(as_of, monkeypatch):
+    real_get = FakeClient.get
+
+    def get(self, endpoint, params, response_type="JSON"):
+        res = real_get(self, endpoint, params, response_type)
+        if endpoint == "/DRF/lawSearch.do" and params.get("LID"):
+            body = json.loads(res["raw_content"])
+            body["LawSearch"]["totalCnt"] = "100000"  # upstream has far more rows than the page cap reads
+            res = dict(res, raw_content=json.dumps(body, ensure_ascii=False))
+        return res
+
+    monkeypatch.setattr(FakeClient, "get", get)
+    out = as_of(law_name="9999", as_of="19000101")
+    assert out["history_complete"] is False and out["warnings"]
+    assert out["reason"] == "BEFORE_EARLIEST_AVAILABLE_VERSION"
+    assert any(out["warnings"][0] in c for c in out["caveats"])

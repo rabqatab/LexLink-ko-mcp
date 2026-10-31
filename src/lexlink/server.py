@@ -4756,6 +4756,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             caveats.append("연혁 목록이 조회 상한에 도달해 오래된 버전이 누락되었을 수 있습니다.")
         incomplete = bool(info.get("history_truncated") or info.get("warnings") or info.get("history_warnings"))
         out["history_complete"] = not incomplete
+        if info.get("warnings"):
+            out["warnings"] = list(info["warnings"])
 
         if sel["outcome"] == "before_first_version":
             first = cands[0]
