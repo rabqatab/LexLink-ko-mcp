@@ -32,7 +32,25 @@ ROWS = [
     _row("009999", T, "500", "20271201", "20261001", "5000", "일부개정", "시행예정"),
     _row("008888", "폐지법", "10", "20000101", "19991201", "10", "제정", "연혁"),
     _row("008888", "폐지법", "11", "20050301", "20050101", "11", "타법폐지", "연혁"),
+    # renamed law, and a 폐지제정 (repeal-and-re-enact: in force from that day, NOT a repeal)
+    _row("007777", "옛개명법", "1", "20000101", "19991201", "1", "제정", "연혁"),
+    _row("007777", "개명법", "2", "20100101", "20091201", "2", "일부개정", "현행"),
+    _row("006666", "폐지제정법", "21", "19990101", "19981201", "21", "제정", "연혁"),
+    _row("006666", "폐지제정법", "22", "20050601", "20050301", "22", "폐지제정", "현행"),
 ]
+
+# 부칙 units served with the full body (no JO) of a (mst, ef)
+BUPCHIK = {
+    ("300", "20180901"): [{
+        "부칙공포일자": "20171201", "부칙공포번호": "3000",
+        "부칙내용": str([["부칙 <제3000호,2017.12.1>",
+                        "제1조 (시행일) 이 법은 공포한 날부터 시행한다.",
+                        "  ④ 제1조의 개정규정은 다음 각 호의 구분에 따른 날부터 시행한다.",
+                        "  1. 상시 300명 이상: 2019년 1월 1일",
+                        "  2. 그 밖: 2021년 1월 1일",
+                        "제2조 (경과조치) 형법 제2조의 개정규정은 2030년 1월 1일부터 시행한다."]]),
+    }],
+}
 
 # (mst, ef) -> {article label -> text}
 BODIES = {
@@ -44,7 +62,11 @@ BODIES = {
     ("410", "20200101"): {"제1조": "제1조(목적) v4b", "제2조": "제2조(정의) A", "제3조의2": "제3조의2(신설) X"},
     ("500", "20271201"): {"제1조": "제1조(목적) v5", "제2조": "제2조(정의) A", "제3조의2": "제3조의2(신설) X"},
     ("10", "20000101"): {"제1조": "제1조 옛 폐지법"},
+    ("1", "20000101"): {"제1조": "제1조 옛 이름"},
+    ("2", "20100101"): {"제1조": "제1조 새 이름"},
+    ("22", "20050601"): {"제1조": "제1조 폐지제정 후"},
 }
+BODIES[("410", "20200101")]["제9조"] = "제9조 삭제 <2019.12.1>"
 
 
 def _article_body(mst, ef, label):
@@ -91,6 +113,12 @@ class FakeClient:
         mst, ef, jo = params.get("MST"), params.get("efYd"), params.get("JO")
         if params.get("target") != "eflaw" or (mst, ef) not in {(r["법령일련번호"], r["시행일자"]) for r in ROWS}:
             return {"status": "error", "error_code": "NOT_FOUND", "message": "일치하는 법령이 없습니다", "request_id": "fake"}
+        if not jo:  # full body: header + 부칙 only (enough for the 부칙 scan)
+            row = next(r for r in ROWS if r["법령일련번호"] == mst and r["시행일자"] == ef)
+            full = {"법령": {"기본정보": {"법령명_한글": row["법령명한글"]},
+                           "부칙": {"부칙단위": BUPCHIK.get((mst, ef), [])}}}
+            return {"status": "ok", "request_id": "fake", "upstream_type": "JSON",
+                    "raw_content": json.dumps(full, ensure_ascii=False)}
         num, branch = int(jo[:4]), int(jo[4:])
         label = f"제{num}조" + (f"의{branch}" if branch else "")
         return {"status": "ok", "request_id": "fake", "upstream_type": "JSON",
@@ -170,11 +198,11 @@ def test_multiple_effective_dates_of_one_mst(as_of):
     assert c["version"]["effective_date"] == "20180901"
     assert a["article"]["text"].endswith("v3a") and b["article"]["text"].endswith("v3a")
     assert c["article"]["text"].endswith("v3b")
-    assert c["partial_effect"] == {"possible": True, "mst_effective_dates": ["20180301", "20180901"],
-                                   "note": c["partial_effect"]["note"]}
+    assert c["partial_effect"]["possible"] is True
+    assert c["partial_effect"]["mst_effective_dates"] == ["20180301", "20180901"]
     assert a["valid_until"] == "20180831"
     # the exact (MST, efYd) pair is requested, not just the MST
-    assert {"MST": "300", "efYd": "20180901"}.items() <= service_calls()[-1].items()
+    assert any({"MST": "300", "efYd": "20180901", "JO": "000100"}.items() <= p.items() for p in service_calls())
 
 
 def test_same_day_versions_pick_latest_promulgated(as_of):
@@ -236,7 +264,7 @@ def test_unknown_law_is_validation_error(as_of):
 def test_header_only_without_article(as_of):
     out = as_of(law_name=T, as_of="20160101")
     assert out["in_force"] is True and "article" not in out
-    assert out["version"] == {"mst": "200", "effective_date": "20150101", "announced_date": "20141201",
+    assert out["version"] == {"mst": "200", "law_name": T, "effective_date": "20150101", "announced_date": "20141201",
                               "announcement_no": "2000", "revision_type": "일부개정", "status": "연혁"}
     assert out["comparison"]["is_current_version"] is False
     assert out["comparison"]["differs_from_current"] is None

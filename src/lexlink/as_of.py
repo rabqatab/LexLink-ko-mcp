@@ -74,8 +74,12 @@ def build_candidates(rows: Iterable[dict]) -> list[dict]:
     return sorted(seen.values(), key=_order_key)
 
 
+REPEAL_KINDS = ("폐지", "타법폐지", "일괄폐지")
+
+
 def is_repeal(row: dict) -> bool:
-    return "폐지" in (row.get("제개정구분명", "") or "")
+    """Exact repeal kinds only: '폐지제정' (repeal-and-re-enact) means enacted that day."""
+    return (row.get("제개정구분명", "") or "").strip() in REPEAL_KINDS
 
 
 def select_as_of(cands: list[dict], d: str) -> dict:
@@ -112,9 +116,108 @@ def describe(c: Optional[dict]) -> Optional[dict]:
     row = c["row"]
     return {
         "mst": c["mst"],
+        "law_name": row.get("법령명한글", ""),
         "effective_date": c["effective_date"],
         "announced_date": row.get("공포일자", ""),
         "announcement_no": row.get("공포번호", ""),
         "revision_type": row.get("제개정구분명", ""),
         "status": row.get("현행연혁코드", ""),
     }
+
+
+# ---------------------------------------------------------------------------
+# 삭제 articles
+# ---------------------------------------------------------------------------
+
+_DELETED_RE = re.compile(r"^\s*제\d+조(?:의\d+)?\s*(?:\([^)]*\)\s*)?삭제(?:\s*<[^>]*>)?\s*$")
+
+
+def is_deleted_article(text: str) -> bool:
+    """True when the article body is just '제N조 삭제 <date>' (a 삭제 placeholder)."""
+    return bool(text) and bool(_DELETED_RE.match(text.strip()))
+
+
+# ---------------------------------------------------------------------------
+# 부칙: article-level staged enforcement ("제55조제2항의 개정규정은 … 2021년 1월 1일부터")
+# ---------------------------------------------------------------------------
+
+_CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳"
+_KDATE_RE = re.compile(r"(\d{4})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일")
+_NEW_CHUNK_RE = re.compile(rf"^\s*(?:[{_CIRCLED}]|제\d+조(?:의\d+)?\s*[\(\s]|부칙)")
+
+
+def _flatten_lines(content: Any) -> list[str]:
+    """부칙내용 is a list of lists of strings, or its repr, or plain text."""
+    if isinstance(content, str):
+        text = content.strip()
+        if text[:1] in "[(":
+            import ast
+            try:
+                return _flatten_lines(ast.literal_eval(text))
+            except (ValueError, SyntaxError):
+                pass
+        return [ln for ln in text.splitlines() if ln.strip()]
+    if isinstance(content, (list, tuple)):
+        out: list[str] = []
+        for item in content:
+            out.extend(_flatten_lines(item))
+        return out
+    return []
+
+
+def bupchik_units(data: dict) -> list[dict]:
+    """The 부칙단위 entries of a parsed lawService body ([] when absent)."""
+    law = data.get("법령") if isinstance(data.get("법령"), dict) else data
+    bup = law.get("부칙") if isinstance(law, dict) else None
+    units = bup.get("부칙단위") if isinstance(bup, dict) else None
+    if isinstance(units, dict):
+        units = [units]
+    return [u for u in (units or []) if isinstance(u, dict)]
+
+
+def scan_bupchik(units: list[dict], article: int, branch: int, d: str, limit: int = 5) -> list[dict]:
+    """부칙 passages that tie ``제N조[의B]`` to a 시행 date later than ``d``.
+
+    A passage is a 항-sized chunk (starts at ①.., 제N조, or 부칙 header) that mentions the
+    article (not another law's article, not the 부칙's own article number), contains '시행'
+    and at least one Korean date (YYYY년 M월 D일) after ``d``. Relative dates ("공포 후
+    6개월이 경과한 날") are not evaluated. Returns the quoted passages, nothing interpreted.
+    """
+    ref = re.compile(
+        rf"제{article}조" + (rf"의{branch}(?!\d)" if branch else r"(?!\d)(?!의\d)")
+    )
+    hits: list[dict] = []
+    for unit in units:
+        lines = _flatten_lines(unit.get("부칙내용"))
+        header = lines[0].strip() if lines and lines[0].lstrip().startswith("부칙") else ""
+        chunks: list[list[str]] = []
+        for ln in lines:
+            if not chunks or _NEW_CHUNK_RE.match(ln):
+                chunks.append([ln])
+            else:
+                chunks[-1].append(ln)
+        for chunk in chunks:
+            text = "\n".join(s.strip() for s in chunk)
+            if "시행" not in text or "다음과 같이 개정한다" in text:
+                continue
+            ok = False
+            for m in ref.finditer(text):
+                prefix = text[:m.start()].rstrip()
+                if m.start() == 0 or prefix.endswith("부칙"):
+                    continue
+                if prefix.endswith(("법", "법률", "령", "규칙")) and not prefix.endswith("이 법"):
+                    continue
+                ok = True
+                break
+            if not ok:
+                continue
+            later = sorted({f"{int(y):04d}{int(mo):02d}{int(dd):02d}"
+                            for y, mo, dd in _KDATE_RE.findall(text)
+                            if f"{int(y):04d}{int(mo):02d}{int(dd):02d}" > d})
+            if later:
+                hits.append({"bupchik": header or unit.get("부칙공포번호", ""),
+                             "announced_date": unit.get("부칙공포일자", ""),
+                             "text": text[:600], "later_dates": later})
+                if len(hits) >= limit:
+                    return hits
+    return hits

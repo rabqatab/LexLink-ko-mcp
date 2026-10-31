@@ -96,7 +96,8 @@ def test_scheduled_and_later_flags(as_of):
     cur = as_of(law_name=T, as_of=TODAY, article=1)
     assert cur["scheduled_version_exists"] is True
     assert [v["mst"] for v in cur["scheduled_versions"]] == ["500"]
-    assert cur["later_amendments"] == {"exists": True, "count": 1, "next_effective_date": "20271201"}
+    assert cur["later_amendments"] == {"exists": True, "count": 1, "effective_date_count": 1,
+                                       "next_effective_date": "20271201"}
     fut = as_of(law_name=T, as_of="20271201")
     assert fut["later_amendments"]["exists"] is False
 

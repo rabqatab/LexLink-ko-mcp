@@ -3307,7 +3307,11 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         end_of_current_year, strip_html, compact_delegation_tree,
     )
     from ._helpers import ToolValidationError, slim_enabled
-    from .as_of import normalize_as_of, build_candidates, select_as_of, describe, day_before, is_repeal
+    from .as_of import (
+        normalize_as_of, build_candidates, select_as_of, describe, day_before, is_repeal,
+        is_deleted_article, bupchik_units, scan_bupchik,
+    )
+    from .article_text import parse_law_payload
     PERIOD_MAX = 12  # law_as_of period mode: max revisions fetched
     from .validation import format_article_number
 
@@ -4843,7 +4847,9 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             status "ok" with in_force true: as_of, version (mst, effective_date, announced_date,
             announcement_no, revision_type, status), valid_from/valid_until, article (label, title,
             text), comparison (is_current_version, differs_from_current for the article, current_version),
-            later_amendments {exists, count, next_effective_date}, scheduled_version_exists
+            later_amendments {exists, count (distinct MST), effective_date_count, next_effective_date},
+            article_deleted (the article is a 삭제 placeholder; in_force unaffected),
+            partial_effect.article_scan (부칙 passages tying the article to a later 시행일), scheduled_version_exists
             (+ scheduled_versions), promulgated_not_yet_effective, same_day_alternatives, partial_effect,
             period (with as_of_end), neighbors, statement, caveats.
             status "ok" with in_force false: reason BEFORE_FIRST_ENFORCEMENT,
@@ -5035,7 +5041,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             "valid_until": day_before(nxt["effective_date"]) if nxt else None,
             "later_amendments": {
                 "exists": bool(later_all),
-                "count": len({(c["mst"], c["effective_date"]) for c in later_all}),
+                "count": len({c["mst"] for c in later_all}),  # distinct revisions (MST)
+                "effective_date_count": len({(c["mst"], c["effective_date"]) for c in later_all}),
                 "next_effective_date": nxt["effective_date"] if nxt else None,
             },
             "partial_effect": {
@@ -5102,6 +5109,43 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                     "upstream_article_effective_date": art["effective"],
                     "upstream_changed_flag": art["changed"],
                 }
+                if is_deleted_article(art["text"]):
+                    out["article"]["deleted"] = True
+                    out["article_deleted"] = True
+                else:
+                    # article-level staged enforcement lives in 부칙 only (no separate eflaw row)
+                    staged_checked, staged = False, []
+                    try:
+                        full = run_service(
+                            get_client=_get_client, target="eflaw", response_type=fmt,
+                            snake_params={"oc": resolved_oc, "target": "eflaw", "type": fmt,
+                                          "mst": mst, "ef_yd": eff},
+                        )
+                        if full.get("status") == "ok":
+                            staged = scan_bupchik(bupchik_units(parse_law_payload(full.get("raw_content", ""), fmt)),
+                                                  wanted[0], wanted[1], d)
+                            staged_checked = True
+                    except Exception:  # the scan is best effort; never fail the lookup because of it
+                        staged_checked = False
+                    pe = out["partial_effect"]
+                    pe["article_scan"] = {
+                        "checked": staged_checked,
+                        "article_staged_enforcement_found": bool(staged),
+                        "matches": staged[:2] if slim else staged,
+                    }
+                    if not staged_checked:
+                        caveats.append("부칙 전문을 조회하지 못해 조문별 단계적 시행 여부를 확인하지 못했습니다.")
+                    if staged:
+                        pe["possible"] = True
+                        later_dates = sorted({x for m_ in staged for x in m_["later_dates"]})
+                        pe["note"] = ((pe["note"] + " ") if pe["note"] else "") + (
+                            "부칙에 이 조문의 시행일이 기준일 이후로 정해진 규정이 있습니다: "
+                            + ", ".join(later_dates))
+                        caveats.append(
+                            f"{label}: 부칙에 기준일({d}) 이후 시행일이 적힌 규정이 있어 이 본문이 기준일에 전부 "
+                            f"적용되었다고 단정할 수 없습니다. 부칙 원문 [{staged[0]['bupchik']}]: "
+                            + staged[0]["text"][:400].replace("\n", " ")
+                        )
             if is_current:
                 comparison["differs_from_current"] = False
             elif cur_c is None:
@@ -5133,10 +5177,17 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         out["comparison"] = comparison
         if end:
             out["period"] = period_block(chosen)
+        name_then = version.get("law_name") or law_label
+        if re.sub(r"\s+", "", name_then) != re.sub(r"\s+", "", law_label):  # renamed law: show the name as of that version and the current one
+            what = what.replace(law_label, f"{name_then}(현행 명칭: {law_label})", 1)
+        pe_found = bool(out["partial_effect"].get("article_scan", {}).get("article_staged_enforcement_found"))
         out["statement"] = (
             f"기준일 {d} 현재 시행 중인 {what}은(는) MST {mst} "
             f"(시행일 {eff}, 공포일 {version['announced_date']}, 공포번호 {version['announcement_no']}, "
             f"{version['revision_type']}) 기준입니다."
+            + (" 이 조문은 이 시점에 삭제된 상태(삭제 조문)입니다." if out.get("article_deleted") else "")
+            + (" 다만 부칙에 이 조문의 시행일이 기준일 이후로 정해진 규정이 있어 조문 전체가 기준일에 적용되었다고 "
+               "단정할 수 없습니다(partial_effect.article_scan 참조)." if pe_found else "")
             + (f" 이 버전은 {out['valid_until']}까지 유효합니다." if out["valid_until"] else " 이후 시행 예정 개정은 없습니다.")
             + (" 이후 개정이 있습니다." if later_all else "")
             + (" 시행예정 버전이 있습니다." if scheduled else "")
