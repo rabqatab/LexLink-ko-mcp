@@ -24,6 +24,7 @@ The full tool list with arguments is in [docs/API_REFERENCE.md](docs/API_REFEREN
 ## Code layout (`src/lexlink/`)
 
 - `server.py`: `create_server()` with all tools, prompts, resources and `SERVER_INSTRUCTIONS`. Wraps `server.tool` so every result passes the `SLIM_RESPONSE` size guard.
+- `tool_policy.py`: `TOOL_POLICIES`, one entry per tool, published as `_meta["lexlink/policy"]`. A new tool needs an entry or `create_server()` fails.
 - `_helpers.py`: `TOOL_ANNOTATIONS`, `handle_tool_error`, `run_search`, `run_service`, SLIM helpers.
 - `client.py`: HTTP client (follows law.go.kr JS anti-bot redirects, detects empty/unsubscribed/HTML upstream bodies).
 - `law_extras.py`: argument validation and payload normalization for the history/comparison/appendix/dictionary tools (oldAndNew, thdCmp, lsJoHstInf, lsHstInf, delHst, lsAbrv, licbyl, lstrm).

@@ -8,6 +8,9 @@ All notable changes to LexLink are documented here in both English and Korean.
 
 ### Unreleased
 
+#### Tool policy metadata
+- Every tool's `tools/list` entry now carries `_meta["lexlink/policy"]` (contract v1): `version`, `category`, `evidence` (primary / derived / heuristic / none), `size` (normal / large), `upstream_calls` (usual maximum law.go.kr requests per call), `may_expose_credential` and optional `notes`. The table is `TOOL_POLICIES` in `src/lexlink/tool_policy.py`, filled from the code and live measurements; it is registered through the existing `server.tool` wrapper (FastMCP 1.26 `meta=`). A tool without an entry makes `create_server()` fail. Tool behaviour, input schemas and annotations are unchanged. Contract: `docs/API_REFERENCE.md`; tests: `tests/test_tool_policy.py` (real clients over stdio and Streamable HTTP).
+
 #### Amendment history, old/new and 3단 comparison, appendices, term dictionary
 - 11 new tools (66 total), each validated before the call because the upstream answers wrong input with a silent "0 results": `oldAndNew_search` / `oldAndNew_service` (신구법 대비), `thdCmp_search` / `thdCmp_service` (3단 비교, `knd` 1 인용조문 / 2 위임조문), `lsJoHstInf_search` (laws with amended articles by date or period), `lsHstInf_search` (laws changed on a day), `delHst_search` (deleted-data log), `lsAbrv_search` (law-name abbreviations), `licbyl_search` (별표/서식 list), `lstrm_search` / `lstrm_service` (legal-term dictionary; `lstrm_ai_search` stays the related-term link tool and has no definitions).
 - Bad dates (`20261301`), unknown codes (`sort`, `rr_cls_cd`, `dic_knd_cd`, `search`, `gana`, `del`/`licbyl` `knd`), a 법령종류 `knd` that is not of the form `A0002` (A0001 헌법, A0002 법률, A0007 대통령령, A0009 총리령, A0011 부령 ...), and a missing required date or `knd` are `VALIDATION_ERROR` (full-width digits ０-９ in numeric arguments such as dates, id, mst, org, nb, anc_no, trm_seqs are folded to ASCII first, nothing else is; code/enum arguments such as `knd`, `search`, `rr_cls_cd`, `sort` are not folded and give `VALIDATION_ERROR`; `gana` uses the guide's codes `ga na da ra ma ba sa ah ja cha ka ta pa ha etc`; the full 법령종류 code list is not published, so only its shape is checked); an unknown id/mst is `NOT_FOUND`; zero rows is `ok` with `warning: "no_results"` and an empty list. List rows are always lists (upstream sends a bare object for one row). A page past the end of `lsJoHstInf_search` / `lsHstInf_search` / `delHst_search` is `warning: "page_out_of_range"` with the real total (upstream says `totalCnt: 0`).
@@ -616,6 +619,9 @@ All notable changes to LexLink are documented here in both English and Korean.
 ## 한국어 (Korean)
 
 ### 미배포 (Unreleased)
+
+#### 도구 정책 메타데이터
+- 모든 도구의 `tools/list` 항목에 `_meta["lexlink/policy"]`(계약 v1)가 실립니다: `version`, `category`, `evidence`(primary / derived / heuristic / none), `size`(normal / large), `upstream_calls`(호출당 law.go.kr 요청 수 통상 최대), `may_expose_credential`, 선택 `notes`. 표는 `src/lexlink/tool_policy.py`의 `TOOL_POLICIES`이며 코드 분석과 라이브 측정으로 채웠습니다. 기존 `server.tool` 래퍼로 등록합니다(FastMCP 1.26 `meta=`). 항목이 없는 도구가 있으면 `create_server()`가 실패합니다. 도구 동작, 입력 스키마, annotations는 그대로입니다. 계약: `docs/API_REFERENCE.md`, 테스트: `tests/test_tool_policy.py`(stdio와 Streamable HTTP 실제 클라이언트).
 
 #### 개정 이력, 신구법·3단 비교, 별표, 용어사전
 - 새 도구 11개(총 66개). 업스트림이 잘못된 입력을 조용히 "0건"으로 응답하므로 호출 전에 검증합니다: `oldAndNew_search` / `oldAndNew_service`(신구법 대비), `thdCmp_search` / `thdCmp_service`(3단 비교, `knd` 1 인용조문 / 2 위임조문), `lsJoHstInf_search`(날짜·기간별 조문 개정 법령), `lsHstInf_search`(특정일 변경 법령), `delHst_search`(삭제 데이터 로그), `lsAbrv_search`(법령 약칭), `licbyl_search`(별표·서식 목록), `lstrm_search` / `lstrm_service`(법령용어 사전; `lstrm_ai_search`는 연관 용어 링크용이고 정의가 없음).

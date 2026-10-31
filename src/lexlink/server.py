@@ -42,6 +42,7 @@ from .law_extras import (
 )
 from .ranking import detect_query_language, should_apply_ranking, rank_search_results
 from .resolver import get_resolver
+from .tool_policy import policy_meta
 from ._helpers import (
     TOOL_ANNOTATIONS, stringify_id, handle_tool_error, ToolValidationError,
     slim_response, run_search, run_service, annotate_prec_body_availability,
@@ -243,12 +244,16 @@ For article_citation: you MUST first call eflaw_search to get the current MST (ë
     # `initialize` reports LexLink's own version instead of the mcp library's.
     server._mcp_server.version = __version__
 
-    # Central SLIM_RESPONSE size guard: every tool result goes through it.
+    # Central registration wrapper: every tool result goes through the SLIM_RESPONSE size
+    # guard, and every tool is published with its policy metadata (tool_policy.py) as
+    # `_meta["lexlink/policy"]`. A tool without a policy entry fails here at startup.
     _register_tool = server.tool
 
     def _guarded_tool(*args, **kwargs):
-        decorate = _register_tool(*args, **kwargs)
-        return lambda fn: decorate(slim_limited(fn))
+        def decorate(fn):
+            meta = {**policy_meta(kwargs.get("name") or fn.__name__), **(kwargs.pop("meta", None) or {})}
+            return _register_tool(*args, meta=meta, **kwargs)(slim_limited(fn))
+        return decorate
 
     server.tool = _guarded_tool
 

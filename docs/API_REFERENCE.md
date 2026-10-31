@@ -178,6 +178,31 @@
 
 ---
 
+## 도구 정책 메타데이터
+
+모든 도구는 `tools/list` 항목의 `_meta["lexlink/policy"]`에 정책(계약 v1)을 싣습니다. 클라이언트가 노출할 도구를 고르는 데 쓰라고 있는 값이며 도구 동작·입력 스키마·annotations는 바꾸지 않습니다. 표는 `src/lexlink/tool_policy.py`의 `TOOL_POLICIES` 한 곳에 있고, 서버에서 바로 읽을 수 있습니다:
+
+```python
+import asyncio
+from lexlink.server import create_server
+for t in asyncio.run(create_server().list_tools()):
+    print(t.name, t.meta["lexlink/policy"])
+```
+
+| 필드 | 값 | 뜻 |
+|---|---|---|
+| `version` | `1` | 계약 버전 |
+| `category` | `law`, `law_history`, `law_compare`, `admin_rule`, `ordinance`, `treaty`, `precedent`, `constitutional`, `interpretation`, `admin_appeal`, `committee`, `knowledge`, `chain`, `assist`, `meta` | 도구 분류 |
+| `evidence` | `primary` / `derived` / `heuristic` / `none` | `primary` 법령·결정 원문 그대로. `derived` 업스트림 또는 LexLink가 편집·계산한 산출물(목록, 신구조문표, 비교, 인용 추출). `heuristic` 추정·통계·요약(`check_precedent_odds`, `simplify_article`). `none` 법률 내용 없음(`cache_stats`) |
+| `size` | `normal` / `large` | `large`: 응답이 보통 50KB 이상이거나 `sections`/`jo`/`display`로도 줄일 수 없음 |
+| `upstream_calls` | 정수 | 도구 1회 호출당 law.go.kr 요청 수의 통상 최대(캐시 없음, 안티봇 리다이렉트·추가 페이지 제외). 더 큰 상한은 `notes` |
+| `may_expose_credential` | bool | OC 등 자격 증명이 클라이언트 리댁션 후에도 응답에 있을 수 있으면 true |
+| `notes` | 문자열(선택) | 짧은 주의 |
+
+분류 규칙: 모든 `*_search`/목록 도구는 LexLink가 재정렬·재페이지하므로 `derived`, 원문을 그대로 돌려주는 `*_service`/`*_josub`는 `primary`. `jo`/`sections`로 큰 본문을 50KB 아래로 줄일 수 있는 도구(`eflaw_service`, `law_service`, `prec_service`, `thdCmp_service`)는 `normal`이고 `notes`에 호출 방법을 적습니다. 값은 코드를 읽고 실제 응답을 측정해 정했습니다. 새 도구는 표에 항목이 없으면 서버가 시작되지 않습니다([DEVELOPMENT.md](DEVELOPMENT.md#adding-a-tool)).
+
+---
+
 ## LexLink 파생 도구
 
 업스트림 API 하나에 대응하지 않고 여러 호출이나 HTML 파싱으로 만든 도구입니다. 동작은 도구 설명과 CHANGELOG(Unreleased 포함)에 근거하며, 오프라인 테스트가 있습니다.
