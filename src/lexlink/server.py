@@ -666,6 +666,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         ef_yd: Optional[int] = None,
         jo: Optional[Union[str, int]] = None,
         chr_cls_cd: Optional[str] = None,
+        lm: Optional[str] = None,
         oc: Optional[str] = None,
         type: str = "JSON",
         ctx: Context = None,
@@ -680,9 +681,10 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         Using `jo` returns only the requested article, which is much faster and cleaner.**
 
         Args:
-            id: Law ID (either id or mst is required)
+            id: Law ID (either id, mst or lm is required)
             mst: Law serial number (MST/lsi_seq)
-            ef_yd: Effective date (YYYYMMDD) - required when using mst
+            ef_yd: Effective date (YYYYMMDD) - required when using mst without id
+            lm: Law name (alternative to id/mst)
             jo: **REQUIRED for specific articles.** Article number. Accepts 35, "35", "35의5",
                 "제35조의5", "35-5" or the 6-digit code "003505" (all normalized to XXXXXX:
                 first 4 digits = article number zero-padded, last 2 digits = branch suffix, 00=main).
@@ -704,12 +706,20 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         """
         (id, mst, jo) = stringify_id(id, mst, jo)
         resolved_oc = resolve_oc(override_oc=oc)
-        if not id and not mst:
-            raise ValueError("Either 'id' or 'mst' parameter is required")
+        if not id and not mst and not lm:
+            raise ValueError("One of 'id', 'mst' or 'lm' parameter is required")
+        if mst and not id and not ef_yd:
+            # Upstream answers MST-only eflaw requests with the misleading
+            # "미신청" page; ef_yd is what it actually needs.
+            raise ValueError(
+                "'ef_yd' (effective date, YYYYMMDD) is required when using 'mst' without 'id'. "
+                "Take it from eflaw_search (시행일자) or pass 'id' instead."
+            )
         jo = _normalize_jo_arg(jo)
         snake_params = {"oc": resolved_oc, "target": "eflaw", "type": type}
         if id: snake_params["id"] = id
         if mst: snake_params["mst"] = mst
+        if lm: snake_params["lm"] = lm
         if ef_yd: snake_params["ef_yd"] = ef_yd
         if jo: snake_params["jo"] = jo
         if chr_cls_cd: snake_params["chr_cls_cd"] = chr_cls_cd
@@ -768,8 +778,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         """
         (id, mst, jo) = stringify_id(id, mst, jo)
         resolved_oc = resolve_oc(override_oc=oc)
-        if not id and not mst:
-            raise ValueError("Either 'id' or 'mst' parameter is required")
+        if not id and not mst and not lm:
+            raise ValueError("One of 'id', 'mst' or 'lm' parameter is required")
         jo = _normalize_jo_arg(jo)
         snake_params = {"oc": resolved_oc, "target": "law", "type": type}
         if id: snake_params["id"] = id
@@ -1084,8 +1094,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             >>> elaw_service(mst="127280", type="XML")
         """
         (id, mst) = stringify_id(id, mst)
-        if not id and not mst:
-            raise ValueError("Either 'id' or 'mst' parameter is required")
+        if not id and not mst and not lm:
+            raise ValueError("One of 'id', 'mst' or 'lm' parameter is required")
         resolved_oc = resolve_oc(override_oc=oc)
         snake_params = {"oc": resolved_oc, "target": "elaw", "type": type}
         if id: snake_params["id"] = id
