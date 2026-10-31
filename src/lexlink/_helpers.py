@@ -9,6 +9,7 @@ import asyncio
 import concurrent.futures
 import functools
 import inspect
+import json
 import logging
 import os
 import re
@@ -167,6 +168,12 @@ ID_NOTE = (
 )
 
 
+ORDIN_ID_NOTE = (
+    " 자치법규는 ordin_service(id=자치법규ID) 또는 ordin_service(mst=자치법규일련번호)로 조회하며, "
+    "자치법규일련번호를 id에 넣으면 NOT_FOUND입니다."
+)
+
+
 def rename_row_ids_to_rank(response: dict) -> dict:
     """Rename each ranked_data row's ``id`` (upstream row index 1,2,3) to ``rank``.
 
@@ -180,17 +187,67 @@ def rename_row_ids_to_rank(response: dict) -> dict:
     if not isinstance(ranked, dict):
         return response
     renamed = False
+    ordinance = False
     for value in ranked.values():
         rows = value if isinstance(value, list) else [value]
         for row in rows:
             if isinstance(row, dict) and "id" in row:
+                ordinance = ordinance or "자치법규ID" in row
                 # rebuild so "rank" keeps the position of "id"
                 items = [("rank" if k == "id" else k, v) for k, v in row.items()]
                 row.clear()
                 row.update(items)
                 renamed = True
     if renamed and response.get("raw_content"):
-        response["id_note"] = ID_NOTE
+        response["id_note"] = ID_NOTE + (ORDIN_ID_NOTE if ordinance else "")
+    return response
+
+
+def body_is_all_null(raw: str, response_type: str, echo_id: str = "") -> bool:
+    """True when a service body only holds the literal "null"/blank for every scalar field.
+
+    Some services answer an unknown id with HTTP 200 and ``"사건명": "null"`` etc.
+    (plus an echo of the requested id, ignored via ``echo_id``).
+    """
+    try:
+        if response_type == "JSON":
+            data = json.loads(raw)
+        elif response_type == "XML":
+            data = parse_xml_response(raw)
+        else:
+            return False
+    except Exception:
+        return False
+    root = next(iter(data.values())) if isinstance(data, dict) and len(data) == 1 else data
+    if not isinstance(root, dict):
+        return False
+    values = [str(v).strip() for v in root.values() if isinstance(v, (str, int)) and str(v).strip() != echo_id]
+    return "null" in values and all(v in ("", "null") for v in values)
+
+
+def trim_raw_to_ranked(response: dict, response_type: str) -> dict:
+    """Make a JSON ``raw_content`` carry only the rows of ``ranked_data``.
+
+    ``run_search`` over-fetches up to 100 rows to re-rank; without this the whole
+    window (or, past the end, an unrelated upstream page) stays in ``raw_content``
+    next to the requested page. Rows keep every upstream field (including ``id``).
+    XML/HTML bodies, errors and responses without ``ranked_data`` are left as is.
+    """
+    ranked = response.get("ranked_data")
+    raw = response.get("raw_content")
+    if (response_type != "JSON" or response.get("status") != "ok"
+            or not isinstance(ranked, dict) or not isinstance(raw, str)):
+        return response
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return response
+    if not isinstance(data, dict) or len(data) != 1:
+        return response
+    root_key = next(iter(data))
+    if not isinstance(data[root_key], dict):
+        return response
+    response["raw_content"] = json.dumps({root_key: ranked}, ensure_ascii=False)
     return response
 
 
@@ -341,10 +398,24 @@ def _total_count(response: dict) -> Optional[int]:
             pass
     raw = response.get("raw_content")
     if isinstance(raw, str):
-        m = re.search(r'totalCnt["\']?\s*[:>=]\s*["\']?\s*(\d+)', raw)
+        m = re.search(r'(?:totalCnt|검색결과개수)["\']?\s*[:>=]\s*["\']?\s*(\d+)', raw)
         if m:
             return int(m.group(1))
+        if _is_empty_notice(raw):
+            return 0
     return None
+
+
+def _is_empty_notice(raw: str) -> bool:
+    """True for an upstream ``{"Law": "일치하는 ... 정보가 없습니다 ..."}`` empty-result body."""
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return False
+    if not isinstance(data, dict) or len(data) != 1:
+        return False
+    value = next(iter(data.values()))
+    return isinstance(value, str) and "정보가 없습니다" in value
 
 
 def add_no_results_guidance(response: dict, *, body_search: bool = False) -> dict:
@@ -520,6 +591,8 @@ def run_search(
         response,
         body_search=str(snake_params.get("search", "")) in ("1", "2") and target != "aiSearch",
     )
+    if ranking_enabled:
+        trim_raw_to_ranked(response, response_type)
     if finalize_ids:
         rename_row_ids_to_rank(response)
     return slim_response(response)
