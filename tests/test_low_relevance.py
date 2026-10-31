@@ -7,7 +7,9 @@ import pytest
 
 import lexlink.citation as citation_mod
 import lexlink.server as server_mod
-from lexlink._helpers import LOW_RELEVANCE_WARNING, low_relevance_warning
+from lexlink._helpers import (
+    LOW_RELEVANCE_WARNING, RELEVANCE_UNCHECKABLE_WARNING, low_relevance_warning,
+)
 from lexlink.cache import get_cache
 
 from test_amendment import FakeClient as AmendmentFakeClient
@@ -65,8 +67,33 @@ def test_helper_flags_only_zero_overlap():
     # digits alone are not evidence (they match dates and article numbers)
     assert low_relevance_warning("qqqqwwww 329", [PLEDGE]) == LOW_RELEVANCE_WARNING
     # nothing to judge -> no warning
-    assert low_relevance_warning("", [PLEDGE]) is None
+    assert low_relevance_warning("", [PLEDGE]) == RELEVANCE_UNCHECKABLE_WARNING
     assert low_relevance_warning("zzxxcc", []) is None
+
+
+@pytest.mark.unit
+def test_metadata_fields_and_single_chars_do_not_count_as_overlap():
+    row = dict(PLEDGE, 제개정구분명="일부개정", 소관부처명="재정경제부", 시행일자="20260320", rank="1")
+    for q in ("asdfqwer zxcv 개정", "asdfqwer zxcv 재정", "asdfqwer zxcv 시행", "asdfqwer zxcv 이"):
+        assert low_relevance_warning(q, [row]) == LOW_RELEVANCE_WARNING, q
+    # no usable grams -> honest "cannot check" message, not a guess
+    for q in ("x", "이 뭐 야", "123"):
+        assert low_relevance_warning(q, [row]) == RELEVANCE_UNCHECKABLE_WARNING, q
+    # rows without content fields (appendix searches) are not judged
+    assert low_relevance_warning("asdf", [{"별표명": "x"}]) is None
+
+
+@pytest.mark.unit
+def test_warning_is_soft_and_documents_false_positives():
+    assert LOW_RELEVANCE_WARNING.startswith("relevance_unverified")
+    assert "구어체" in LOW_RELEVANCE_WARNING and "직접 확인" in LOW_RELEVANCE_WARNING
+
+
+@pytest.mark.unit
+def test_aisearch_correct_result_for_abbreviation_still_returns_data(tools):
+    RelevanceFake.rows = [{"법령명": "근로기준법", "조문제목": "정의", "조문내용": "제2조 정의"}]
+    out = tools("aiSearch", query="근기법")
+    assert out["status"] == "ok" and out["ranked_data"]  # data kept even if warned
 
 
 @pytest.mark.unit
