@@ -22,7 +22,8 @@ src/lexlink/
 ├── citation.py      # HTML-based citation extraction (BeautifulSoup)
 ├── ranking.py       # Relevance ranking for search results
 ├── http_server.py   # HTTP/SSE transport for PlayMCP deployment
-├── raw_logger.py    # MCP traffic logging (JSONL)
+├── http_security.py # HTTP auth / rate limit / host validation (pure ASGI)
+├── raw_logger.py    # MCP traffic logging (JSONL, async writer)
 └── log_processor.py # Log analysis for dashboard
 
 tests/               # 122 offline tests (tracked in git): test_cache, test_cgm_expc, test_client_errors, test_knowledge_base, test_ordin_link, test_resources, test_special_decc, test_validation_jo

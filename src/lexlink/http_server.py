@@ -9,13 +9,28 @@ Transport Options:
     - SSE (/sse): Legacy transport, may not work with some platforms
 
 Authentication:
+    Clients authenticate with ``Authorization: Bearer <token>``; tokens come
+    from LEXLINK_AUTH_TOKENS="name:token,...". The server fails closed at
+    startup without tokens unless LEXLINK_ALLOW_NO_AUTH=true (PlayMCP no-auth
+    registration only). The tool `oc` argument is ignored in HTTP mode.
+
     The server uses its own OC from the environment variable (OC=...).
     law.go.kr validates OC + requesting IP as a pair, so the server's OC
     must have the server's public IP registered at open.law.go.kr.
 
+Hardening (pure ASGI, order Auth > Logging > RateLimit > SessionBinding > app):
+    - Host/Origin validation via LEXLINK_ALLOWED_HOSTS / LEXLINK_ALLOWED_ORIGINS
+    - Per-token concurrency and per-minute limits (single process only)
+    - MCP sessions bound to the creating token (LEXLINK_MAX_SESSIONS)
+    - Privacy-preserving JSONL logging with retention (see raw_logger.py)
+    Run a single uvicorn worker. See docs/OPERATIONS.md for all variables.
+
 Usage:
     # Run with Streamable HTTP transport (recommended for PlayMCP)
-    OC=your_oc TRANSPORT=http uv run serve
+    OC=your_oc LEXLINK_AUTH_TOKENS=name:token TRANSPORT=http uv run serve
+
+    # Or as an ASGI factory (single worker)
+    uvicorn --factory --no-proxy-headers lexlink.http_server:create_app
 
     # Run with SSE transport (legacy)
     OC=your_oc uv run serve
@@ -25,7 +40,7 @@ Endpoints:
     - SSE (Legacy): http://your-host:8000/sse
 
 PlayMCP Registration:
-    - 인증 방식: 인증 없음
+    - 인증 방식: 인증 없음 (requires LEXLINK_ALLOW_NO_AUTH=true)
     - MCP Endpoint: http://your-domain/mcp (domain required, not raw IP)
     - Use sslip.io for IP-to-domain: http://1-2-3-4.sslip.io/mcp
 
@@ -36,22 +51,25 @@ Note:
     3. Port 80/443 (use Nginx as reverse proxy)
 """
 
-import os
-import json
+import asyncio
 import logging
+import os
 import time
+from contextlib import asynccontextmanager
 
 from starlette.applications import Starlette
-from starlette.middleware import Middleware
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
-from starlette.responses import Response, StreamingResponse
 from starlette.routing import Mount
 
-from mcp.server.fastmcp import FastMCP
-
+from .http_security import (
+    BearerAuthMiddleware,
+    RateLimitMiddleware,
+    SessionBindingMiddleware,
+    build_transport_security,
+    load_auth_tokens,
+)
+from .params import set_ignore_oc_override
+from .raw_logger import LoggingMiddleware, flush_all
 from .server import create_server
-from .raw_logger import log_mcp_call, generate_request_id
 
 # Set up logging
 logging.basicConfig(
@@ -61,132 +79,142 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-class RawLoggingMiddleware(BaseHTTPMiddleware):
+def create_app(transport: str = "http", *, clock=time.monotonic):
     """
-    MCP traffic logger for PlayMCP.
+    Build the ASGI app: Auth > Logging > RateLimit > SessionBinding > FastMCP.
 
-    Captures request/response pairs and logs in dashboard-compatible format.
+    Owns the single create_server() call and the session manager lifespan.
+    Raises RuntimeError at startup if authentication is not configured
+    (see http_security.load_auth_tokens). Also usable as a uvicorn factory:
+    ``uvicorn --factory lexlink.http_server:create_app`` (single worker only:
+    rate limits and log writer are in-process).
+
+    Note: the factory serves plain HTTP only (no TLS); put a reverse proxy in
+    front. The ``TRANSPORT``/``HOST``/``PORT`` env vars are ignored by the
+    factory (it always serves Streamable HTTP; use uvicorn flags for the
+    rest). Run uvicorn with ``--no-proxy-headers`` so that
+    LEXLINK_TRUSTED_PROXIES is the only X-Forwarded-For authority.
+
+    Side effect: the HTTP-mode "ignore the tool-argument oc" switch
+    (``params.set_ignore_oc_override(True)``) is per-process, not per-app:
+    after create_app() every tool call in this process uses the server's OC,
+    including other servers or stdio sessions embedded in the same process.
+
+    Args:
+        transport: "http" (Streamable HTTP, /mcp) or "sse" (legacy, /sse)
+        clock: monotonic clock for idle-session expiry (tests inject a fake)
+
+    Idle sessions (LEXLINK_SESSION_IDLE_TTL_SEC, default 3600, 0 disables) are
+    ended by an internal DELETE sent straight to the inner FastMCP app (no
+    middleware, no auth); the session manager keeps terminated transports in
+    its instance table, so the entry is dropped afterwards (see _release).
     """
+    tokens = load_auth_tokens()  # fail closed before anything else
+    # mcp logs session ids (INFO/WARNING); keep them out of the logs
+    for name, level in (
+        ("mcp.server.streamable_http_manager", logging.WARNING),
+        ("mcp.server.streamable_http", logging.WARNING),
+        ("mcp.server.sse", logging.ERROR),
+    ):
+        logging.getLogger(name).setLevel(level)
+    set_ignore_oc_override(True)  # HTTP callers must not choose the OC
 
-    async def dispatch(self, request: Request, call_next):
-        request_id = generate_request_id()
-        start_time = time.time()
-        timestamp = time.strftime("%Y-%m-%dT%H:%M:%S.") + f"{int((time.time() % 1) * 1000000):06d}"
-
-        # Capture request body
-        req_data = None
-        try:
-            body_bytes = await request.body()
-            if body_bytes:
-                try:
-                    req_data = json.loads(body_bytes)
-                except json.JSONDecodeError:
-                    pass
-        except Exception:
-            pass
-
-        # Get response
-        response = await call_next(request)
-        elapsed_ms = (time.time() - start_time) * 1000
-
-        # Capture response body
-        response_body = b""
-        resp_data = None
-
-        try:
-            if hasattr(response, 'body_iterator'):
-                chunks = []
-                async for chunk in response.body_iterator:
-                    if isinstance(chunk, str):
-                        chunk = chunk.encode('utf-8')
-                    chunks.append(chunk)
-                response_body = b"".join(chunks)
-            elif hasattr(response, 'body'):
-                response_body = response.body
-        except Exception:
-            pass
-
-        # Parse response body
-        if response_body:
-            try:
-                resp_data = json.loads(response_body)
-            except json.JSONDecodeError:
-                decoded = response_body.decode("utf-8", errors="replace")
-                if decoded.startswith("event:") or "\nevent:" in decoded:
-                    resp_data = {"_sse_events": self._parse_sse(decoded)}
-
-        # Log in dashboard format
-        log_mcp_call(
-            request_id=request_id,
-            timestamp=timestamp,
-            duration_ms=elapsed_ms,
-            req_data=req_data,
-            resp_data=resp_data,
-            headers=dict(request.headers),
-            status_code=response.status_code,
-            client_ip=request.client.host if request.client else None,
-            response_type=type(response).__name__,
+    if transport == "sse":
+        logger.warning(
+            "TRANSPORT=sse: results travel on the GET /sse stream, so per-request "
+            "log status/error_code and the concurrency limit cannot observe tool "
+            "results (POST /messages returns 202 immediately). Prefer TRANSPORT=http. "
+            "See docs/OPERATIONS.md."
         )
+    fastmcp = create_server(transport_security=build_transport_security())
+    tool_schemas = {
+        t.name: set((t.parameters or {}).get("properties", {}))
+        for t in fastmcp._tool_manager.list_tools()
+    }
+    if transport == "sse":
+        inner = fastmcp.sse_app()
+    else:
+        inner = fastmcp.streamable_http_app()
 
-        # Return new response with same body
-        if response_body:
-            return Response(
-                content=response_body,
-                status_code=response.status_code,
-                headers=dict(response.headers) if hasattr(response, 'headers') else {},
-                media_type=getattr(response, 'media_type', None),
-            )
-        else:
-            return response
+    mcp_path = fastmcp.settings.streamable_http_path
 
-    def _parse_sse(self, sse_text: str) -> list:
-        """Parse SSE events from text."""
-        events = []
-        current_event = {}
+    async def _terminate(session_id: str, host: bytes):
+        """Internal ASGI DELETE for ``session_id`` straight to the inner app.
 
-        for line in sse_text.split('\n'):
-            line = line.strip()
-            if not line:
-                if current_event:
-                    events.append(current_event)
-                    current_event = {}
-                continue
+        Needs only the Host header (transport security) and the session id;
+        DELETE has no Accept/Content-Type requirement and the protocol
+        version header defaults to a supported one in mcp 1.26. Returns the
+        status code; the response is fully consumed.
+        """
+        scope = {
+            "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
+            "method": "DELETE", "scheme": "http", "path": mcp_path,
+            "raw_path": mcp_path.encode(), "root_path": "", "query_string": b"",
+            "headers": [(b"host", host), (b"mcp-session-id", session_id.encode("latin-1"))],
+            "client": ("127.0.0.1", 0), "server": ("127.0.0.1", 0), "state": {},
+        }
+        sent = False
+        result: list = []
 
-            if line.startswith('event:'):
-                current_event['event'] = line[6:].strip()
-            elif line.startswith('data:'):
-                data_str = line[5:].strip()
-                try:
-                    current_event['data'] = json.loads(data_str)
-                except json.JSONDecodeError:
-                    current_event['data'] = data_str
-            elif line.startswith('id:'):
-                current_event['id'] = line[3:].strip()
+        async def receive():
+            nonlocal sent
+            if not sent:
+                sent = True
+                return {"type": "http.request", "body": b"", "more_body": False}
+            await asyncio.sleep(3600)  # no disconnect needed; cancelled by wait_for
+            return {"type": "http.disconnect"}
 
-        if current_event:
-            events.append(current_event)
+        async def send(message):
+            if message["type"] == "http.response.start":
+                result.append(message["status"])
 
-        return events
+        await asyncio.wait_for(inner(scope, receive, send), timeout=10)
+        return result[0] if result else None
 
+    def _release(session_id: str) -> None:
+        # mcp 1.26 keeps a terminated transport in the manager's instance
+        # table forever (its cleanup skips terminated sessions). There is no
+        # public API to drop it, so this single guarded pop is the least
+        # invasive fix; if the attribute is gone it degrades to a no-op and
+        # the binding middleware's expired-id memory still answers 404.
+        instances = getattr(fastmcp.session_manager, "_server_instances", None)
+        if isinstance(instances, dict):
+            instances.pop(session_id, None)
 
-def get_fastmcp_server() -> FastMCP:
-    """Get the FastMCP server instance."""
-    return create_server()
+    binding = SessionBindingMiddleware(
+        None, clock=clock,
+        terminate=_terminate if transport != "sse" else None,
+        release=_release if transport != "sse" else None,
+    )
 
+    @asynccontextmanager
+    async def lifespan(app):
+        sweeper = None
+        try:
+            if transport == "sse":
+                yield
+            else:
+                async with fastmcp.session_manager.run():
+                    if binding.sweeper_enabled:
+                        sweeper = asyncio.create_task(binding.run_sweeper())
+                        binding.sweep_task = sweeper
+                    try:
+                        yield
+                    finally:
+                        if sweeper is not None:
+                            sweeper.cancel()
+                            await asyncio.gather(sweeper, return_exceptions=True)
+        finally:
+            flush_all()
 
-# Create server instance
-_server: FastMCP = get_fastmcp_server()
-
-# Get the raw SSE app from FastMCP
-_sse_app = _server.sse_app()
-
-# Wrap with our middleware for raw logging
-app = Starlette(
-    routes=[Mount("/", app=_sse_app)],
-    middleware=[
-        Middleware(RawLoggingMiddleware),
-    ]
-)
+    starlette_app = Starlette(routes=[Mount("/", app=inner)], lifespan=lifespan)
+    binding.app = starlette_app
+    app = binding
+    app = RateLimitMiddleware(app)
+    app = LoggingMiddleware(app, tool_schemas=tool_schemas)
+    outer = BearerAuthMiddleware(app, tokens)
+    outer.session_binding = binding  # introspection for tests/ops
+    return outer
 
 
 def run_sse_server(host: str = "0.0.0.0", port: int = 8000):
@@ -205,7 +233,7 @@ def run_sse_server(host: str = "0.0.0.0", port: int = 8000):
     logger.info(f"Starting LexLink MCP server (SSE) on {host}:{port}")
     logger.info(f"Endpoint: http://{host}:{port}/sse")
 
-    uvicorn.run(app, host=host, port=port)
+    uvicorn.run(create_app("sse"), host=host, port=port, proxy_headers=False)
 
 
 def run_http_server(host: str = "0.0.0.0", port: int = 8000):
@@ -220,30 +248,11 @@ def run_http_server(host: str = "0.0.0.0", port: int = 8000):
         port: Port to listen on (default: 8000)
     """
     import uvicorn
-    from contextlib import asynccontextmanager
 
     logger.info(f"Starting LexLink MCP server (HTTP) on {host}:{port}")
     logger.info(f"Endpoint: http://{host}:{port}/mcp")
 
-    fastmcp = create_server()
-
-    # Get the streamable HTTP app with proper configuration
-    _http_app = fastmcp.streamable_http_app()
-
-    # Create lifespan that properly initializes the session manager
-    @asynccontextmanager
-    async def lifespan(app):
-        async with fastmcp.session_manager.run():
-            yield
-
-    http_app = Starlette(
-        routes=[Mount("/", app=_http_app)],
-        middleware=[
-            Middleware(RawLoggingMiddleware),
-        ],
-        lifespan=lifespan
-    )
-    uvicorn.run(http_app, host=host, port=port)
+    uvicorn.run(create_app("http"), host=host, port=port, proxy_headers=False)
 
 
 def main():
@@ -255,6 +264,7 @@ def main():
         HOST: Host to bind to (default: 0.0.0.0)
         TRANSPORT: Transport type - "sse" or "http" (default: sse)
         OC: Server's OC for law.go.kr API (must have server IP registered)
+        LEXLINK_AUTH_TOKENS / LEXLINK_ALLOW_NO_AUTH: required, see docs/OPERATIONS.md
     """
     port = int(os.getenv("PORT", "8000"))
     host = os.getenv("HOST", "0.0.0.0")

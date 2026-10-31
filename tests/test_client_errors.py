@@ -163,6 +163,12 @@ def test_client_get_passes_through_json():
 def test_client_get_no_match_warning_kept():
     body = '<?xml version="1.0"?><Law><result>일치하는 법령이 없습니다.</result></Law>'
     client = _client_with_body(body)
+    # lawService.do: now NOT_FOUND (MST message kept)
     out = client.get("/DRF/lawService.do", {"OC": "x", "target": "law", "MST": "1"}, "XML")
+    assert out["status"] == "error"
+    assert out["error_code"] == "NOT_FOUND"
+    assert "MST" in out["message"]
+    # other endpoints keep the ok + warning shape
+    out = client.get("/DRF/lawSearch.do", {"OC": "x", "target": "law"}, "XML")
     assert out["status"] == "ok"
     assert out["warning"] == "no_match"

@@ -8,9 +8,36 @@ All notable changes to LexLink are documented here in both English and Korean.
 
 ### Unreleased
 
+#### Idle session expiry
+- `LEXLINK_SESSION_IDLE_TTL_SEC` (default 3600, `0` disables): Streamable HTTP sessions with no activity for that long are terminated by the server (internal DELETE sent straight to the inner app) and their binding removed, freeing the `LEXLINK_MAX_SESSIONS` slot (also after a 503 at the cap). Sessions with a request in flight or an open GET stream are never idle. Expiry is done by a sweep task (interval min(ttl/4, 60) s, started and cancelled with the app lifespan) and lazily on a request for an idle session. The session is marked expiring first (requests get the standard unknown-session 404), the binding is removed only after the terminate succeeded (2xx/404), otherwise it is kept and retried at the next sweep. Requests for an expired id get the byte-identical unknown-session 404 for every token, so clients open a new session. Works in no-auth mode. SSE sessions end with their stream. mcp 1.26 keeps terminated transports in its session table, so the entry is dropped via one guarded `_server_instances.pop` (also on explicit owner DELETE).
+
+#### Session binding hardening
+- Every Streamable HTTP request without `mcp-session-id` (any method, any query) reserves a cap slot before the app runs (503 at the cap, no overshoot under concurrency) and any `mcp-session-id` in its response is bound and counted; a session whose creating response is not 2xx is terminated and released right away (retried by the sweeper on failure, also with TTL 0). Query `session_id` is only enforced on the SSE `/messages/` path. Requests naming several different session ids get the unknown-session 404.
+- A 404 from the app no longer frees a binding or the mcp instance; only a confirmed terminate or an owner DELETE 2xx does. The Host used for the internal DELETE is only taken from requests answered other than 421/404 (default: first `LEXLINK_ALLOWED_HOSTS` entry). The SSE foreign-id 404 is byte-identical to mcp's (no content-type). Ended SSE streams are tombstoned (404 for every token). Failed terminates back off exponentially per session (sweep interval up to 15 min) with one warning line (no traceback, no session id). `mcp.server.streamable_http_manager`, `mcp.server.streamable_http` and `mcp.server.sse` loggers are raised so session ids stay out of logs.
+
+#### Session binding
+- New pure ASGI `SessionBindingMiddleware` (order Auth > Logging > RateLimit > SessionBinding > app): MCP sessions (Streamable HTTP `mcp-session-id`, SSE `session_id` from the `endpoint` event) are bound to the creating token. Another token gets the same 404 an unknown session gets and never reaches the app; owner DELETE / SSE close removes the binding. `LEXLINK_MAX_SESSIONS` (default 10000) caps bindings; at the cap new sessions get 503 rather than evicting (eviction would leave an unbound, usable session). No-auth mode shares one id, so binding is a no-op.
+
+#### HTTP hardening follow-up
+- Default logs no longer contain client-controlled strings: `tool_name` only for registered tools (else `<unknown>`), argument keys only if declared in the tool schema (others counted in `unknown_arg_keys`), `method` limited to known MCP methods. `create_app` passes tool names/schemas to `LoggingMiddleware`.
+- `LEXLINK_LOG_BODIES` now drops oc/token/authorization-like keys recursively (dicts, lists, JSON inside `result` text).
+- `uvicorn.run(..., proxy_headers=False)`; documented factory command uses `--no-proxy-headers` so `LEXLINK_TRUSTED_PROXIES` is the only X-Forwarded-For authority.
+- `BearerAuthMiddleware` closes websocket scopes with 1008; only lifespan passes unchecked.
+- `LEXLINK_ALLOWED_ORIGINS` without `LEXLINK_ALLOWED_HOSTS` raises at startup.
+- Log retention runs at writer start; log files 0600, directory 0700; dropped log entries are counted and warned about at most once a minute.
+- SSE transport logs a startup warning (per-request log status and concurrency cannot see results on the GET stream). Docs: DEPLOYMENT_GUIDE commands now include tokens, allowed hosts, Authorization and Host headers; OPERATIONS.md documents SSE limits, per-process oc override, http-only factory, unbound sessions, unlogged 401s, delayed 429s.
+
+#### Security
+- HTTP/SSE mode is now authenticated and fail-closed: `LEXLINK_AUTH_TOKENS="name:token,..."` (Bearer, constant-time compare, 401 + `WWW-Authenticate: Bearer`). Startup raises without tokens unless `LEXLINK_ALLOW_NO_AUTH=true` (PlayMCP no-auth registration only; loud warning). In HTTP mode the tool `oc` argument is ignored (`params.set_ignore_oc_override`); stdio is unchanged.
+- New `http_security.py` (pure ASGI): per-token concurrency (`LEXLINK_MAX_CONCURRENCY`, default 8) and per-minute (`LEXLINK_RATE_LIMIT_PER_MIN`, default 60) limits with 429 + `Retry-After`; Host/Origin validation via `LEXLINK_ALLOWED_HOSTS`/`LEXLINK_ALLOWED_ORIGINS` (DNS-rebinding protection is never disabled).
+- Traffic log is now privacy-preserving by default (argument key names only, no values/results/tokens; `LEXLINK_LOG_BODIES=true` opts in, OC redacted), written by a background thread, with `LEXLINK_LOG_RETENTION_DAYS` (default 30) retention. `X-Forwarded-For` is honoured only from `LEXLINK_TRUSTED_PROXIES`.
+
 #### Changed
 - Responses no longer cut content that was already fetched: `check_precedent_odds` (holding/summary excerpts, `key_factors`), `legal_resolver` (`article_text`, `citations`), `chain_full_research` (`representative_cases`), and `chain_law_system` (delegation tree entries and references) return everything by default. `compact_delegation_tree` has no entry cap unless `max_entries` is given. The one exception: `simplify_article` looks up at most 20 legal terms upstream (`extract_legal_terms` cap).
 - `SLIM_RESPONSE=true` (also `1`, `yes`, `on`; case-insensitive) additionally keeps those compact caps (500 chars, top 10/3, 80 delegation entries), so PlayMCP output is unchanged. Fan-out caps and `display` limits are unaffected.
+- `RawLoggingMiddleware` (BaseHTTPMiddleware that buffered whole responses, hung GET streams and dropped multi-value headers) replaced by pure ASGI `LoggingMiddleware` that forwards every message immediately. `log_mcp_call`/`log_raw` removed.
+- Module-level `_server`/`_sse_app`/`app` removed; use `create_app(transport)` (single `create_server()` call; `uvicorn --factory lexlink.http_server:create_app`, single worker). `create_server(transport_security=None)` accepts FastMCP transport security settings.
+- New Korean operations guide: `docs/OPERATIONS.md`.
 
 #### Fixed
 - `prec_service` / `detc_service` / `expc_service`: an upstream "일치하는 … 없습니다" answer (unknown id, or a case whose body the API does not provide, e.g. 국세법령정보시스템 precedents) now returns the new `NOT_FOUND` error instead of `status: ok`. Errors are never cached.
@@ -18,9 +45,35 @@ All notable changes to LexLink are documented here in both English and Korean.
 - `prec_search` marks 국세법령정보시스템 items with `본문제공: "API 미제공"`; use `dat_src_nm="대법원"` to search only sources whose body is served.
 - Section filtering (`sections="summary"`) no longer mutates the cached full response, which a later full call used to return stripped.
 - `check_precedent_odds` skips cases without a body, moves on to the next candidate, and reports `unavailable_cases`.
+- `legal_resolver` citations were always empty (coroutine run on FastMCP's already running event loop, error swallowed, and wrong citation keys read). It now runs the extraction in a worker thread, reads `target_law_name` / `type`, and reports failures in a `warnings` list (also carried by `chain_full_research`).
+- `lawService.do` bodyless successes (blank body, `{}`, or only empty values) and "일치하는 법령이 없습니다" now return `NOT_FOUND` instead of `status: ok`. `article_amendment_diff` still tries the other MST when one version is missing.
+- `elaw_service`, `admrul_search`, `admrul_service`, `lnkLs_search`, `lnkLsOrdJo_search`, `lnkDep_search`, `lsDelegated_service` now send `type`, so the cache key includes the response format.
+- `check_precedent_odds` no longer falls back to the search row number when 판례일련번호 is missing.
+- Generic `NOT_FOUND` hint no longer builds a nonexistent `<target>_search` tool name.
+- `article_citation` verifies `mst` / `law_name` / article with one `lawService` call (`target=law`, `MST`, `JO` incl. branch) when an OC is available: a name mismatch returns `VALIDATION_ERROR` naming both laws, a missing article returns `ARTICLE_NOT_FOUND`, upstream `NOT_FOUND` passes through (all with `success: false`). Without an OC it skips verification and adds a `warnings` entry. The lsiSeq cache is keyed by `(mst, law_name)`, no longer by `mst` alone.
+- Ranked searches (over-fetch of 100 rows) returned an empty page 2+. When `page * display <= 100` the first 100 rows are fetched, ranked, and sliced for the requested page (also `elaw_search`); beyond that ranking is skipped, `page`/`display` are forwarded unchanged and `ranking_applied: false` is set.
+- Zero-result searches (`run_search`, `elaw_search`) and empty `legal_resolver` / `check_precedent_odds` / `chain_dispute_prep` results keep `status: ok` but add `warning: "no_results"`, `message` and Korean `hints` (shorten query, use the formal name, `search=2` where the tool has it).
+- `extract_outcome` checks specific outcomes first (일부인용, 일부기각, 파기환송 ...) and requires disposition context for 기각/각하/인용/취소, so "일부인용" is no longer "인용" and "원심판결 인용" / "인용하지" / "인용된" are `불명`. `check_precedent_odds` adds `outcome_note` (heuristic, not a citable result).
+- `ordin_search` `knd` docstring: official codes are 30001 조례, 30002 규칙, 30003 훈령, 30004 예규, 30006 기타, 30010 고시, 30011 의회규칙 (source: open.law.go.kr ordinListGuide); 1/2/3 are not valid.
+- `lawService.do` "일치하는 … 없습니다" is `NOT_FOUND` only when the whole body is that message (short real bodies quoting the phrase pass); query-keyed linkage targets get a "연계 정보가 없거나 검색어를 확인하세요" hint. `id_note` is dropped with `raw_content` under `SLIM_RESPONSE`. `legal_resolver` reports `success: false` citation extractions in `warnings`.
+- Search cache: `ResponseCache.get`/`put` now return/store shallow copies, and `enforce_display` no longer edits its input. `cgm_expc_search` / `special_decc_search` pages 2+ were empty and a larger `display` after a smaller one still returned the smaller page.
+- Paging across the 100-row ranking window: row order is the ranked first 100 upstream rows, then upstream rows 101+ in upstream order. Pages inside the window are ranked, pages beyond it fetch the covering size-100 upstream page(s) (`ranking_applied: false`), and straddling pages combine the ranked tail with the head of upstream page 2 (`ranking_applied: "partial"`, at most 2 upstream calls). No duplicate or missing rows for display 1-100, JSON and XML, `run_search` and `elaw_search`, both over-fetch keys; `ranked_data` is present on every page (also elaw beyond the window).
+- `page < 1` or `display < 1` raise a validation error (was silently page 1 / odd slices); `display > 100` still clamps. `ranked_data.page` is the requested page. A page past the last result adds the hint `no_more_results`.
+- `legal_resolver`, `check_precedent_odds`, `chain_dispute_prep`, `chain_full_research`: when every sub-search failed they return the upstream error code (or `UPSTREAM_ERROR` for mixed codes) with hints instead of `ok` + `no_results`; when only some failed they return `ok` with `warnings` naming the source and code and never claim `no_results`.
+- `article_citation` name check also accepts the body's `법령명약칭` (or, on mismatch only, one `law_search` for the official name's `법령약칭명`), ignores `「」`, parenthetical suffixes such as `(법률)` and whitespace; 법/시행령/시행규칙 mismatches are still rejected.
+- `article_citation`: only `NOT_FOUND`, `ARTICLE_NOT_FOUND` and a name mismatch block (all with `success: false`); TIMEOUT, API_NOT_SUBSCRIBED, UPSTREAM_ERROR etc. continue the scrape with a `warnings` entry naming the code.
+- `extract_outcome` is position-based (earliest genuine disposition). Negations and modals (`하지 아니`, `할 수 없`, `될 수 없`, `될 것`, `되어야`, `사유가 없`) no longer count, bare 파기 needs a disposition ending, `파기하고 … 환송` within 40 characters is 파기환송, `일부를 인용/기각` is 일부인용/일부기각, and 취소 only counts as a disposition (not 취소소송 / 취소를 구하는). The unused `OUTCOME_KEYWORDS` constant was removed.
+- `ordin_search` `rr_cls_cd` docstring now says 제개정 종류, matching the API reference.
+
+#### Changed (behaviour)
+- Search responses: in `ranked_data`, each row's `id` (upstream row number 1, 2, 3, not a key) is renamed to `rank`. `raw_content` is unchanged and, when kept, a new `id_note` explains that its `id` is a row number. Use 판례일련번호, 법령ID, 법령일련번호(MST) etc. for service calls.
+
+#### Docs
+- `docs/ISSUES.md` lists `*_service` tools without a size-control option; their docstrings now warn that responses can be large.
 
 #### Security
-- The OC credential is removed from upstream response bodies (e.g. `판례상세링크`), error messages, and debug/request logs (`has_oc` flag only); the `httpx` logger is limited to WARNING.
+- The OC credential is removed from upstream response bodies (e.g. `판례상세링크`), error messages, and debug/request logs (`has_oc` flag only); the `httpx` logger is limited to WARNING. The client's generic error path logs a redacted message plus traceback frames only. Encoded forms (`%3FOC%3D`, `&#38;OC=`, `\x26OC=`, `<OC>..</OC>`) are removed; redaction is linear-time and leaves legal text alone (`OC: "Office of Command"`, `"law" means`).
+- OC removal is now structural (hidden `name="OC"` form fields, `OC = '...'` / `"OC":"..."` assignments) regardless of the value; short literal values are replaced only when quote/`=`/`&`-delimited. Tool error messages and logs are redacted too (no `logger.exception`).
 
 ---
 
@@ -533,9 +586,33 @@ All notable changes to LexLink are documented here in both English and Korean.
 
 ### 미배포 (Unreleased)
 
+#### 유휴 세션 만료
+- `LEXLINK_SESSION_IDLE_TTL_SEC`(기본 3600, `0`이면 끔): Streamable HTTP 세션이 해당 시간 동안 활동이 없으면 서버가 세션을 종료(내부 앱에 직접 DELETE)하고 바인딩을 제거해 `LEXLINK_MAX_SESSIONS` 슬롯을 반환(상한 503 이후에도 새 세션 허용). 처리 중인 요청이나 열린 GET 스트림이 있는 세션은 유휴가 아님. 스윕 태스크(간격 min(ttl/4, 60)초, 앱 lifespan과 함께 시작/취소)와 유휴 세션에 요청이 올 때의 지연 만료로 처리. 먼저 `expiring`으로 표시(그동안 요청은 표준 unknown-session 404)하고, 종료가 성공(2xx/404)한 뒤에만 바인딩을 제거하며 실패하면 유지하고 다음 스윕에서 재시도. 만료된 id는 모든 토큰(소유자 포함)에게 바이트 단위로 동일한 unknown-session 404이므로 클라이언트는 새 세션을 엽니다. 인증 없음 모드에서도 동작. SSE 세션은 스트림과 함께 종료. mcp 1.26은 종료된 transport를 세션 테이블에 남기므로 보호된 `_server_instances.pop` 한 곳에서 제거(소유자 DELETE 시에도).
+
+#### 세션 바인딩 보강
+- 세션 헤더 없는 모든 Streamable HTTP 요청(메서드/쿼리 무관)은 앱 호출 전에 상한 슬롯을 예약하고(상한 시 503, 동시 요청에도 초과 없음), 응답의 `mcp-session-id`는 항상 바인딩·집계합니다. 생성 응답이 2xx가 아니면 세션을 즉시 종료·해제하며 실패 시 스위퍼가 재시도합니다(TTL 0에서도). 쿼리 `session_id`는 SSE `/messages/` 경로에서만 검사합니다. 서로 다른 세션 id를 여러 개 보내면 unknown-session 404입니다.
+- 앱의 404는 더 이상 바인딩/인스턴스를 해제하지 않으며, 종료 확인 또는 소유자 DELETE 2xx 이후에만 해제합니다. 내부 DELETE의 Host는 421/404가 아닌 응답을 받은 요청에서만 저장하고 기본값은 `LEXLINK_ALLOWED_HOSTS` 첫 항목입니다. SSE 타 토큰 404는 mcp와 바이트 단위로 동일합니다(content-type 없음). 종료된 SSE 스트림 id는 모든 토큰에 404. 종료 실패는 세션별 지수 백오프(스윕 간격~15분), 경고는 한 줄(트레이스백/세션 id 없음). 세션 id를 출력하는 mcp 로거 레벨을 올렸습니다.
+
+#### 세션 바인딩
+- 순수 ASGI `SessionBindingMiddleware` 추가(순서 Auth > Logging > RateLimit > SessionBinding > app): MCP 세션(Streamable HTTP `mcp-session-id`, SSE `endpoint` 이벤트의 `session_id`)을 만든 토큰에 묶음. 다른 토큰은 존재하지 않는 세션과 같은 404를 받고 앱까지 도달하지 못하며, 소유자 DELETE/SSE 종료 시 바인딩 제거. `LEXLINK_MAX_SESSIONS`(기본 10000) 상한에서는 오래된 항목을 쫓아내지 않고(바인딩 없는 세션이 생기므로) 새 세션을 503으로 거절. 인증 없음 모드는 모든 요청이 같은 id라 효과 없음.
+
+#### HTTP 보강
+- 기본 로그에 클라이언트가 제어하는 문자열이 남지 않음: 등록된 도구만 `tool_name`, 스키마에 선언된 인자 키만 기록(나머지는 `unknown_arg_keys` 개수), 알려진 MCP 메서드만 `method`.
+- `LEXLINK_LOG_BODIES`가 oc/token/authorization 계열 키를 중첩 구조와 `result` 안에서도 제거.
+- `uvicorn.run(..., proxy_headers=False)`, 팩토리 명령에 `--no-proxy-headers`. 웹소켓 스코프는 1008로 종료. `LEXLINK_ALLOWED_ORIGINS`만 설정하면 기동 실패.
+- 로그 보존 정리를 기록 스레드 시작 시 실행, 파일 0600/디렉터리 0700, 버려진 로그 개수 집계 및 분당 1회 경고. SSE 전송 시작 경고 및 한계 문서화. DEPLOYMENT_GUIDE 명령에 토큰/호스트/Authorization/Host 헤더 반영.
+
+#### 보안
+- HTTP/SSE 모드에 인증 추가 및 fail-closed 적용: `LEXLINK_AUTH_TOKENS="이름:토큰,..."` (Bearer, 상수 시간 비교, 401 + `WWW-Authenticate: Bearer`). 토큰이 없으면 `LEXLINK_ALLOW_NO_AUTH=true`(PlayMCP 인증 없음 등록 전용, 강한 경고 로그)가 아닌 한 기동 시 오류. HTTP 모드에서는 도구의 `oc` 인자를 무시(`params.set_ignore_oc_override`)하며 stdio는 변경 없음.
+- 신규 `http_security.py`(순수 ASGI): 토큰별 동시 요청(`LEXLINK_MAX_CONCURRENCY`, 기본 8) 및 분당(`LEXLINK_RATE_LIMIT_PER_MIN`, 기본 60) 제한(429 + `Retry-After`), `LEXLINK_ALLOWED_HOSTS`/`LEXLINK_ALLOWED_ORIGINS` 기반 Host/Origin 검증(DNS 리바인딩 보호는 끄지 않음).
+- 트래픽 로그는 기본적으로 개인정보 최소화(인자 키 이름만 기록, 값/결과/토큰 없음; `LEXLINK_LOG_BODIES=true`로 선택 기록, OC 마스킹), 백그라운드 스레드로 기록, `LEXLINK_LOG_RETENTION_DAYS`(기본 30) 보존 정책 적용. `X-Forwarded-For`는 `LEXLINK_TRUSTED_PROXIES`의 피어에서만 신뢰.
+
 #### 변경
 - 이미 가져온 내용을 더 이상 자르지 않음: `check_precedent_odds`(판시사항·판결요지 발췌, `key_factors`), `legal_resolver`(`article_text`, `citations`), `chain_full_research`(`representative_cases`), `chain_law_system`(위임 트리 항목·참조)이 기본적으로 전체를 반환. `compact_delegation_tree`는 `max_entries`를 지정하지 않으면 항목 상한이 없음. 예외: `simplify_article`은 업스트림 조회를 최대 20개 법률 용어로 제한(`extract_legal_terms` 상한).
 - `SLIM_RESPONSE=true`는 위 압축 상한(500자, 상위 10/3건, 위임 항목 80건)도 함께 유지하므로 PlayMCP 출력은 그대로. 팬아웃 상한과 `display` 제한은 영향 없음.
+- 응답 전체를 버퍼링하고 GET 스트림을 멈추게 하며 다중 값 헤더를 잃던 `RawLoggingMiddleware`(BaseHTTPMiddleware)를 모든 메시지를 즉시 전달하는 순수 ASGI `LoggingMiddleware`로 교체. `log_mcp_call`/`log_raw` 제거.
+- 모듈 수준 `_server`/`_sse_app`/`app` 제거. `create_app(transport)` 사용(`create_server()` 1회 호출, `uvicorn --factory lexlink.http_server:create_app`, 워커 1개). `create_server(transport_security=None)`가 FastMCP 전송 보안 설정을 받음.
+- 한국어 운영 가이드 `docs/OPERATIONS.md` 추가.
 
 #### 수정
 - `prec_service` / `detc_service` / `expc_service`: 업스트림이 "일치하는 … 없습니다"로 답하는 경우(존재하지 않는 ID, 또는 국세법령정보시스템 판례처럼 API가 본문을 제공하지 않는 경우) `status: ok` 대신 새 `NOT_FOUND` 오류를 반환. 오류는 캐시되지 않음.
@@ -543,9 +620,26 @@ All notable changes to LexLink are documented here in both English and Korean.
 - `prec_search`가 국세법령정보시스템 항목에 `본문제공: "API 미제공"`을 표시. `dat_src_nm="대법원"`으로 본문 제공 출처만 검색 가능.
 - `sections="summary"` 필터링이 캐시된 전체 응답을 변형하여, 이후 전체 조회가 잘린 본문을 반환하던 문제 수정.
 - `check_precedent_odds`가 본문이 없는 판례를 건너뛰고 다음 후보로 넘어가며 `unavailable_cases`를 보고.
+- `legal_resolver`의 인용(citations)이 항상 비어 있던 문제 수정(이미 실행 중인 FastMCP 이벤트 루프에서 코루틴 실행 실패 + 오류 은폐 + 잘못된 인용 키 사용). 이제 작업 스레드에서 실행하고 `target_law_name` / `type` 키를 읽으며, 실패 시 `warnings` 목록으로 보고(`chain_full_research`도 전달).
+- `lawService.do`의 본문 없는 성공 응답(빈 본문, `{}`, 값이 모두 빈 객체)과 "일치하는 법령이 없습니다"가 `status: ok` 대신 `NOT_FOUND`를 반환. `article_amendment_diff`는 한 버전이 없어도 다른 MST를 계속 조회.
+- `elaw_service`, `admrul_search`, `admrul_service`, `lnkLs_search`, `lnkLsOrdJo_search`, `lnkDep_search`, `lsDelegated_service`가 `type`을 전달하여 캐시 키에 응답 형식이 포함됨.
+- `check_precedent_odds`가 판례일련번호가 없을 때 검색 행 번호를 대신 쓰지 않음.
+- 일반 `NOT_FOUND` 안내가 존재하지 않는 `<target>_search` 도구 이름을 만들지 않음.
+- `article_citation`: OC가 있으면 `lawService` 1회 호출(`target=law`, `MST`, 가지번호 포함 `JO`)로 `mst`/`law_name`/조문을 검증. 법령명 불일치는 두 법령명을 담은 `VALIDATION_ERROR`, 조문 없음은 `ARTICLE_NOT_FOUND`, 업스트림 `NOT_FOUND`는 그대로 전달(모두 `success: false`). OC가 없으면 검증을 건너뛰고 `warnings`에 안내. lsiSeq 캐시 키를 `mst` 단독에서 `(mst, law_name)`으로 변경.
+- 순위화(100건 over-fetch) 검색에서 2페이지 이상이 비어 있던 문제 수정. `page * display <= 100`이면 상위 100건을 받아 순위화한 뒤 요청 페이지를 잘라 반환(`elaw_search` 포함). 초과하면 순위화를 건너뛰고 `page`/`display`를 그대로 전달하며 `ranking_applied: false` 표시.
+- 결과 0건 검색(`run_search`, `elaw_search`)과 빈 `legal_resolver` / `check_precedent_odds` / `chain_dispute_prep` 결과는 `status: ok`를 유지하되 `warning: "no_results"`, `message`, 한국어 `hints`(검색어 축소, 정식 명칭, 해당 도구는 `search=2` 본문 검색)를 추가.
+- `extract_outcome`이 일부인용·일부기각·파기환송 등 구체적 결과를 먼저 확인하고 기각/각하/인용/취소는 주문 맥락을 요구. "일부인용"이 "인용"으로, "원심판결 인용"/"인용하지"/"인용된"이 인용으로 잡히지 않고 `불명` 처리. `check_precedent_odds`에 `outcome_note`(휴리스틱이며 인용 가능한 결과 아님) 추가.
+- `ordin_search` `knd` docstring 정정: 공식 코드는 30001 조례, 30002 규칙, 30003 훈령, 30004 예규, 30006 기타, 30010 고시, 30011 의회규칙(출처: open.law.go.kr ordinListGuide). 1/2/3은 유효하지 않음.
+
+#### 변경 (동작)
+- 검색 응답의 `ranked_data`에서 각 행의 `id`(키가 아닌 업스트림 행 번호 1, 2, 3)를 `rank`로 이름 변경. `raw_content`는 그대로이며, 유지되는 경우 새 `id_note`가 `id`가 행 번호임을 안내. service 호출에는 판례일련번호·법령ID·법령일련번호(MST) 등을 사용.
+
+#### 문서
+- `docs/ISSUES.md`에 크기 제어 옵션이 없는 `*_service` 도구를 정리하고, 해당 도구 docstring에 응답이 클 수 있다는 경고를 추가.
 
 #### 보안
 - 업스트림 응답 본문(`판례상세링크` 등), 오류 메시지, 디버그/요청 로그에서 OC 인증값을 제거(로그에는 `has_oc` 플래그만 기록). `httpx` 로거는 WARNING 이상으로 제한.
+- OC 제거를 값과 무관한 구조 기반으로 확장(숨김 `name="OC"` 폼 필드, `OC = '...'` / `"OC":"..."` 할당). 짧은 값은 따옴표/`=`/`&`로 구분된 경우만 치환. 도구 오류 메시지와 로그도 마스킹(`logger.exception` 제거).
 
 ---
 

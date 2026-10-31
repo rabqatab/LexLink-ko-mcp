@@ -121,7 +121,9 @@ class ResponseCache:
         self._cache.move_to_end(key)
         self._hits += 1
         logger.debug(f"Cache HIT: {target} (key={key[:8]})")
-        return response
+        # Shallow copy: callers add/replace top-level keys (ranked_data, raw_content...)
+        # and must never alter the shared cached entry.
+        return dict(response)
 
     def put(self, target: str, params: dict, response: dict) -> None:
         """Store a response in cache. Only caches successful responses."""
@@ -134,7 +136,7 @@ class ResponseCache:
         while len(self._cache) >= self._max_entries:
             self._cache.popitem(last=False)
 
-        self._cache[key] = (time.time(), response)
+        self._cache[key] = (time.time(), dict(response))
         logger.debug(f"Cache PUT: {target} (key={key[:8]})")
 
     def invalidate(self, target: str = None) -> int:
