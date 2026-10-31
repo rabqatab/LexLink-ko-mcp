@@ -7,6 +7,7 @@ All helpers preserve exact existing behavior.
 
 import asyncio
 import concurrent.futures
+import copy
 import functools
 import inspect
 import json
@@ -153,6 +154,189 @@ def slim_response(response: dict) -> dict:
 def compact_limit(n: int) -> Optional[int]:
     """Size cap for compact deployments: n when SLIM_RESPONSE is enabled (see slim_enabled), else None (no cap). None works in slices."""
     return n if slim_enabled() else None
+
+
+SLIM_MAX_BYTES = 20_000  # PlayMCP budget: bytes of the tool text as JSON-RPC re-escaped on the wire
+SLIM_MIN_STRING = 200    # strings are cut to at least this many characters first
+SLIM_FALLBACK_STRING = 40  # last-resort minimum once nothing else can shrink
+SLIM_KEEP_KEYS = frozenset({"status", "id", "mst", "error_code", "request_id", "upstream_type"})
+SLIM_NOTE = "SLIM_RESPONSE 크기 한도(20KB)로 일부가 생략되었습니다. "
+SLIM_NO_PARAMS_HINT = "이 도구로는 나머지를 받을 수 없음; SLIM_RESPONSE 해제 환경 사용"
+
+
+def slim_hint(params) -> str:
+    """Note text telling the caller how to get the rest, using only parameters the tool has."""
+    options = []
+    if "jo" in params:
+        options.append("jo로 조문 지정")
+    if "sections" in params:
+        options.append('sections="summary"')
+    if "page" in params or "display" in params:
+        options.append("page/display로 나누어 조회")
+    if not options:
+        return SLIM_NOTE + SLIM_NO_PARAMS_HINT
+    return SLIM_NOTE + "나머지는 " + ", ".join(options) + "(으)로 받으세요."
+
+
+def _json_size(value) -> int:
+    """Bytes of the tool text for ``value`` as it goes over the wire: the pretty JSON
+    re-escaped as a JSON-RPC string (quotes, newlines and backslashes grow)."""
+    text = json.dumps(value, ensure_ascii=False, indent=2, default=str)
+    return len(json.dumps(text, ensure_ascii=False).encode("utf-8"))
+
+
+def _item_size(value, depth: int) -> int:
+    """Wire bytes ``value`` takes inside the pretty JSON at nesting ``depth`` (indent included)."""
+    text = json.dumps(value, ensure_ascii=False, indent=2, default=str)
+    return len(json.dumps(text, ensure_ascii=False).encode("utf-8")) + 2 * depth * (text.count("\n") + 1) + 2
+
+
+def _note_cut(log: list, where: str, before: int, after: int, unit: str) -> None:
+    """Record a cut in ``log``; repeated cuts of the same field merge into one entry."""
+    for entry in log:
+        if entry[0] == where:
+            entry[2] = after
+            return
+    log.append([where, before, after, unit])
+
+
+def _cut_text(text: str, keep: int) -> str:
+    """First ``keep`` characters; markup is cut after its last complete closing tag."""
+    if text.lstrip()[:1] == "<":
+        idx = text.rfind("</", 0, keep)
+        end = text.find(">", idx) if idx > 0 else -1
+        if 0 < end < keep:
+            return text[:end + 1]
+    return text[:keep]
+
+
+def _shrink_once(node, excess: int, path: str, log: list, floor: int = 0, depth: int = 0,
+                 min_str: int = SLIM_MIN_STRING, drop_keys: bool = False) -> bool:
+    """Shrink the largest shrinkable part of ``node`` by about ``excess`` bytes.
+
+    Cuts whole trailing list items or the tail of a long string, so the result
+    stays valid JSON. A part is cut down toward the size of its next-largest
+    sibling (``floor``) first, so one big list does not shrink to a single item
+    while others stay whole. With ``drop_keys`` (last resort) unprotected entries
+    are removed. Records what changed in ``log``; False when nothing can shrink.
+    """
+    children = [(k, v, _json_size(v)) for k, v in
+                (node.items() if isinstance(node, dict) else enumerate(node))]
+    children.sort(key=lambda kv: kv[2], reverse=True)
+    for rank, (key, child, size) in enumerate(children):
+        where = f"{path}.{key}" if path else str(key)
+        sibling = children[1][2] if rank == 0 and len(children) > 1 else children[0][2]
+        level_floor = max(floor, sibling if rank == 0 else 0)
+        want = min(excess, max(size - level_floor, excess // 4, 1))  # bytes to free here
+        if isinstance(child, str) and len(child) > min_str:
+            keep = max(min_str, len(child) - max(want // 3, 1) - 1)
+            node[key] = _cut_text(child, keep)
+            _note_cut(log, where, len(child), len(node[key]), "자")
+            return True
+        if isinstance(child, list) and len(child) > 1:
+            total = len(child)
+            drop = 1
+            freed = _item_size(child[-1], depth + 1)
+            while total - drop > 1 and freed < want:
+                drop += 1
+                freed += _item_size(child[-drop], depth + 1)
+            del child[total - drop:]
+            _note_cut(log, where, total, total - drop, "건")
+            return True
+        if isinstance(child, (dict, list)) and child and _shrink_once(
+                child, excess, where, log, level_floor, depth + 1, min_str, drop_keys):
+            return True
+        if drop_keys and not (isinstance(node, dict) and key in SLIM_KEEP_KEYS):
+            del node[key]
+            _note_cut(log, where, 1, 0, "건")
+            return True
+    return False
+
+
+def enforce_slim_limit(result, limit: int = SLIM_MAX_BYTES, note: str = SLIM_NOTE + SLIM_NO_PARAMS_HINT):
+    """Keep a tool result within ``limit`` wire bytes when SLIM_RESPONSE is enabled.
+
+    No-op by default and for non-dict or already small results. Otherwise
+    shrinks a copy (drops trailing list items, cuts long strings, as a last
+    resort drops unprotected keys; always valid JSON) and adds ``truncated: true``,
+    ``truncated_fields`` and a ``truncated_note`` saying how to fetch the rest.
+    ``raw_content`` stays a string: JSON text is shrunk as data and dumped back,
+    markup is cut after a closing tag with ``raw_content_partial: true``.
+    """
+    if not slim_enabled() or not isinstance(result, dict) or _json_size(result) <= limit:
+        return result
+    work = copy.deepcopy(result)
+    as_data = False  # work["raw_content"] holds parsed JSON while it is shrunk
+    if work.get("ranked_data"):
+        work.pop("raw_content", None)  # parsed copy exists
+    elif isinstance(work.get("raw_content"), str) and work["raw_content"].lstrip()[:1] in ("{", "["):
+        try:
+            work["raw_content"] = json.loads(work["raw_content"])
+            as_data = True
+        except ValueError:
+            pass
+
+    def materialize() -> dict:
+        """``work`` as it will be returned (raw_content back to a JSON string)."""
+        if not as_data:
+            return work
+        final = dict(work)
+        final["raw_content"] = json.dumps(work["raw_content"], ensure_ascii=False)
+        return final
+
+    log: list = []
+    reserve = 900  # room for the truncated_* fields added below
+    for min_str, drop_keys in ((SLIM_MIN_STRING, False), (SLIM_FALLBACK_STRING, False), (SLIM_FALLBACK_STRING, True)):
+        while True:
+            final = materialize()
+            excess = _json_size(final) - (limit - reserve)
+            if excess <= 0:
+                break
+            if as_data:  # data inside raw_content counts for more once it is escaped text
+                excess = max(1, excess * _json_size(work) // max(_json_size(final), 1))
+            if not _shrink_once(work, excess, "", log, min_str=min_str, drop_keys=drop_keys):
+                break
+        if _json_size(materialize()) <= limit - reserve:
+            break
+    out = materialize()
+    if isinstance(out.get("raw_content"), str) and not as_data and any(e[0] == "raw_content" for e in log):
+        out["raw_content_partial"] = True
+    out["truncated"] = True
+    out["truncated_fields"] = [f"{w}: {b}{u} 중 {a}{u}만 표시" for w, b, a, u in log[-8:]]
+    out["truncated_note"] = note
+    if _json_size(out) > limit:  # still too big (protected keys): keep only the identifiers
+        out = {k: v for k, v in out.items() if k in SLIM_KEEP_KEYS and not isinstance(v, (dict, list))}
+        out["truncated"] = True
+        out["truncated_note"] = note
+    return out
+
+
+def mark_slim_cut(result: dict, note: str) -> dict:
+    """Flag a result that SLIM_RESPONSE shortened: ``truncated: true`` plus how to get the rest."""
+    result["truncated"] = True
+    notes = result.setdefault("truncated_notes", [])
+    if note not in notes:
+        notes.append(note)
+    return result
+
+
+def slim_limited(func):
+    """Decorator: run ``enforce_slim_limit`` on the tool's dict result (sync or async).
+
+    The note names only parameters the tool really has (see ``slim_hint``).
+    """
+    note = slim_hint(inspect.signature(func).parameters)
+
+    if inspect.iscoroutinefunction(func):
+        @functools.wraps(func)
+        async def async_wrapper(*args, **kwargs):
+            return enforce_slim_limit(await func(*args, **kwargs), note=note)
+        return async_wrapper
+
+    @functools.wraps(func)
+    def sync_wrapper(*args, **kwargs):
+        return enforce_slim_limit(func(*args, **kwargs), note=note)
+    return sync_wrapper
 
 
 from .params import map_params_to_upstream

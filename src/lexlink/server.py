@@ -32,7 +32,7 @@ from ._helpers import (
     TOOL_ANNOTATIONS, stringify_id, handle_tool_error, ToolValidationError,
     slim_response, run_search, run_service, annotate_prec_body_availability,
     extract_order, classify_order, extract_key_factors, extract_legal_terms, compute_text_diff, run_coroutine_sync,
-    compact_limit, low_relevance_warning,
+    compact_limit, slim_limited, slim_enabled, mark_slim_cut, low_relevance_warning,
     rename_row_ids_to_rank, run_ranked_paging, validate_paging, OVER_FETCH_WINDOW,
     add_no_more_results_hint, add_no_results_guidance, body_is_all_null,
     trim_raw_to_ranked,
@@ -210,6 +210,15 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
     # FastMCP has no version argument; set it on the low-level server so that
     # `initialize` reports LexLink's own version instead of the mcp library's.
     server._mcp_server.version = __version__
+
+    # Central SLIM_RESPONSE size guard: every tool result goes through it.
+    _register_tool = server.tool
+
+    def _guarded_tool(*args, **kwargs):
+        decorate = _register_tool(*args, **kwargs)
+        return lambda fn: decorate(slim_limited(fn))
+
+    server.tool = _guarded_tool
 
     def _get_client() -> LawAPIClient:
         """Create HTTP client from environment variables or defaults."""
@@ -1485,8 +1494,13 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         snake_params = {"oc": resolved_oc, "target": "lsDelegated", "type": type}
         if id: snake_params["id"] = id
         if mst: snake_params["mst"] = mst
-        return run_service(get_client=_get_client, target="lsDelegated",
-                          snake_params=snake_params, response_type=type)
+        response = run_service(get_client=_get_client, target="lsDelegated",
+                               snake_params=snake_params, response_type=type)
+        if slim_enabled() and response.get("status") == "ok" and response.get("raw_content"):
+            # the raw payload is ~486KB; return the compact tree instead (size guard trims the rest)
+            response = dict(response)
+            response["delegation_tree"] = compact_delegation_tree(response.pop("raw_content"), type)
+        return response
 
     # ==================== PHASE 3: CASE LAW & LEGAL RESEARCH ====================
 
@@ -3561,6 +3575,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         all_factors = []
         cases = []
         unavailable = 0
+        slim_cut = False
 
         seen_case_numbers: set = set()
         for item in prec_list:
@@ -3641,6 +3656,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 "holding": holding[:compact_limit(500)] if holding else "",
                 "summary": summary_text[:compact_limit(500)] if summary_text else "",
             })
+            if slim_enabled() and (len(holding or "") > 500 or len(summary_text or "") > 500):
+                slim_cut = True
 
         # Deduplicate factors
         seen = set()
@@ -3650,6 +3667,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 seen.add(f)
                 unique_factors.append(f)
 
+        if slim_enabled() and (len(unique_factors) > 10 or any(len(f) >= 100 for f in unique_factors)):
+            slim_cut = True
         result = {
             "status": "ok",
             "query": query,
@@ -3668,6 +3687,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             result["warnings"] = _failure_warnings(found["errors"])
         elif not cases and not total_found:
             result.update(_no_results_fields(body_search=True))
+        if slim_cut:
+            mark_slim_cut(result, "SLIM_RESPONSE: 판시사항/요지(500자)와 key_factors(100자·10개)가 줄었습니다. 전문은 prec_service(id=사건 id, sections=\"summary\")로 조회하세요.")
         return result
 
     # ==================== TOOL 46: legal_resolver ====================
@@ -3722,6 +3743,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
 
         # Extract law articles from AI search
         applicable_laws = []
+        slim_cut = False
         ranked = ai_result.get("ranked_data", {})
         articles = []
         for key, val in ranked.items():
@@ -3744,6 +3766,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 "article_title": art.get("조문제목", ""),
                 "article_text": (art.get("조문내용", "") or "")[:compact_limit(500)],
             })
+            if slim_enabled() and len(art.get("조문내용", "") or "") > 500:
+                slim_cut = True
             if law_name:
                 law_names_seen.add(law_name)
 
@@ -3828,6 +3852,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                             resolver_warnings.append(
                                 f"인용 관계 추출에 실패했습니다 ({errs})"
                             )
+                        if slim_enabled() and len(cit_result.get("citations", [])) > 10:
+                            slim_cut = True
                         for c in cit_result.get("citations", [])[:compact_limit(10)]:
                             citations.append({
                                 "from_law": top["law_name"],
@@ -3891,6 +3917,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             result["warnings"] = resolver_warnings
         if not failures and not applicable_laws and not related_precedents and not interpretations:
             result.update(_no_results_fields())
+        if slim_cut:
+            mark_slim_cut(result, "SLIM_RESPONSE: 조문 본문(500자)과 인용(조문당 10건)이 줄었습니다. 전문은 eflaw_service(jo=...)·article_citation으로 조회하세요.")
         return result
 
     # ==================== TOOL 47: simplify_article ====================
@@ -4294,6 +4322,11 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             "api_calls_made": base.get("api_calls_made", 0) + odds.get("analyzed", 0) + 1,
             "disclaimer": "이 분석은 참고용이며 법률 자문이 아닙니다.",
         }
+        if slim_enabled() and len(odds.get("representative_cases", [])) > 3:
+            mark_slim_cut(result, "SLIM_RESPONSE: 대표 판례를 3건으로 줄였습니다. 나머지는 check_precedent_odds(top_n=...)로 조회하세요.")
+        for src in (base, odds):
+            for note in src.get("truncated_notes") or []:
+                mark_slim_cut(result, note)
         warnings = list(base.get("warnings") or []) + list(odds.get("warnings") or [])
         for e in step_errors:
             warnings.append(f"{e['source']} 조회 실패 ({e['error_code']}): 결과가 누락되었을 수 있습니다")
@@ -4605,6 +4638,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 result["delegation_tree"] = compact_delegation_tree(
                     del_r.get("raw_content", ""), type, max_entries=compact_limit(80),
                 )
+                if result["delegation_tree"].get("truncated"):
+                    mark_slim_cut(result, "SLIM_RESPONSE: 위임 조문 목록을 80건으로 줄였습니다. 전체는 lsDelegated_service 또는 jo 지정 조회를 쓰세요.")
                 delegated_entries = compact_delegation_tree(
                     del_r.get("raw_content", ""), type,
                 ).get("entries", [])
