@@ -131,17 +131,27 @@ def handle_tool_error(func):
         return sync_wrapper
 
 
+def slim_enabled() -> bool:
+    """True only when SLIM_RESPONSE is one of 1/true/yes/on (case-insensitive, whitespace-trimmed)."""
+    return os.getenv("SLIM_RESPONSE", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def slim_response(response: dict) -> dict:
     """Remove redundant raw XML when parsed data exists.
-    When SLIM_RESPONSE=true, removes 'raw_content' only if 'ranked_data' exists.
+    When SLIM_RESPONSE is enabled (see slim_enabled), removes 'raw_content' only if 'ranked_data' exists.
     """
-    if not os.getenv("SLIM_RESPONSE"):
+    if not slim_enabled():
         return response
     result = response.copy()
     if "ranked_data" in result:
         result.pop("raw_content", None)
         result.pop("id_note", None)  # the note explains raw_content ids
     return result
+
+
+def compact_limit(n: int) -> Optional[int]:
+    """Size cap for compact deployments: n when SLIM_RESPONSE is enabled (see slim_enabled), else None (no cap). None works in slices."""
+    return n if slim_enabled() else None
 
 
 from .params import map_params_to_upstream
@@ -725,10 +735,10 @@ def extract_key_factors(text: str) -> list[str]:
         if not sent or len(sent) < 10:
             continue
         if re.search(r'여부|인지\s|을\s고려|를\s고려|에\s비추어|이\s있는지|수\s있는지|해당하는지|성립하는지', sent):
-            factor = sent.strip()[:100]
+            factor = sent.strip()[:compact_limit(100)]
             if factor and factor not in factors:
                 factors.append(factor)
-    return factors[:10]
+    return factors[:compact_limit(10)]
 
 
 def extract_legal_terms(text: str) -> list[str]:

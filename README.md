@@ -503,7 +503,7 @@ When searching Korean law, select tools based on query clarity:
 | `OC` | *(required)* | law.go.kr API identifier (email local part) |
 | `LEXLINK_BASE_URL` | `http://www.law.go.kr` | API base URL |
 | `LEXLINK_TIMEOUT` | `60` | HTTP request timeout in seconds |
-| `SLIM_RESPONSE` | *(unset)* | Set `true` to remove redundant raw XML when parsed data exists (for PlayMCP) |
+| `SLIM_RESPONSE` | *(unset)* | Set `true` to remove redundant raw XML when parsed data exists and keep the compact caps (500-char case/article excerpts, top-10/3 lists, 80 delegation entries) for PlayMCP. Unset: nothing already fetched is cut (one exception: `simplify_article` looks up at most 20 legal terms upstream) |
 | `TRANSPORT` | `sse` | Transport type: `sse` or `http` |
 
 ### OC Priority

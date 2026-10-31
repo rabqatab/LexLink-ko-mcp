@@ -34,7 +34,7 @@ import re
 import xml.etree.ElementTree as ET
 from typing import Any, Iterable, Optional, Union
 
-from ._helpers import ToolValidationError
+from ._helpers import ToolValidationError, compact_limit
 from .validation import format_article_number
 
 __all__ = [
@@ -637,12 +637,14 @@ def strip_html(text: Any) -> str:
 # lsDelegated compaction
 # ---------------------------------------------------------------------------
 
-def compact_delegation_tree(raw: Union[str, bytes, dict, None], response_type: str = "JSON", max_entries: int = 200) -> dict:
+def compact_delegation_tree(raw: Union[str, bytes, dict, None], response_type: str = "JSON", max_entries: Optional[int] = None) -> dict:
     """Turn the 168KB ``lsDelegated`` payload into a compact structure.
 
     Returns ``{"law": {...}, "entries": [{"article", "title", "kind", "target",
     "target_id", "references": [...]}], "entry_count", "by_kind", "targets",
     "truncated"}``. Unknown shapes yield ``{"entries": [], "note": ...}``.
+    ``max_entries=None`` (default) keeps every entry; ``references`` are capped
+    at 3 per entry only under ``SLIM_RESPONSE``.
     """
     data = parse_law_payload(raw, response_type)
     if not data:
@@ -710,10 +712,10 @@ def compact_delegation_tree(raw: Union[str, bytes, dict, None], response_type: s
                 "kind": kind,
                 "target": title,
                 "target_id": target_id,
-                "references": refs[:3],
+                "references": refs[:compact_limit(3)],
             })
 
-    truncated = len(entries) > max_entries
+    truncated = max_entries is not None and len(entries) > max_entries
     return {
         "law": out_law,
         "entries": entries[:max_entries],

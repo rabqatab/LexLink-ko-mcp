@@ -32,6 +32,7 @@ from ._helpers import (
     TOOL_ANNOTATIONS, stringify_id, handle_tool_error, ToolValidationError,
     slim_response, run_search, run_service, annotate_prec_body_availability,
     extract_outcome, extract_key_factors, extract_legal_terms, compute_text_diff, run_coroutine_sync,
+    compact_limit,
     rename_row_ids_to_rank, run_ranked_paging, validate_paging, OVER_FETCH_WINDOW,
     add_no_more_results_hint, add_no_results_guidance,
     NO_RESULTS_MESSAGE, NO_RESULTS_HINTS, NO_RESULTS_BODY_HINT, OUTCOME_NOTE,
@@ -3547,8 +3548,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 "case_number": item.get("사건번호", ""),
                 "court": item.get("법원명", ""),
                 "outcome": outcome,
-                "holding": holding[:500] if holding else "",
-                "summary": summary_text[:500] if summary_text else "",
+                "holding": holding[:compact_limit(500)] if holding else "",
+                "summary": summary_text[:compact_limit(500)] if summary_text else "",
             })
 
         # Deduplicate factors
@@ -3566,7 +3567,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             "analyzed": len(cases),
             "unavailable_cases": unavailable,
             "outcome_summary": outcomes,
-            "key_factors": unique_factors[:10],
+            "key_factors": unique_factors[:compact_limit(10)],
             "search_mode": search_mode,
             "search_attempts": found["attempts"],
             "representative_cases": cases,
@@ -3646,7 +3647,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 "law_id": art.get("법령ID", ""),
                 "article": art.get("조문번호", ""),
                 "article_title": art.get("조문제목", ""),
-                "article_text": (art.get("조문내용", "") or "")[:500],
+                "article_text": (art.get("조문내용", "") or "")[:compact_limit(500)],
             })
             if law_name:
                 law_names_seen.add(law_name)
@@ -3733,7 +3734,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                             resolver_warnings.append(
                                 f"인용 관계 추출에 실패했습니다 ({errs})"
                             )
-                        for c in cit_result.get("citations", [])[:10]:
+                        for c in cit_result.get("citations", [])[:compact_limit(10)]:
                             citations.append({
                                 "from_law": top["law_name"],
                                 "from_article": f"제{art_num}조",
@@ -4181,7 +4182,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 "total_found": odds.get("total_found", 0),
                 "outcome_summary": odds.get("outcome_summary", {}),
                 "key_factors": odds.get("key_factors", []),
-                "representative_cases": odds.get("representative_cases", [])[:3],
+                "representative_cases": odds.get("representative_cases", [])[:compact_limit(3)],
                 "search_mode": odds.get("search_mode", ""),
             },
             "legal_interpretations": base.get("legal_interpretations", []),
@@ -4479,7 +4480,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             if del_r.get("status") == "ok":
                 # Compact structure instead of a JSON string cut mid-way
                 result["delegation_tree"] = compact_delegation_tree(
-                    del_r.get("raw_content", ""), type, max_entries=80,
+                    del_r.get("raw_content", ""), type, max_entries=compact_limit(80),
                 )
             else:
                 result["delegation_tree"] = {
