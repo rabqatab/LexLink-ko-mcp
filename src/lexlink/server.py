@@ -3320,6 +3320,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         best["all_failed"] = succeeded == 0
         return best
 
+    HISTORY_MAX_PAGES = 30  # safety cap: 100 rows/page
+
     def _upstream_failure_response(law_name: str, failure: dict) -> dict:
         return create_error_response(
             error_code=failure["error_code"],
@@ -3374,8 +3376,9 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         all_rows = list(rows)
         if need_history and law_id:
             fetched: list = []
+            raw_count = 0
             page = 1
-            while page <= 3:
+            while page <= HISTORY_MAX_PAGES:
                 lid_params = {
                     "oc": resolved_oc, "target": "eflaw", "type": response_type,
                     "lid": law_id, "display": 100, "page": page, "nw": "1,2,3",
@@ -3388,11 +3391,17 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 err = _result_error(lid_result, "eflaw 연혁 조회")
                 if err:
                     return _upstream_failure_response(law_name, err)
-                page_rows = [r for r in law_rows(lid_result) if r.get("법령ID") == law_id]
-                fetched.extend(page_rows)
+                raw_rows = law_rows(lid_result)
+                fetched.extend(r for r in raw_rows if r.get("법령ID") == law_id)
+                raw_count += len(raw_rows)
                 _, total = _items_from_result(lid_result, response_type)
-                if not page_rows or len(fetched) >= total or len(page_rows) < 100:
+                if not raw_rows or raw_count >= total:
                     break
+                if page == HISTORY_MAX_PAGES:
+                    info["warnings"] = [
+                        f"연혁 조회가 {HISTORY_MAX_PAGES}페이지({raw_count}행)에서 중단되었습니다 "
+                        f"(upstream 총 {total}행): 오래된 개정 이력이 누락되었을 수 있습니다"
+                    ]
                 page += 1
             if fetched:
                 all_rows = fetched
@@ -4021,7 +4030,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         ]
         current = law_info.get("current") or {}
 
-        return {
+        out = {
             "status": "ok",
             "law_name": law_info["law_name"],
             "query": law_name,
@@ -4034,6 +4043,9 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             "total_versions": len(law_info["versions"]),
             "source": "eflaw_search (target=eflaw, 법령ID filter; 현행연혁코드 = status)",
         }
+        if law_info.get("warnings"):
+            out["warnings"] = law_info["warnings"]
+        return out
 
     # ==================== TOOL 49: article_amendment_diff ====================
     @server.tool(annotations=TOOL_ANNOTATIONS)
@@ -4286,6 +4298,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             "total_revisions": len(revisions),
             "period": f"{date_from}~{date_to}",
         }
+        if law_info.get("warnings"):
+            result["warnings"] = law_info["warnings"]
 
         if not article or str(article).strip() in ("0", ""):
             return result
@@ -4297,7 +4311,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         if law_info["law_id"]:
             hist_params = {
                 "oc": resolved_oc, "target": "lsJoHstInf", "type": fmt,
-                "id": law_info["law_id"], "jo": jo,
+                "id": law_info["law_id"], "jo": jo, "display": 100,
             }
             hist_result = run_service(
                 get_client=_get_client, target="lsJoHstInf",
@@ -4325,8 +4339,18 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 basis = f"lsJoHstInf: {change.get('change_date')} {change.get('reason')} (MST {change['mst']})"
                 break
         if pair is None and len(revisions) >= 2:
-            pair = (revisions[1], revisions[0])
-            basis = "latest two revisions in period (no article-level history matched)"
+            # Prefer in-force versions (현행/연혁): two 시행예정 rows, or a 시행예정
+            # vs. an in-force one, are not a meaningful before/after pair.
+            in_force = [r for r in revisions if r.get("status") != "시행예정"]
+            candidates = in_force if len(in_force) >= 2 else revisions
+            pair = (candidates[1], candidates[0])
+            why = ("lsJoHstInf had no entry in the period" if not history else
+                   f"none of the {len(history)} lsJoHstInf entries matched a version in the period")
+            basis = (
+                f"fallback: latest two {'in-force (현행/연혁)' if candidates is in_force else 'listed'} "
+                f"revisions in period, MST {candidates[1]['mst']} vs {candidates[0]['mst']} "
+                f"(article-level history did not match: {why})"
+            )
 
         if pair is None:
             result["article_diff"] = None
