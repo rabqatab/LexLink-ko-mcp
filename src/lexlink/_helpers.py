@@ -771,43 +771,15 @@ def run_service(
 # Public Legal Assistance Helpers
 # ============================================================
 
-OUTCOME_NOTE = "휴리스틱 추정이며 인용 가능한 판결 결과가 아닙니다. 판결요지에는 주문이 없는 경우가 많아 '불명'이 흔합니다."
-
-# Position-based outcome detection. Each rule is (label, priority, regex with a
-# named group "k" marking the keyword, post-check(text, match) -> bool). The earliest
-# keyword position wins; ties go to the lower priority number. Every regex needs a
-# disposition ending, so negations/modals (기각하지 아니한다, 기각할 수 없다,
-# 인용될 수 없다, 기각될 것이다, 각하되어야 한다, 파기사유가 없...) never match.
-# All patterns are linear: no nested quantifiers, bounded look-around done in code.
-_VERB = r"(?:한다|하였|했|하고|하며|합니다|함(?!에|으로|께))"
-_APPLICANT_RE = re.compile(r"청구|상고|항소|신청|재심|심판|이의|재항고|항고|주장")
-
-
-def _has_applicant(text: str, m: "re.Match") -> bool:
-    start = m.start("k")
-    return bool(_APPLICANT_RE.search(text, max(0, start - 40), start))
-
-
-def _remand_follows(text: str, m: "re.Match") -> bool:
-    return "환송" in text[m.end():m.end() + 40]
-
-
-_OUTCOME_RULES = [
-    ("파기환송", 0, re.compile(r"(?P<k>파기)\s*환송"), None),
-    ("파기환송", 0, re.compile(rf"(?P<k>파기)\s*(?:하고|하며|하여|[,，])"), _remand_follows),
-    ("파기자판", 1, re.compile(r"(?P<k>파기)\s*자판"), None),
-    ("파기", 2, re.compile(rf"(?P<k>파기)\s*{_VERB}"), None),
-    ("일부인용", 0, re.compile(r"(?P<k>일부)\s*(?:를|만을|만|은|는)?\s*인용(?!\s*(?:하지|되지|할\s*수|될\s*수))"), None),
-    ("일부기각", 0, re.compile(r"(?P<k>일부)\s*(?:를|만을|만|은|는)?\s*기각(?!\s*(?:하지|되지|할\s*수|될\s*수))"), None),
-    ("각하", 3, re.compile(rf"(?<!기)(?P<k>각하)\s*(?:{_VERB}|판결|결정)"), None),
-    ("각하", 3, re.compile(r"(?:청구|상고|항소|항고|신청)\s*(?P<k>각하)(?!\s*(?:하지|할|되|사유|이유))"), None),
-    ("기각", 3, re.compile(rf"(?P<k>기각)\s*(?:{_VERB}|판결|결정)"), None),
-    ("기각", 3, re.compile(r"(?:청구|상고|항소|항고|신청)\s*(?P<k>기각)(?!\s*(?:하지|할|되|사유|이유))"), None),
-    ("인용", 3, re.compile(rf"(?<!일부)(?<!일부 )(?P<k>인용)\s*(?:{_VERB}|하는\s*(?:판결|결정)|판결|결정)"), _has_applicant),
-    ("취소", 3, re.compile(rf"(?P<k>취소)\s*(?:{_VERB}|판결|결정)"), None),
-    ("취소", 3, re.compile(r"처분[을를]\s*(?P<k>취소)(?!\s*(?:하지|할|되|해야|하여야|를|소송))"), None),
-]
-
+OUTCOME_NOTE = (
+    "결과는 각 판결의 '주문'만으로 분류한 휴리스틱이며 인용 가능한 판결 결과가 아닙니다. "
+    "주문을 찾지 못하거나 해석이 애매하면 '불명'으로 둡니다. 승소율이 아닙니다: "
+    "상고기각·항소기각·항고기각은 아래 심급 판단이 유지된 것일 뿐 원고 승소를 뜻하지 않고(대법원 상고기각은 원심 유지), "
+    "파기환송·파기자판은 원심을 뒤집은 것이지만 파기환송은 최종 결론이 아니며, "
+    "원판결변경은 제1심/원심 판결이 바뀐 것으로 어느 쪽이 이겼는지 이 라벨만으로는 알 수 없고, "
+    "각하·공소기각은 본안 판단 없이 종결된 것이며, "
+    "유죄(1심 유죄 선고)·무죄는 형사 결과로 민사의 승소와 다릅니다. 심급·당사자별로 해석해야 합니다."
+)
 
 # Legal term suffix patterns (Korean legal jargon indicators)
 LEGAL_TERM_SUFFIXES = re.compile(
@@ -815,29 +787,134 @@ LEGAL_TERM_SUFFIXES = re.compile(
 )
 
 
-def extract_outcome(text: str) -> str:
-    """Extract court decision outcome from 판결요지 text (position-based).
+LOW_RELEVANCE_WARNING = (
+    "relevance_unverified: 결과 본문·법령명에서 질의어와 글자가 일치하는 부분을 찾지 못했습니다. "
+    "약어·외국어·구어체 질의는 결과가 맞아도 이 경고가 뜰 수 있으니 내용을 직접 확인하세요"
+)
+RELEVANCE_UNCHECKABLE_WARNING = (
+    "relevance_unverified: 질의에서 비교할 수 있는 2자 이상의 글자를 찾지 못해 "
+    "결과의 관련성을 확인하지 못했습니다. 결과를 직접 확인하세요"
+)
+_RELEVANCE_FIELDS = ("법령명", "조문제목", "조문내용")
 
-    Heuristic, not a citable result: the earliest genuine disposition wins
-    ("항소를 기각하고 상고를 각하한다" -> 기각). A keyword counts only with a
-    disposition ending (기각한다/하였다/하고/함, 파기하고 ...); negations and
-    modals (하지 아니, 할 수 없, 될 수 없, 될 것, 되어야, 사유가 없) and
-    mentions such as "취소소송", "원심판결 인용" are ignored. 파기 followed by
-    환송 within 40 characters is 파기환송; "일부를 인용" is 일부인용.
-    Returns "불명" when unclear (common, since 판결요지 often has no 주문).
+
+def _query_grams(query: str) -> set:
+    """Character bigrams of each word. Single-character words and digit-only
+    words yield nothing: they match dates, article numbers and particles by accident."""
+    grams: set = set()
+    for word in re.findall(r"[0-9A-Za-z\u3131-\u318E\uAC00-\uD7A3]+", query.lower()):
+        if word.isdigit():
+            continue
+        grams.update(word[i:i + 2] for i in range(len(word) - 1))
+    return grams
+
+
+def low_relevance_warning(query: str, rows: list) -> Optional[str]:
+    """Soft warning when no result's name/title/body shares a bigram with the query.
+
+    aiSearch exposes no relevance score, so this is only a lexical hint, not a
+    verdict: abbreviations, foreign terms and colloquial queries can warn even
+    when the results are right. Never drops data. Rows without the content
+    fields (e.g. appendix searches) are not judged.
     """
+    rows = [r for r in rows if isinstance(r, dict) and any(k in r for k in _RELEVANCE_FIELDS)]
+    if not rows:
+        return None
+    grams = _query_grams(query or "")
+    if not grams:
+        return RELEVANCE_UNCHECKABLE_WARNING
+    for row in rows:
+        text = " ".join(str(row.get(k, "")) for k in _RELEVANCE_FIELDS).lower()
+        if any(g in text for g in grams):
+            return None
+    return LOW_RELEVANCE_WARNING
+
+
+# The 주문 ends at ANY following 【...】 heading (이유, 청구취지 및 항소취지, ...)
+# or at a known [..] heading; the body is capped so a missing heading cannot
+# swallow the judgment.
+_ORDER_SECTION_RE = re.compile(
+    r"[【\[]\s*주\s*문\s*[】\]](?P<body>.{0,4000}?)"
+    r"(?=【[^】]{1,40}】|\[\s*(?:이\s*유|[가-힣 ]{0,15}취지|원심[가-힣 ]{0,6}|별\s*지[^\]]{0,20})\s*\]|$)",
+    re.S,
+)
+_BR_RE = re.compile(r"<br\s*/?>", re.I)
+_PAGI_RE = re.compile(r"파기\s*(?:한다|하고|하며|하여|함|환송|자판|[,，])")
+_REMAND_RE = re.compile(
+    r"파기.{0,300}?(?:환송|이송)\s*(?:한다|하고|함)"
+    r"|(?:판결|결정)[을를]?\s*(?:중.{0,150}?)?취소.{0,300}?환송\s*(?:한다|하고|함)"
+)
+_PAGI_DISPOSED_RE = re.compile(r"파기\s*자판|파기.{0,300}?(?:기각|취소|지급하라|처한다|정한다|무죄|각하|면소|면제|공소)")
+_CHANGE_RE = re.compile(r"(?:원심|제1심|원|제\s*1\s*심)\s*(?:판결|결정|명령|심판)[^.]{0,100}?(?:변경|취소)")
+_APPEAL_REJECT_RE = re.compile(r"항소[을를]?\s*(?:모두\s*)?기각\s*(?:한다|하고|함)")
+_PETITION_REJECT_RE = re.compile(r"(?<!재)(?<!특별)항고[을를]?\s*(?:모두\s*)?기각\s*(?:한다|하고|함)")
+_SUPREME_REJECT_RE = re.compile(r"(?:상고|재항고|특별항고)[을를]?\s*(?:모두\s*)?기각\s*(?:한다|하고|함)")
+_PROSECUTION_REJECT_RE = re.compile(r"공소[을를]?\s*기각")
+_CRIMINAL_RE = re.compile(r"배상명령|에 처한다|무죄|선고를 유예|집행을 유예|추징|몰수|피고인")
+_ACQUIT_RE = re.compile(r"무죄[를을]?\s*선고|피고인은\s*무죄")
+_CONVICT_RE = re.compile(r"(?:징역|금고|구류|벌금|과료)[^.]{0,200}?처한다")
+_GRANT_RE = re.compile(r"(?:청구|신청)[을를]?\s*(?:모두\s*)?인용|지급하라|이행하라|인도하라|지급한다")
+_PARTIAL_RE = re.compile(r"일부\s*(?:를|만을|만)?\s*(?:인용|기각)|나머지\s*[가-힣 ]{0,10}[을를]?\s*(?:모두\s*)?기각")
+_REJECT_RE = re.compile(r"(?:청구|신청|심판청구|재심)[을를]?\s*(?:모두\s*)?기각\s*(?:한다|하고|함)")
+_DISMISS_RE = re.compile(r"각하\s*(?:한다|하고|함)")
+_REVOKE_RE = re.compile(r"(?:처분|판정|재결|심결)[을를]\s*(?:모두\s*)?취소\s*(?:한다|하고|함)")
+
+
+def extract_order(text: str) -> str:
+    """Return the 주문 (disposition) section of a judgment's 판례내용, or ''."""
     if not text:
+        return ""
+    m = _ORDER_SECTION_RE.search(text)
+    if not m:
+        return ""
+    body = _BR_RE.sub(" ", m.group("body"))
+    return re.sub(r"\s+", " ", body).strip()
+
+
+def classify_order(order: str) -> str:
+    """Classify a 주문 string into an outcome label; '불명' when unclear.
+
+    Only the 주문 is read (never recitals/이유), and conflicting or unfamiliar
+    orders give '불명' rather than a guess. Precedence: any 파기 (-> 파기환송 /
+    파기자판 / 파기) or 취소·환송 outranks 기각; a 원심/제1심 판결 변경·취소 is
+    원판결변경 (a trailing "나머지 ... 기각" is only a modifier); then 항소기각,
+    상고기각; criminal orders only 무죄/유죄/공소기각; civil orders 일부인용,
+    인용, 기각, 각하, 취소 (처분). Not a win rate: 상고기각 means the lower
+    ruling stands.
+    """
+    if not order:
         return "불명"
-    best = None  # (position, priority, label)
-    for label, priority, pattern, check in _OUTCOME_RULES:
-        for m in pattern.finditer(text):
-            if check is not None and not check(text, m):
-                continue
-            cand = (m.start("k"), priority, label)
-            if best is None or cand < best:
-                best = cand
-            break  # first valid hit is the earliest for this rule
-    return best[2] if best else "불명"
+    if _REMAND_RE.search(order):
+        return "파기환송"
+    if _PAGI_RE.search(order):
+        return "파기자판" if _PAGI_DISPOSED_RE.search(order) else "파기"
+    if _CHANGE_RE.search(order):
+        return "원판결변경"
+    criminal = bool(_CRIMINAL_RE.search(order))
+    grant = bool(_GRANT_RE.search(order))
+    reject = bool(_REJECT_RE.search(order))
+    dismiss = bool(_DISMISS_RE.search(order))
+    for pattern, label in ((_APPEAL_REJECT_RE, "항소기각"), (_PETITION_REJECT_RE, "항고기각"), (_SUPREME_REJECT_RE, "상고기각")):
+        if pattern.search(order):
+            # civil: 항소기각 plus a grant/dismissal is a compound order -> don't guess
+            return "불명" if (grant or dismiss) and not criminal else label
+    if criminal or _PROSECUTION_REJECT_RE.search(order):
+        found = [label for label, pattern in (("무죄", _ACQUIT_RE), ("유죄", _CONVICT_RE),
+                                              ("공소기각", _PROSECUTION_REJECT_RE)) if pattern.search(order)]
+        return found[0] if len(found) == 1 else "불명"
+    if _PARTIAL_RE.search(order) and (grant or reject):
+        return "일부인용" if grant or "인용" in order else "불명"
+    if grant + reject + dismiss + bool(_REVOKE_RE.search(order)) > 1:
+        return "불명"
+    if grant:
+        return "인용"
+    if reject:
+        return "기각"
+    if dismiss:
+        return "각하"
+    if _REVOKE_RE.search(order):
+        return "취소"
+    return "불명"
 
 
 def extract_key_factors(text: str) -> list[str]:
