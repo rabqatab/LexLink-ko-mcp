@@ -1,46 +1,129 @@
+# LexLink API 레퍼런스
 
-# 국가법령정보 공동활용 Open API — 완전한 API 사양서
+> **목적:** (1) LexLink 도구 목록과 인자, (2) 법제처 Open API 195종 카탈로그와 LexLink 도구의 대응.
+> **Source:** https://open.law.go.kr/LSO/openApi/guideList.do (카탈로그는 2026-10-25 점검 기준)
+> **도구 목록 기준:** v2.2.0 + CHANGELOG Unreleased, 서버에서 직접 생성 (아래 "LexLink 도구 목록")
 
-> **목적:** LLM/에이전트가 그대로 ingest / parse / convert 할 수 있도록 통일된 포맷의 스펙 제공
-> **범위:** All 195 APIs available from law.go.kr Open API guide (55 implemented in LexLink; 2026-10-25 re-audit, was 191)
-> **Source:** https://open.law.go.kr/LSO/openApi/guideList.do
-> **Last Updated:** 2026-10-25 (v2.2.0)
-
----
-
-## Implementation Status Summary
-
-| Category | Total APIs | Implemented | Implementation Status |
-|----------|-----------|-------------|----------------------|
-| **법령 (Law)** | 26 | 12 | ✅ Core APIs implemented |
-| **행정규칙 (Administrative Rules)** | 4 | 2 | ✅ Core APIs implemented |
-| **자치법규 (Local Ordinances)** | 3 | 3 | ✅ ordin_search, ordin_service, ordinLsCon_search |
-| **판례·결정례·해석례 (Case Law)** | 8 | 8 | ✅ Fully implemented |
-| **위원회 결정문 (Committee Decisions)** | 24 | 2 | ✅ committee_search, committee_service (12 committees, parametric) |
-| **조약 (Treaties)** | 2 | 2 | ✅ trty_search, trty_service |
-| **별표·서식 (Tables & Forms)** | 3 | 0 | Not implemented |
-| **학칙·공단·공공기관** | 2 | 0 | Not implemented |
-| **법령용어 (Legal Terms)** | 2 | 0 | Not implemented |
-| **모바일 (Mobile)** | 22 | 0 | Not implemented (duplicate) |
-| **맞춤형 (Customized)** | 6 | 0 | Not implemented |
-| **법령정보 지식베이스 (Knowledge Base)** | 9 | 9 | ✅ lstrm_ai_search, dlytrm_search, lstrm_rlt_search, dlytrm_rlt_search, lstrm_rlt_jo_search, jo_rlt_lstrm_search, ls_rlt_search + aiSearch, aiRltLs_search |
-| **중앙부처 1차 해석 (Ministry Interpretations)** | 76 | 2 | ✅ cgm_expc_search, cgm_expc_service (39 ministries, parametric; 재정경제부·국세청은 목록만) |
-| **특별행정심판 (Special Appeals)** | 8 | 2 | ✅ special_decc_search, special_decc_service (4 tribunals, parametric) |
-| **사전컨설팅 의견서 (Pre-consulting Opinions)** | 2 | 0 | Not implemented (NEW, 감사원 `baiPvcs`; JSON verified) |
-| **Custom (article_citation)** | 1 | 1 | ✅ HTML parsing tool |
-| **Custom (chain tools + cache_stats)** | 5 | 5 | ✅ chain_full_research, chain_amendment_track, chain_dispute_prep, chain_law_system, cache_stats |
-| **Total** | **195+** | **55** | **~28% coverage** |
-
-> v2.2.0 note: 모든 업스트림 target 이름·엔드포인트는 2026-10-25 점검(`AUDIT_CHECKLIST_2026-10-25.md`)에서 직접 호출로 재검증했다. 미구현 API 중 JSON 동작을 확인한 목록은 Appendix D 참조.
+목차: [도구 목록](#lexlink-도구-목록) / [공통 규칙](#공통-규칙) / [파생 도구](#lexlink-파생-도구) / [알려진 한계](#알려진-한계) / 1~16 업스트림 API 카탈로그 / Appendix A~D
 
 ---
 
-## Response Format Support (Updated v2.0.0)
+## LexLink 도구 목록
 
-**Response Format Support** (Updated v2.0.0)
-- ✅ **JSON format WORKS** - Default format for all tools as of v2.0.0
-- ✅ **XML format WORKS** - Available via `type="XML"` parameter
-- ✅ **HTML format WORKS** - Available via `type="HTML"` (limited endpoints)
+도구 55개, 프롬프트 9개, 리소스 2개. 아래 표는 서버의 `list_tools()`에서 생성했습니다(필수 인자, 선택 인자와 기본값). 모든 도구는 선택 인자 `oc`를 받지만 HTTP 모드에서는 무시됩니다. 같은 모양으로 직접 확인하려면 [DEVELOPMENT.md](DEVELOPMENT.md#adding-a-tool)의 스니펫을 쓰세요.
+
+### 법령 (Laws)
+
+| Tool | 필수 인자 | 선택 인자 (기본값) |
+|---|---|---|
+| `eflaw_search` | query | display=20, page=1, type=JSON, sort, ef_yd, org, knd, nw |
+| `law_search` | query | display=20, page=1, type=JSON, sort, date, org, knd |
+| `eflaw_service` | - | id, mst, ef_yd, jo, chr_cls_cd, lm, type=JSON |
+| `law_service` | - | id, mst, lm, ld, ln, jo, lang, type=JSON |
+| `eflaw_josub` | - | id, mst, ef_yd, jo, hang, ho, mok, type=JSON |
+| `law_josub` | - | id, mst, jo, hang, ho, mok, type=JSON |
+| `law_as_of` | law_name, as_of | article, article_branch=0, as_of_end, type=JSON |
+| `elaw_search` | - | query=*, display=20, page=1, type=JSON, sort, ef_yd, org, knd |
+| `elaw_service` | - | id, mst, lm, ld, ln, type=JSON |
+
+### 행정규칙 · 자치법규 · 연계 (Admin rules, ordinances, linkage)
+
+| Tool | 필수 인자 | 선택 인자 (기본값) |
+|---|---|---|
+| `admrul_search` | - | query=*, display=20, page=1, type=JSON, nw=1, search=1, org, knd, date, prml_yd, mod_yd, sort |
+| `admrul_service` | - | id, lid, lm, type=JSON |
+| `ordin_search` | - | query=*, display=20, page=1, type=JSON, nw=1, search=1, sort, date, ef_yd, anc_yd, anc_no, org, sborg, knd, rr_cls_cd, ordin_fd, gana |
+| `ordin_service` | - | id, mst, type=JSON |
+| `ordinLsCon_search` | - | query, law_id, org, display=20, page=1, sort, type=JSON |
+| `lnkLs_search` | - | query=*, display=20, page=1, type=JSON, sort |
+| `lnkLsOrdJo_search` | - | query=*, display=20, page=1, type=JSON, knd, jo, jobr, sort |
+| `lnkDep_search` | org | display=20, page=1, type=JSON, sort |
+| `drlaw_search` | - | - |
+| `lsDelegated_service` | - | id, mst, type=JSON |
+
+### 판례 · 결정례 · 해석례 (Case law)
+
+| Tool | 필수 인자 | 선택 인자 (기본값) |
+|---|---|---|
+| `prec_search` | - | query=*, display=20, page=1, type=JSON, search, sort, org, curt, jo, gana, date, prnc_yd, nb, dat_src_nm, pop_yn |
+| `prec_service` | id | lm, sections, type=JSON |
+| `detc_search` | - | query=*, display=20, page=1, type=JSON, search, gana, sort, date, ed_yd, nb, pop_yn |
+| `detc_service` | id | lm, sections, type=JSON |
+| `expc_search` | - | query=*, display=20, page=1, type=JSON, search=1, inq, rpl, gana, itmno, reg_yd, expl_yd, sort, pop_yn |
+| `expc_service` | id | lm, sections, type=JSON |
+| `decc_search` | - | query=*, display=20, page=1, type=JSON, search=1, cls, gana, date, dpa_yd, rsl_yd, sort, pop_yn |
+| `decc_service` | id | lm, sections, type=JSON |
+| `committee_search` | committee | query=*, display=20, page=1, type=JSON, search, sort, gana |
+| `committee_service` | committee, id | type=JSON |
+| `cgm_expc_search` | ministry | query=*, display=20, page=1, type=JSON, search, sort, gana |
+| `cgm_expc_service` | ministry, id | type=JSON |
+| `special_decc_search` | tribunal | query=*, display=20, page=1, type=JSON, search, sort, gana, cls, date, dpa_yd, rsl_yd |
+| `special_decc_service` | tribunal, id | type=JSON |
+
+### 조약 (Treaties)
+
+| Tool | 필수 인자 | 선택 인자 (기본값) |
+|---|---|---|
+| `trty_search` | - | query=*, display=20, page=1, type=JSON, search, sort, gana, eft_yd, conc_yd, cls, nat_cd |
+| `trty_service` | id | type=JSON |
+
+### AI 검색 · 지식베이스 (AI search, knowledge base)
+
+| Tool | 필수 인자 | 선택 인자 (기본값) |
+|---|---|---|
+| `aiSearch` | query | search=0, display=7, page=1, type=JSON |
+| `aiRltLs_search` | query | search=0, type=JSON |
+| `lstrm_ai_search` | - | query=*, display=20, page=1, type=JSON |
+| `dlytrm_search` | - | query=*, display=20, page=1, type=JSON |
+| `lstrm_rlt_search` | - | query, mst, trm_rlt_cd, type=JSON |
+| `dlytrm_rlt_search` | - | query, mst, trm_rlt_cd, type=JSON |
+| `lstrm_rlt_jo_search` | - | query, mst, type=JSON |
+| `jo_rlt_lstrm_search` | jo | query, law_id, type=JSON |
+| `ls_rlt_search` | - | query=*, display=20, page=1, type=JSON |
+
+### 분석 도구 (Analysis)
+
+| Tool | 필수 인자 | 선택 인자 (기본값) |
+|---|---|---|
+| `article_citation` | mst, law_name, article | article_branch=0 |
+| `check_precedent_odds` | query | display=20, top_n=5, type=JSON |
+| `legal_resolver` | situation | display=5, type=JSON |
+| `simplify_article` | law_name, article | article_branch=0, type=JSON |
+| `law_amendment_summary` | law_name | date_from=20100101, date_to, type=JSON, date_basis=announced |
+| `article_amendment_diff` | mst_old, mst_new, article | article_branch=0, type=JSON |
+
+### 체인 · 운영 (Chains, ops)
+
+| Tool | 필수 인자 | 선택 인자 (기본값) |
+|---|---|---|
+| `chain_full_research` | query | display=5, type=JSON |
+| `chain_amendment_track` | law_name | article=0, date_from=20200101, date_to, article_branch=0, type=JSON |
+| `chain_dispute_prep` | query | display=5, type=JSON |
+| `chain_law_system` | law_name | type=JSON |
+| `cache_stats` | - | - |
+
+프롬프트: `search-korean-law`, `get-law-article`, `get-article-with-citations`, `analyze-law-citations`, `search-admin-rules`, `tool-selection-guide`, `analyze-legal-situation`, `explain-legal-document`, `check-legal-precedent`.
+
+리소스: `lexlink://laws/frequently-used`(정적), `lexlink://law/{name}`(템플릿; 예: `lexlink://law/자통법`).
+
+### 업스트림 API와의 대응
+
+| 구분 | 도구 수 | 비고 |
+|---|---|---|
+| 업스트림 API를 그대로 감싼 도구 | 43 | `committee_*`(위원회 12개), `cgm_expc_*`(부처 39개), `special_decc_*`(심판원 4개)는 인자로 대상을 고르는 도구 |
+| LexLink 파생 도구 | 12 | `law_as_of`, `article_citation`, `check_precedent_odds`, `legal_resolver`, `simplify_article`, `law_amendment_summary`, `article_amendment_diff`, `chain_*` 4개, `cache_stats` |
+
+업스트림 카탈로그 195종 중 이 도구들이 다루지 않는 API는 각 절에 `NOT IMPLEMENTED`로 표시했습니다.
+
+> 모든 업스트림 target 이름·엔드포인트는 2026-10-25 점검에서 직접 호출로 재검증했습니다(점검 기록: [archive/AUDIT_CHECKLIST_2026-10-25.md](archive/AUDIT_CHECKLIST_2026-10-25.md)). 미구현 API 중 JSON 동작을 확인한 목록은 Appendix D를 보세요.
+
+---
+
+## Response Format Support
+
+- JSON이 기본값입니다(`type="JSON"`, v2.0.0부터).
+- `type="XML"`, `type="HTML"`도 선택할 수 있습니다(HTML은 일부 엔드포인트만).
+- 캐시 키에 응답 형식이 포함됩니다.
 
 ---
 
@@ -52,6 +135,51 @@
 - **Base URL:** `http://www.law.go.kr/DRF/`
 - **List APIs:** `lawSearch.do?target=<target>`
 - **Content APIs:** `lawService.do?target=<target>`
+
+---
+
+## LexLink 파생 도구
+
+업스트림 API 하나에 대응하지 않고 여러 호출이나 HTML 파싱으로 만든 도구입니다. 동작은 도구 설명과 CHANGELOG(Unreleased 포함)에 근거하며, 오프라인 테스트가 있습니다.
+
+| 도구 | 동작 |
+|---|---|
+| `law_as_of` | 기준일 D에 시행 중이던 개정본을 골라 조문을 반환 (1.2.3절) |
+| `law_amendment_summary` | 법령의 개정 이력. `date_from`/`date_to`는 기본으로 공포일 기준, `date_basis="effective"`면 시행일 기준(`date_from` 당시 시행 중이던 개정본 포함) |
+| `article_amendment_diff` | 두 MST의 한 조문(항/호/목 포함)을 줄 단위로 비교 |
+| `check_precedent_odds` | 판례의 주문만으로 결과를 분류한 분포. 라벨: 파기환송, 파기자판, 파기, 상고기각, 항소기각, 항고기각, 원판결변경, 일부인용, 인용, 기각, 각하, 취소, 무죄, 유죄, 공소기각, 불명. 승소율이 아님(`outcome_note`). 본문이 없는 판례는 건너뛰고 `unavailable_cases`로 보고 |
+| `legal_resolver` | 상황 설명에서 법령, 판례, 해석례, 인용을 한 번에 조회. 인용 실패는 `warnings` |
+| `simplify_article` | 조문(항/호/목 포함)과 법제처 용어 DB의 동의어 연결(`term_glossary`). 본문은 바꾸지 않음(`simplified_text`는 `original_text`와 같음). 용어 조회는 최대 20개 |
+| `article_citation` | 15장 |
+| `chain_full_research` | AI 검색, 법령, 판례 결과 분석, 해석례, 인용을 한 번에 |
+| `chain_amendment_track` | 개정 이력과 조문 비교 |
+| `chain_dispute_prep` | 판례, 헌재결정례, 법령해석례, 행정심판례를 한 번에 |
+| `chain_law_system` | 법령 체계: 위임 트리, `admin_rules`(`{name, id, article}`, 위임행정규칙 항목에서 추출), `linked_ordinances`(`lnkLsOrd` 기준)와 `linked_ordinances_total`. 실패는 빈 목록 대신 `warnings` |
+| `cache_stats` | 캐시와 resolver 통계 |
+
+검색 결과가 0건이면 `status: ok`에 `warning: "no_results"`와 한국어 `hints`가 붙습니다. `aiSearch`, `legal_resolver`, `chain_full_research`는 질의와 겹치는 글자가 없으면 `relevance_unverified` 경고를 붙입니다(결과는 지우지 않음).
+
+### 응답 크기
+
+- 기본: 이미 가져온 내용은 자르지 않습니다. JSON `raw_content`는 요청한 페이지의 행만 담습니다.
+- `SLIM_RESPONSE=true`: `ranked_data`가 있으면 `raw_content`를 지우고, 압축 상한(발췌 500자, 상위 10/3건, 위임 항목 80건)을 유지하며, 20,000바이트를 넘는 결과는 줄이고 `truncated`, `truncated_notes`(그리고 `truncated_fields`)로 표시합니다. 이 모드에서는 `sections="full"` 전문을 받을 수 없습니다.
+- `jo`, `page`/`display`, `sections="summary"`로 나누어 조회하세요.
+
+---
+
+## 알려진 한계
+
+2026-10-31 기준 코드에서 확인한 것만 적었습니다.
+
+- **알 수 없는 인자는 무시됩니다.** 존재하지 않는 인자(`bogus_param`)를 넘겨도 오류가 없고 기본값으로 실행됩니다(`cache_stats(bogus_param=1)`로 확인). 인자 이름을 틀리면 조용히 다른 결과가 나올 수 있습니다.
+- **일부 `*_service`에는 크기 제어 옵션이 없습니다**: `elaw_service`, `admrul_service`, `lsDelegated_service`, `ordin_service`, `trty_service`, `committee_service`, `cgm_expc_service`, `special_decc_service` (도구 설명에 같은 경고가 있음). 실제 크기는 법령마다 다릅니다. `eflaw_service`/`law_service`는 `jo` 없이 호출하면 법령 전체를 받습니다.
+- **`article_citation`**: "제88조 내지 제93조" 같은 범위는 한 개의 HTML 링크라 첫 조문만 추출될 수 있습니다. 삭제되었거나 개정으로 사라진 조문을 가리키는 인용도 그대로 추출됩니다. 외부 법령은 이름 텍스트만 주므로 MST가 필요하면 `eflaw_search`를 따로 호출해야 합니다. "같은 법"과 조문 나열은 휴리스틱으로 해석합니다.
+- **계정 단위 API 신청**: OC마다 신청한 API 범위가 다릅니다. 신청하지 않은 API는 `API_NOT_SUBSCRIBED` 오류가 됩니다(예: 현행법령 시행일 본문 `eflaw`는 `law_service`/`eflaw_josub`으로 대신할 수 있음).
+- **서버 IP 등록**: law.go.kr은 OC와 호출 IP를 함께 검증합니다. 등록되지 않은 IP에서는 "사용자 정보 검증에 실패하였습니다" 오류가 납니다([OPERATIONS.md](OPERATIONS.md)).
+- **`simplify_article`**: 본문을 쉬운 말로 바꾸지 않습니다. 법제처 용어 DB에 연결이 있는 용어만 `term_glossary`에 나오며, 연결이 법적 의미와 다를 수 있습니다.
+- **`check_precedent_odds`**: 판례 주문의 분포이며 승소율이나 결과 예측이 아닙니다.
+- **프롬프트/지침 준수는 모델마다 다릅니다.** 서버 지침(`SERVER_INSTRUCTIONS`)을 모든 LLM이 따르는 것은 아닙니다. 모델별 준수율 수치(과거 시험)는 [archive/ISSUES.md](archive/ISSUES.md)에 있으며 현재 버전에서 다시 측정하지 않았습니다.
+- **HTTP 서버**: 단일 프로세스 전제, SSE 전송의 로깅/동시성 한계 등은 [OPERATIONS.md](OPERATIONS.md)의 "알려진 한계"를 보세요.
 
 ---
 
@@ -69,7 +197,7 @@
 | type | char(필수) | 출력 형태 HTML/XML/JSON (생략시 기본값: XML) |
 | search | int | 검색범위 (기본: 1 법령명) 2: 본문검색 |
 | query | string | 법령명에서 검색을 원하는 질의 |
-| nw | int | 1: 연혁, 2: 시행예정, 3: 현행 (기본값: 전체). 복수: nw=1,2,3 |
+| nw | int | 1: 연혁, 2: 현행, 3: 시행예정 (LexLink 도구 설명 기준; 도구에서 생략하면 현행만). 복수: nw=1,2,3 |
 | LID | string | 법령ID (LID=830) |
 | display | int | 검색된 결과 개수 (default=20, max=100) |
 | page | int | 검색 결과 페이지 (default=1) |
@@ -131,6 +259,7 @@ http://www.law.go.kr/DRF/lawSearch.do?OC=test&target=eflaw&query=자동차관리
 | chrClsCd | char | 원문/한글 여부 (010202: 한글, 010201: 원문) |
 
 > **LexLink `jo` 정규화 (v2.2.0):** `eflaw_service`, `law_service`, `eflaw_josub`, `law_josub`은 `35`, `35의5`, `제35조의5`, `35-5`, `003505`를 모두 받아 업스트림용 6자리 코드(`003505`)로 변환한다. 형식이 잘못되면 `VALIDATION_ERROR`, 해당 조문이 응답에 없으면 `ARTICLE_NOT_FOUND`.
+> **`ef_yd` 규칙 (LexLink 도구, Unreleased):** `ef_yd`는 해당 MST 자신의 시행일을 고르는 개정본 선택자다. `mst` 없이 `id` + `ef_yd`만 주면 `VALIDATION_ERROR`(업스트림이 무시하거나 `{}`를 돌려줌), `mst` + `ef_yd`면 `id`는 보내지 않는다(`id`를 같이 보내면 업스트림이 현재본을 반환). `mst`를 쓸 때는 `ef_yd` 또는 `id`가 필요하다. 특정 날짜에 시행 중이던 본문은 `law_as_of`를 쓴다(1.2.3절). `ef_yd`는 정수/문자열 모두 허용. `lm`은 업스트림에 대문자 `LM`으로 전송되며 `lm`만으로 조회할 수 있다.
 > **계정 신청 주의:** `eflaw` **본문**(`lawService.do?target=eflaw`)은 OC에 해당 API가 신청돼 있지 않으면 "미신청된 목록/본문에 대한 접근입니다" HTML을 반환한다 → LexLink는 `API_NOT_SUBSCRIBED` 오류로 변환하고 `law_service`/`eflaw_josub`을 대안으로 안내한다 (Appendix C).
 
 **Sample URLs:**
@@ -421,7 +550,7 @@ http://www.law.go.kr/DRF/lawSearch.do?target=lsHstInf&OC=test&regDt=20170726&typ
 
 ---
 
-## 1.5 연계 APIs (4 implemented)
+## 1.5 연계 APIs (5 implemented)
 
 ### 1.5.1 법령 자치법규 연계 목록 조회 — `lnkLs_search` ✅ IMPLEMENTED
 **Endpoint**: `GET http://www.law.go.kr/DRF/lawSearch.do?target=lnkLs`
@@ -1314,13 +1443,9 @@ http://www.law.go.kr/DRF/lawSearch.do?OC=test&target=ttSpecialDecc&type=XML&gana
 
 ### Technical Approach
 
-Unlike Phase 1-3 APIs that use XML endpoints, this tool parses HTML from law.go.kr to extract hyperlinked citations with **100% accuracy**.
+Unlike the XML-based tools, this tool parses HTML from law.go.kr and reads the hyperlinked citations. No LLM is involved, so there is no LLM cost. Accuracy is not guaranteed: "같은 법" and article lists are resolved heuristically (see 알려진 한계), so check the article text when it matters.
 
-| Aspect | LLM (GPT-4) | HTML Parsing |
-|--------|-------------|--------------|
-| **Cost** | ~$0.05-0.10/article | **Free** |
-| **Accuracy** | 95-98% | **100%** |
-| **Speed** | 5-6 sec/article | **<500ms/article** |
+With an OC, `mst` / `law_name` / `article` are verified with one `lawService` call first: a law-name mismatch gives `VALIDATION_ERROR`, a missing article gives `ARTICLE_NOT_FOUND`. Without an OC the check is skipped and `warnings` says so.
 
 ### Request Parameters
 | 요청변수 | 값 | 설명 |
@@ -1329,7 +1454,7 @@ Unlike Phase 1-3 APIs that use XML endpoints, this tool parses HTML from law.go.
 | law_name | string(필수) | 법령명 (예: "건축법") |
 | article | int(필수) | 조문 번호 (예: 3 for 제3조) |
 | article_branch | int | 조문 가지번호 (예: 2 for 제3조의2, default: 0) |
-| oc | string | 사용자 ID (현재 미사용) |
+| oc | string | 선택. 있으면 위 검증에 사용 (HTTP 모드에서는 서버 OC) |
 
 ### Sample Usage (MCP Tool)
 ```python
@@ -1349,7 +1474,7 @@ article_citation(
 | 필드 | 값 | 설명 |
 |------|-----|------|
 | success | bool | 성공 여부 |
-| law_id | string | 법령 ID (lsiSeq) |
+| law_id | string | MST (법령일련번호, lsiSeq) |
 | law_name | string | 법령명 |
 | article | string | 조문 표시 (예: "제3조", "제3조의2") |
 | citation_count | int | 총 인용 개수 |
@@ -1368,7 +1493,7 @@ article_citation(
 | target_item | int | 대상 호번호 (optional) |
 | raw_text | string | 원문 텍스트 |
 
-### Sample Response
+### Sample Response (illustrative values)
 ```json
 {
     "success": true,
@@ -1444,7 +1569,7 @@ article_citation(
 
 ---
 
-# Appendix C: LexLink 구조화 오류 코드 (v2.2.0)
+# Appendix C: LexLink 구조화 오류 코드
 
 모든 도구 오류는 `status: "error"`, `error_code`, `message`, `hints[]`, `request_id` 형태로 반환된다.
 
@@ -1455,6 +1580,7 @@ article_citation(
 | `UPSTREAM_ERROR` | law.go.kr가 오류 응답 반환 | 메시지 확인 (IP/OC 등록 등) |
 | `INTERNAL_ERROR` | 예상치 못한 서버 오류 | 정상 운영에서는 발생하지 않아야 함 |
 | `ARTICLE_NOT_FOUND` | 요청한 조문(`jo`)이 응답에 없음 | 조문 번호·법령 버전 확인 |
+| `NOT_FOUND` | 업스트림이 "일치하는 … 없습니다"로 답했거나 본문이 비어 있음 (`prec_service`/`detc_service`/`expc_service`의 없는 ID, `lawService.do`의 빈 본문 등). 오류는 캐시되지 않음 | ID·검색어 확인 |
 | `EMPTY_RESPONSE` | HTTP 200이지만 0-byte 본문. 대개 잘못된 target/엔드포인트 | target·엔드포인트 점검 (코드 버그 신호) |
 | `API_NOT_SUBSCRIBED` | "미신청된 목록/본문에 대한 접근입니다" — OC 계정이 해당 API 종류를 open.law.go.kr에서 신청하지 않음. `eflaw` 본문이면 `law_service`/`eflaw_josub` 대안 안내 | open.law.go.kr에서 API 신청 추가 |
 | `UPSTREAM_HTML_ERROR` | JSON/XML을 요청했는데 HTML 또는 `error500` 페이지가 반환됨 | 재시도, 지속되면 `type=HTML` 가능 여부 확인 |
@@ -1484,4 +1610,4 @@ article_citation(
 
 ---
 
-**🚀 Status: Documentation for all 195 APIs from the law.go.kr Open API guide + 1 custom article_citation tool.**
+Catalog of the 195 APIs in the law.go.kr Open API guide (2026-10-25), plus the LexLink-derived tools above.

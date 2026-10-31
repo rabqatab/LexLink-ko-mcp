@@ -5,919 +5,125 @@
   <h1>LexLink - Korean National Law Information MCP Server</h1>
 </div>
 
-**🌐 Read this in other languages:** **English** | [한국어 (Korean)](README_kr.md)
+**Read this in other languages:** **English** | [한국어 (Korean)](README_kr.md)
 
 [![Kakao PlayMCP 10 3rd Prize](https://img.shields.io/badge/Kakao_PlayMCP_10-3rd_Prize_🏆-CD7F32)](https://playmcp.kakao.com/)
 [![smithery badge](https://smithery.ai/badge/@rabqatab/lexlink-ko-mcp)](https://smithery.ai/server/@rabqatab/lexlink-ko-mcp)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-blue)](https://modelcontextprotocol.io)
 [![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
-LexLink is an MCP (Model Context Protocol) server that exposes the Korean National Law Information API ([open.law.go.kr](http://open.law.go.kr)) to AI agents and LLM applications. It enables AI systems to search, retrieve, and analyze Korean legal information through standardized MCP tools.
+LexLink is an MCP (Model Context Protocol) server that wraps the Korean National Law Information API ([open.law.go.kr](http://open.law.go.kr)) so AI agents can search and read Korean laws, case law, interpretations and related material.
 
-## Features
+## What it provides
 
-- **55 MCP Tools + 2 MCP Resources** for comprehensive Korean law information access
-  - Search and retrieve Korean laws (effective date & announcement date)
-  - Search and retrieve English-translated laws
-  - Search and retrieve administrative rules (행정규칙)
-  - Query specific articles, paragraphs, and sub-items
-  - Law-ordinance linkage (법령-자치법규 연계)
-  - Delegated law information (위임법령)
-  - **Phase 3 - Case Law & Legal Research**
-    - Court precedents (판례)
-    - Constitutional Court decisions (헌재결정례)
-    - Legal interpretations (법령해석례)
-    - Administrative appeal decisions (행정심판례)
-  - **Phase 4 - Article Citation Extraction**
-    - Extract legal citations from any law article (100% accuracy)
-  - **NEW: Phase 5 - AI-Powered Search**
-    - Semantic search for natural language queries (aiSearch)
-    - Related laws discovery (aiRltLs_search)
-  - **MCP Resources - Law ID Cache**
-    - Cached mapping of ~20 frequently-used law names to stable 법령ID codes
-    - Template lookup by Korean name or abbreviation (resource template `lexlink://law/{name}`; `{name}` is a placeholder - read e.g. `lexlink://law/자통법` without braces): URL-decodes the name, consults resolver aliases (e.g. 자통법 → 자본시장과 금융투자업에 관한 법률, 010513), and falls back to one live `law_search` exact-name lookup
-    - Dynamic caching: search results automatically populate the cache
-- **Smart Features** (inspired by [korean-law-mcp](https://github.com/chrisryugj/korean-law-mcp)):
-  - **Intelligent Caching** - Per-tool TTL caching (search 1hr, articles 24hr, AI search 30min)
-  - **Law Name Resolution** - Auto-resolves Korean abbreviations (자통법→자본시장과 금융투자업에 관한 법률), 52 seed aliases + dynamic learning
-  - **Chain Tools** - Multi-step research workflows in one call (Phase 9)
-- **100% Semantic Validation** - All Phase 1-5 tools confirmed returning real law data
-- **Error Handling** - Actionable error messages with resolution hints
-- **Korean Text Support** - Proper UTF-8 encoding for Korean characters
-- **Response Formats** - JSON (default), HTML, or XML (multiple formats supported)
+- **55 tools**, **9 prompts** and **2 resources** (v2.2.0, plus the Unreleased changes listed in [CHANGELOG.md](CHANGELOG.md)).
+- Laws by effective date or announcement date, single articles (`jo`), English translations, administrative rules, local ordinances, treaties.
+- Court precedents, Constitutional Court decisions, legal interpretations, administrative appeals, committee decisions, ministry interpretations, special tribunals.
+- `law_as_of`: the version of a law (or one article) in force on a given date.
+- `article_citation`: citations referenced by one article, extracted from law.go.kr HTML (no LLM). Edge cases (ranges, deleted articles) are listed under limitations in the [API reference](docs/API_REFERENCE.md#알려진-한계).
+- AI/semantic search (`aiSearch`, `aiRltLs_search`) and one-call chain tools (`chain_*`).
+- Per-tool TTL cache and Korean law-name abbreviation resolution (e.g. 자통법).
+- JSON by default; `type="XML"` or `"HTML"` on request.
+- Errors come back as `{status: "error", error_code, message, hints, request_id}`.
 
-## Project Status
+All tool names and arguments are in the [API reference](docs/API_REFERENCE.md#lexlink-도구-목록).
 
-🎉 **Production Ready - Phase 9 Complete!**
+## Tool groups
 
-| Metric | Status |
-|--------|--------|
-| **Tools Implemented** | 55/55 (100%) ✅ |
-| **Semantic Validation** | 26/26 (Phase 1-5 tools) ✅ |
-| **MCP Prompts** | 9/9 (100%) ✅ |
-| **MCP Resources** | 2 (1 static + 1 template) ✅ |
-| **API Coverage** | ~28% of 191+ endpoints |
-| **LLM Integration** | ✅ Validated (Gemini) |
-| **Code Quality** | Clean, documented, tested |
-| **Version** | v2.2.0 |
+| Group | Tools |
+|---|---|
+| Laws | `eflaw_search`, `law_search`, `eflaw_service`, `law_service`, `eflaw_josub`, `law_josub`, `law_as_of`, `elaw_search`, `elaw_service` |
+| Admin rules, ordinances, linkage | `admrul_*`, `ordin_*`, `ordinLsCon_search`, `lnkLs_search`, `lnkLsOrdJo_search`, `lnkDep_search`, `drlaw_search`, `lsDelegated_service` |
+| Case law and decisions | `prec_*`, `detc_*`, `expc_*`, `decc_*`, `committee_*`, `cgm_expc_*`, `special_decc_*` |
+| Treaties | `trty_search`, `trty_service` |
+| AI search and knowledge base | `aiSearch`, `aiRltLs_search`, `lstrm_ai_search`, `dlytrm_search`, `lstrm_rlt_search`, `dlytrm_rlt_search`, `lstrm_rlt_jo_search`, `jo_rlt_lstrm_search`, `ls_rlt_search` |
+| Analysis | `article_citation`, `check_precedent_odds`, `legal_resolver`, `simplify_article`, `law_amendment_summary`, `article_amendment_diff` |
+| Chains and ops | `chain_full_research`, `chain_amendment_track`, `chain_dispute_prep`, `chain_law_system`, `cache_stats` |
 
-**Latest:** v2.2.0 — audit fixes: knowledge-base linkage tools now call `lawService.do`, `ordinLsCon_search` redesigned (3 modes), ministry interpretations use the `{code}CgmExpc` target (39 ministries), `jo` normalization (`35`, `35의5`, `제35조의5`, `003505`), structured upstream error codes, format-aware cache key, and 122 offline tests. See CHANGELOG.md.
+Which tool to start with:
 
-**v2.1.0** — 55 tools (Phase 9 added; law_as_of for as-of-date lookups), intelligent caching (`cache.py`), law name resolution (`resolver.py`), chain tools for multi-step research workflows.
+| You have | Start with |
+|---|---|
+| A vague question in plain Korean | `legal_resolver`, `aiSearch`, `aiRltLs_search` |
+| A law name and article number | `eflaw_search` (get MST) then `eflaw_josub` / `eflaw_service` with `jo` |
+| "What did the law say on date D?" | `law_as_of` |
+| A topic for case law | `prec_search`, `detc_search`, `chain_dispute_prep` |
 
-## Prerequisites
+For article text always pass `jo` (e.g. `35`, `"35의5"`, `"제35조의5"`, `"003505"`; normalized to 6 digits). Without it some laws return a very large body.
 
-- **Python 3.10+**
-- **law.go.kr OC identifier**: Register at [open.law.go.kr](https://open.law.go.kr)
+**Prompts:** `search-korean-law`, `get-law-article`, `get-article-with-citations`, `analyze-law-citations`, `search-admin-rules`, `tool-selection-guide`, `analyze-legal-situation`, `explain-legal-document`, `check-legal-precedent`.
 
-## Quick Start
+**Resources:** `lexlink://laws/frequently-used` (about 20 common law names mapped to 법령ID) and the template `lexlink://law/{name}` (read it as e.g. `lexlink://law/자통법`, without braces; the name is URL-decoded, resolver aliases are applied, and one live `law_search` exact-name lookup is the fallback).
 
-### 1. Install Dependencies
+## Quick start
+
+Requires Python 3.10+ and [uv](https://docs.astral.sh/uv/). You also need an **OC** from [open.law.go.kr](https://open.law.go.kr): the part of your registered email before the `@`. law.go.kr checks the OC together with the caller's IP, so the machine running LexLink may need its IP registered there.
 
 ```bash
 uv sync
+
+# stdio (Claude Code, Cursor, other local MCP clients)
+OC=<OC> uv run stdio
+
+# Streamable HTTP at /mcp (HTTP mode refuses to start without auth settings)
+OC=<OC> LEXLINK_AUTH_TOKENS=local:<TOKEN> TRANSPORT=http uv run serve
 ```
 
-### 2. Configure Your OC Identifier
+The server does not read `.env` by itself. Export the variables, or run `uv run --env-file .env stdio`.
 
-**Option A: Environment Variable (Recommended)**
-```bash
-# Set OC in your environment
-export OC=your_id_here
-```
+`OC` is resolved as: tool argument `oc` first, then the `OC` environment variable. **In HTTP mode the `oc` argument is ignored** and the server's `OC` is always used.
 
-**Option B: Pass in Tool Arguments**
-```python
-# Override OC in each tool call
-eflaw_search(query="법령명", oc="your_id")
-```
+For HTTP deployment (auth, TLS proxy, rate limits, logging) see [docs/OPERATIONS.md](docs/OPERATIONS.md).
 
-### 3. Run the Server
-
-```bash
-# Stdio transport (for Claude Code, Cursor, etc.)
-OC=your_oc uv run stdio
-
-# HTTP transport (for Kakao PlayMCP)
-OC=your_oc TRANSPORT=http uv run serve
-```
-
-## Available Tools
-
-### Phase 1: Core Law APIs (6 tools)
-
-#### 1. `eflaw_search` - Search Laws by Effective Date
-Search for laws organized by effective date (시행일 기준).
-
-```python
-eflaw_search(
-    query="자동차관리법",      # Search keyword
-    display=10,                # Results per page
-    type="XML",                # Response format
-    ef_yd="20240101~20241231"  # Optional date range
-)
-```
-
-#### 2. `law_search` - Search Laws by Announcement Date
-Search for laws organized by announcement date (공포일 기준).
-
-```python
-law_search(
-    query="민법",
-    display=10,
-    type="XML"
-)
-```
-
-#### 3. `eflaw_service` - Retrieve Law Content (Effective Date)
-Get full law text and articles by effective date.
-
-> **IMPORTANT:** For specific article queries (e.g., "제174조"), use the `jo` parameter. Some laws have 400+ articles and responses can exceed 1MB without `jo`.
-
-```python
-# Get specific article (RECOMMENDED)
-eflaw_service(
-    mst="279823",              # Law MST
-    jo="017400",               # Article 174 (제174조)
-    type="XML"
-)
-
-# Get full law (WARNING: large response)
-eflaw_service(
-    id="001823",
-    type="XML"
-)
-```
-
-#### 4. `law_service` - Retrieve Law Content (Announcement Date)
-Get full law text and articles by announcement date.
-
-> **IMPORTANT:** For specific article queries (e.g., "제174조"), use the `jo` parameter. Some laws have 400+ articles and responses can exceed 1MB without `jo`.
-
-```python
-# Get specific article (RECOMMENDED)
-law_service(
-    mst="279823",              # Law MST
-    jo="017400",               # Article 174 (제174조)
-    type="XML"
-)
-```
-
-#### 5. `eflaw_josub` - Query Article/Paragraph (Effective Date)
-**Best tool for querying specific articles.** Returns only the requested article/paragraph.
-
-```python
-eflaw_josub(
-    mst="279823",              # Law MST
-    jo="017400",               # Article 174 (제174조)
-    type="XML"
-)
-# jo format: "XXXXXX" where first 4 digits = article (zero-padded), last 2 = branch (00=main)
-# Examples: "017400" (제174조), "000300" (제3조), "001502" (제15조의2)
-# Also accepted (normalized to 6 digits): 174, "35의5", "제35조의5", "35-5", "003505"
-# Invalid jo → VALIDATION_ERROR; article missing in response → ARTICLE_NOT_FOUND
-# (same normalization for law_josub, eflaw_service, law_service)
-```
-
-#### 6. `law_josub` - Query Article/Paragraph (Announcement Date)
-**Best tool for querying specific articles.** Returns only the requested article/paragraph.
-
-```python
-law_josub(
-    mst="279823",              # Law MST
-    jo="017200",               # Article 172 (제172조)
-    type="XML"
-)
-```
-
-### Phase 2: Extended APIs (9 tools)
-
-#### 7. `elaw_search` - Search English-Translated Laws
-Search for Korean laws translated to English.
-
-```python
-elaw_search(
-    query="employment",
-    display=10,
-    type="XML"
-)
-```
-
-#### 8. `elaw_service` - Retrieve English Law Content
-Get full English-translated law text.
-
-```python
-elaw_service(
-    id="009589",
-    type="XML"
-)
-```
-
-#### 9. `admrul_search` - Search Administrative Rules
-Search administrative rules (훈령, 예규, 고시, 공고, 지침).
-
-```python
-admrul_search(
-    query="학교",
-    display=10,
-    type="XML"
-)
-```
-
-#### 10. `admrul_service` - Retrieve Administrative Rule Content
-Get full administrative rule text with annexes.
-
-```python
-admrul_service(
-    id="62505",
-    type="XML"
-)
-```
-
-#### 11. `lnkLs_search` - Search Law-Ordinance Linkage
-Find laws linked to local ordinances.
-
-```python
-lnkLs_search(
-    query="건축",
-    display=10,
-    type="XML"
-)
-```
-
-#### 12. `lnkLsOrdJo_search` - Search Ordinance Articles by Law
-Find ordinance articles linked to specific law articles.
-
-```python
-lnkLsOrdJo_search(
-    knd="002118",              # Law ID
-    display=10,
-    type="XML"
-)
-```
-
-#### 13. `lnkDep_search` - Search Law-Ordinance Links by Ministry
-Find laws linked to ordinances by government ministry.
-
-```python
-lnkDep_search(
-    org="1400000",             # Ministry code
-    display=10,
-    type="XML"
-)
-```
-
-#### 14. `drlaw_search` - Retrieve Law-Ordinance Linkage Statistics
-Get linkage statistics table (HTML format).
-
-```python
-drlaw_search(
-    lid="001823",              # Law ID
-    type="HTML"
-)
-```
-
-#### 15. `lsDelegated_service` - Retrieve Delegated Law Information
-Get information about delegated laws, rules, and ordinances.
-
-```python
-lsDelegated_service(
-    id="001823",
-    type="XML"
-)
-```
-
-### Phase 3: Case Law & Legal Research (8 tools - NEW!)
-
-> **Tip:** All `*_service` tools in Phase 3 support a `sections="summary"` parameter to return only a brief summary instead of the full document text.
-
-#### 16. `prec_search` - Search Court Precedents
-Search Korean court precedents from Supreme Court and lower courts.
-
-```python
-prec_search(
-    query="담보권",
-    display=10,
-    type="XML",
-    curt="대법원"             # Optional: Court name filter
-)
-```
-
-#### 17. `prec_service` - Retrieve Court Precedent Full Text
-Get complete court precedent text with case details.
-
-```python
-prec_service(
-    id="228541",
-    type="XML"
-)
-```
-
-#### 18. `detc_search` - Search Constitutional Court Decisions
-Search Korean Constitutional Court decisions.
-
-```python
-detc_search(
-    query="벌금",
-    display=10,
-    type="XML"
-)
-```
-
-#### 19. `detc_service` - Retrieve Constitutional Court Decision Full Text
-Get complete Constitutional Court decision text.
-
-```python
-detc_service(
-    id="58386",
-    type="XML"
-)
-```
-
-#### 20. `expc_search` - Search Legal Interpretations
-Search legal interpretation precedents issued by government agencies.
-
-```python
-expc_search(
-    query="임차",
-    display=10,
-    type="XML"
-)
-```
-
-#### 21. `expc_service` - Retrieve Legal Interpretation Full Text
-Get complete legal interpretation text.
-
-```python
-expc_service(
-    id="334617",
-    type="XML"
-)
-```
-
-#### 22. `decc_search` - Search Administrative Appeal Decisions
-Search Korean administrative appeal decisions.
-
-```python
-decc_search(
-    query="*",                # Search all decisions
-    display=10,
-    type="XML"
-)
-```
-
-#### 23. `decc_service` - Retrieve Administrative Appeal Decision Full Text
-Get complete administrative appeal decision text.
-
-```python
-decc_service(
-    id="243263",
-    type="XML"
-)
-```
-
-### Phase 4: Article Citation Extraction (1 tool - NEW!)
-
-#### 24. `article_citation` - Extract Citations from Law Article
-Extract all legal citations referenced by a specific law article.
-
-```python
-# First, search for the law to get MST
-eflaw_search(query="건축법")  # Returns MST: 268611
-
-# Then extract citations
-article_citation(
-    mst="268611",              # Law MST from search result
-    law_name="건축법",          # Law name
-    article=3                  # Article number (제3조)
-)
-```
-
-**Response:**
-```json
-{
-    "success": true,
-    "law_name": "건축법",
-    "article": "제3조",
-    "citation_count": 12,
-    "internal_count": 4,
-    "external_count": 8,
-    "citations": [
-        {
-            "type": "external",
-            "target_law_name": "「국토의 계획 및 이용에 관한 법률」",
-            "target_article": 56,
-            "target_paragraph": 1
-        }
-    ]
-}
-```
-
-**Key Features:**
-- 100% accuracy via HTML parsing (not LLM-based)
-- Zero API cost (no external LLM calls)
-- ~350ms average extraction time
-- Distinguishes internal vs external citations
-
-### Phase 5: AI-Powered Search (2 tools - NEW!)
-
-#### 25. `aiSearch` - AI-Powered Semantic Law Search
-⭐ **PREFERRED TOOL for vague or natural language queries.** Use this FIRST when user's intent is unclear or conversational.
-
-Uses intelligent/semantic search to find relevant law articles with full article text.
-
-```python
-aiSearch(
-    query="뺑소니 처벌",           # Natural language query
-    search=0,                      # 0: law articles, 1: appendix, 2: admin rules, 3: admin appendix
-    display=20,                    # Results per page
-    page=1,                        # Page number
-    type="JSON"                    # Response format (JSON default)
-)
-```
-
-**Best for:** Natural language queries like "음주운전 벌금", "이혼 재산분할", "상속 문제"
-
-#### 26. `aiRltLs_search` - AI-Powered Related Laws Search
-⭐ **PREFERRED TOOL for discovering related laws from vague topics.** Use this when user wants to explore laws around a general subject.
-
-Finds laws semantically related to a given law name or keyword.
-
-```python
-aiRltLs_search(
-    query="민법",                  # Law name or keyword
-    search=0,                      # 0: law articles, 1: admin rule articles
-    type="JSON"                    # Response format (JSON default)
-)
-```
-
-**Best for:** Finding related laws like "민법" → 상법, 의료법, 소송촉진법
-
-### Phase 7: Extended Legal Information (18 tools)
-
-| Category | Tools |
-|----------|-------|
-| 자치법규 (Local Ordinances) | `ordin_search`, `ordin_service`, `ordinLsCon_search` |
-| 조약 (Treaties) | `trty_search`, `trty_service` |
-| 법령정보 지식베이스 (Knowledge Base) | `lstrm_ai_search`, `dlytrm_search`, `lstrm_rlt_search`, `dlytrm_rlt_search`, `lstrm_rlt_jo_search`, `jo_rlt_lstrm_search`, `ls_rlt_search` |
-| 위원회 결정문 (Committee Decisions) | `committee_search`, `committee_service` |
-| 중앙부처 1차 해석 (Ministry Interpretations) | `cgm_expc_search`, `cgm_expc_service` |
-| 특별행정심판 (Special Appeals) | `special_decc_search`, `special_decc_service` |
-
-**Notes on Phase 7 tools (v2.2.0):**
-
-- **`ordinLsCon_search`** takes exactly one of `query` (→ upstream `lnkOrd`, ordinance-name search), `law_id` (→ `lnkLsOrd`, upstream `knd`), or `org` (→ `lnkOrg`, local-government code); optional `sort`, `display`, `page`.
-- **`lstrm_rlt_search`, `dlytrm_rlt_search`, `lstrm_rlt_jo_search`, `jo_rlt_lstrm_search`** call `lawService.do`. Provide `query` or `mst` (term serial number); optional `trm_rlt_cd` where supported: `140301` 동의어, `140302` 반의어, `140303` 상위어, `140304` 하위어, `140305` 연관어 (Korean names also accepted). `jo_rlt_lstrm_search` requires `jo` (`35`, `35의5`, `제35조의5`, `003505`) plus `query` (law name) or `law_id`. `display`/`page` are not upstream parameters for these tools.
-- **`cgm_expc_search` / `cgm_expc_service`** cover 39 ministries (upstream target `{code}CgmExpc`, e.g. `moelCgmExpc`). 기획재정부 was renamed 재정경제부 (code `Moef`); the old name and 환경부, 산업통상자원부, 여성가족부, 통계청, 특허청, 문화재청 are accepted as aliases. 재정경제부 and 국세청 have a list API only, so `cgm_expc_service` returns `VALIDATION_ERROR` for them.
-- **`special_decc_search`** now respects `display`.
-
-### Phase 9: Chain Tools (5 tools)
-
-Inspired by [korean-law-mcp](https://github.com/chrisryugj/korean-law-mcp), these tools run multi-step research workflows in a single call — eliminating the need for an LLM to orchestrate sequential tool calls manually.
-
-| Tool | Description |
-|------|-------------|
-| `chain_full_research` | Complete legal research: statutes + precedent analysis + interpretations |
-| `chain_amendment_track` | Revision history + article-level diff across amendments |
-| `chain_dispute_prep` | All case law sources across 4 databases (판례, 헌재결정례, 법령해석례, 행정심판례) |
-| `chain_law_system` | Full law hierarchy: delegation tree + admin rules + ordinances |
-| `cache_stats` | Cache and resolver performance monitoring |
-
-### Tool Selection Guide
-
-When searching Korean law, select tools based on query clarity:
-
-| Query Type | Recommended Tools | Examples |
-|------------|-------------------|----------|
-| 🔍 **Vague/Natural language** | `aiSearch`, `aiRltLs_search` | "음주운전 처벌", "이혼 재산분할" |
-| 📋 **Specific law/article** | `eflaw_search`, `law_search` | "형법 제148조의2", "민법 상속편" |
-| ⚖️ **Case law** | `prec_search`, `detc_search` | "대법원 2023다12345" |
-| 🔗 **Related laws** | `aiRltLs_search` | "민법과 관련된 법률" |
-
-## Configuration
-
-### Environment Variables
+### Environment variables
 
 | Variable | Default | Description |
-|----------|---------|-------------|
-| `OC` | *(required)* | law.go.kr API identifier (email local part) |
-| `LEXLINK_BASE_URL` | `http://www.law.go.kr` | API base URL |
-| `LEXLINK_TIMEOUT` | `60` | HTTP request timeout in seconds |
-| `SLIM_RESPONSE` | *(unset)* | Set `true` to remove redundant raw XML when parsed data exists and keep the compact caps (500-char case/article excerpts, top-10/3 lists, 80 delegation entries) for PlayMCP. Unset: nothing already fetched is cut (one exception: `simplify_article` looks up at most 20 legal terms upstream) |
-| `TRANSPORT` | `sse` | Transport type: `sse` or `http` |
+|---|---|---|
+| `OC` | *(required)* | law.go.kr API identifier |
+| `LEXLINK_BASE_URL` | `http://www.law.go.kr` | Upstream base URL |
+| `LEXLINK_TIMEOUT` | `60` | Upstream request timeout (seconds) |
+| `SLIM_RESPONSE` | unset | `1`/`true`/`yes`/`on` turns on the compact mode for size-limited hosts such as PlayMCP: drops `raw_content` when `ranked_data` exists, keeps the compact caps (500-char excerpts, top-10/3 lists, 80 delegation entries) and trims any result over 20,000 bytes (`truncated`, `truncated_notes`). Unset: nothing already fetched is cut (one exception: `simplify_article` looks up at most 20 legal terms) |
+| `TRANSPORT` | `sse` | HTTP server only: `http` (recommended) or `sse` |
 
-### OC Priority
+The HTTP-only variables (`HOST`, `PORT`, `LEXLINK_AUTH_TOKENS`, rate limits, logging, ...) are in [docs/OPERATIONS.md](docs/OPERATIONS.md).
 
-When resolving the OC identifier:
-1. **Tool argument** (highest priority) - `oc` parameter in tool call
-2. **Environment variable** - `OC` env var (set via .env or HTTP header middleware)
-
-## Usage Examples
-
-### Example 1: Basic Search
+### Example
 
 ```python
-# Search for automobile management law
-result = eflaw_search(
-    query="자동차관리법",
-    display=5,
-    type="XML"
-)
+eflaw_search(query="자동차관리법", display=5)
+# {"status": "ok", "request_id": "...", "upstream_type": "JSON", "ranked_data": ..., "raw_content": ...}
 
-# Returns:
-{
-    "status": "ok",
-    "request_id": "uuid",
-    "upstream_type": "XML",
-    "data": {
-        # Law search results...
-    }
-}
+eflaw_josub(mst="<MST from the search>", jo="제3조")
 ```
 
-### Example 2: Search with Date Range
-
-```python
-# Find laws effective in 2024
-result = eflaw_search(
-    query="교통",
-    ef_yd="20240101~20241231",
-    type="XML"
-)
-```
-
-### Example 3: Error Handling
-
-```python
-# Missing OC parameter
-result = eflaw_search(query="test")
-
-# Returns helpful error:
-{
-    "status": "error",
-    "error_code": "VALIDATION_ERROR",
-    "message": "OC parameter is required but not provided.",
-    "hints": [
-        "1. Tool argument: oc='your_value'",
-        "2. Environment variable: OC=your_value"
-    ]
-}
-```
-
-**Error codes:** `VALIDATION_ERROR`, `TIMEOUT`, `UPSTREAM_ERROR`, `INTERNAL_ERROR`, plus structured upstream detection (v2.2.0):
-
-| Code | Meaning |
-|------|---------|
-| `EMPTY_RESPONSE` | HTTP 200 with a 0-byte body (unknown target/endpoint) |
-| `API_NOT_SUBSCRIBED` | "미신청된 목록/본문에 대한 접근입니다" page: apply for the API at open.law.go.kr (for target `eflaw`, try `law_service`/`eflaw_josub`) |
-| `UPSTREAM_HTML_ERROR` | HTML/error500 page returned although JSON/XML was requested |
-| `ARTICLE_NOT_FOUND` | Requested `jo` is not present in the upstream response |
-
-## Golden MCP Tool Trajectories
-
-These examples demonstrate real-world conversation flows showing how LLMs interact with LexLink tools to answer legal research questions.
-
-### Trajectory 1: Basic Law Research
-**User Query:** "What is Article 20 of the Civil Code?"
-
-**Tool Calls:**
-1. `law_search(query="민법", display=50, type="XML")` → Find Civil Code ID
-2. `law_service(id="000021", jo="002000", type="XML")` → Retrieve Article 20 text
-
-**Result:** LLM provides formatted explanation of Civil Code Article 20 with full legal text and context.
-
----
-
-### Trajectory 2: Court Precedent Analysis
-**User Query:** "Find recent Supreme Court precedents about security interests"
-
-**Tool Calls:**
-1. `prec_search(query="담보권", curt="대법원", display=50, type="XML")` → Search Supreme Court precedents
-2. `prec_service(id="228541", type="XML")` → Retrieve top precedent details
-
-**Result:** LLM summarizes key precedents with case numbers, dates, and holdings related to security interests.
-
----
-
-### Trajectory 3: Cross-Phase Legal Research
-**User Query:** "How does the Labor Standards Act handle overtime, and are there relevant court precedents?"
-
-**Tool Calls:**
-1. `eflaw_search(query="근로기준법", display=50, type="XML")` → Find Labor Standards Act
-2. `eflaw_service(id="001234", jo="005000", type="XML")` → Retrieve Article 50 (overtime provisions)
-3. `prec_search(query="근로기준법 연장근로", display=30, type="XML")` → Search overtime precedents
-4. `prec_service(id="234567", type="XML")` → Retrieve leading precedent
-
-**Result:** LLM provides comprehensive analysis combining statutory text with judicial interpretation, showing how courts apply the overtime provisions.
-
----
-
-### Trajectory 4: Constitutional Review
-**User Query:** "Has the Constitutional Court reviewed laws about fines?"
-
-**Tool Calls:**
-1. `detc_search(query="벌금", display=50, type="XML")` → Search Constitutional Court decisions
-2. `detc_service(id="58386", type="XML")` → Retrieve decision full text
-3. `law_search(query=<law_name_from_decision>, type="XML")` → Find related law for context
-
-**Result:** LLM explains Constitutional Court holdings on fine-related provisions and their impact on specific laws.
-
----
-
-### Trajectory 5: Administrative Law Research
-**User Query:** "What administrative rules exist for schools, and are there related legal interpretations?"
-
-**Tool Calls:**
-1. `admrul_search(query="학교", display=50, type="XML")` → Search school-related administrative rules
-2. `admrul_service(id="62505", type="XML")` → Retrieve rule content
-3. `expc_search(query="학교", display=30, type="XML")` → Search legal interpretations
-4. `expc_service(id="334617", type="XML")` → Retrieve interpretation details
-
-**Result:** LLM provides overview of administrative framework for schools with official agency interpretations.
-
----
-
-### Trajectory 6: Comprehensive Legal Analysis
-**User Query:** "I'm researching rental housing disputes. Show me the relevant law, court precedents, and administrative appeal decisions."
-
-**Tool Calls:**
-1. `eflaw_search(query="주택임대차보호법", display=50, type="XML")` → Find Housing Lease Protection Act
-2. `eflaw_service(id="002876", type="XML")` → Retrieve full law text
-3. `prec_search(query="주택임대차", display=50, type="XML")` → Search housing lease precedents
-4. `prec_service(id="156789", type="XML")` → Retrieve key precedent
-5. `decc_search(query="주택임대차", display=30, type="XML")` → Search administrative appeal decisions
-6. `decc_service(id="243263", type="XML")` → Retrieve appeal decision
-
-**Result:** LLM provides comprehensive legal research report covering statutory framework, judicial interpretation, and administrative precedents for rental housing disputes.
-
----
-
-### Trajectory 7: Citation Network Analysis (Phase 4)
-**User Query:** "What laws does Article 3 of the Building Act cite?"
-
-**Tool Calls:**
-1. `eflaw_search(query="건축법", display=50, type="XML")` → Find Building Act, get MST
-2. `article_citation(mst="268611", law_name="건축법", article=3)` → Extract all citations
-
-**Result:** LLM provides complete citation analysis showing 12 citations (8 external laws, 4 internal references) including specific article and paragraph references.
-
----
-
-### Trajectory 8: AI-Powered Natural Language Search (Phase 5)
-**User Query:** "What's the penalty for hit-and-run accidents?"
-
-**Tool Calls:**
-1. `aiSearch(query="뺑소니 처벌", search=0, display=20, type="XML")` → Semantic search for hit-and-run penalties
-
-**Result:** LLM receives full article text from relevant laws (특정범죄 가중처벌 등에 관한 법률 제5조의3) with complete provisions about hit-and-run penalties, enabling comprehensive answer without needing to know specific law names.
-
----
-
-### Trajectory 9: Discovering Related Laws (Phase 5)
-**User Query:** "What laws are related to the Civil Code?"
-
-**Tool Calls:**
-1. `aiRltLs_search(query="민법", search=0, type="XML")` → Find semantically related laws
-
-**Result:** LLM discovers related laws like 상법 (Commercial Act), 의료법 (Medical Service Act), 소송촉진법 (Act on Special Cases Concerning Expedition of Litigation), showing connections across legal domains.
-
----
-
-### Key Patterns
-
-1. **AI Tools for Vague Queries**: Use `aiSearch` or `aiRltLs_search` FIRST when user intent is unclear or conversational
-2. **Search First, Then Retrieve**: Always search to find IDs before calling service tools
-3. **Use display=50-100 for Law Searches**: Ensures exact matches are found due to relevance ranking
-4. **Combine Phases**: Mix Phase 1 (laws), Phase 2 (administrative rules), Phase 3 (precedents), and Phase 5 (AI search) for complete research
-5. **Type Parameter**: Default is `type="JSON"`; specify `type="XML"` if your pipeline requires XML
-6. **Article Numbers**: Use 6-digit format (e.g., "002000" for Article 20) when querying specific articles
-
-## Development
-
-### Project Structure
-
-```
-lexlink-ko-mcp/
-├── src/lexlink/
-│   ├── server.py        # Main MCP server with 55 tools
-│   ├── _helpers.py      # Shared helpers: run_search, run_service, TOOL_ANNOTATIONS
-│   ├── cache.py         # Intelligent per-tool TTL caching (~183 lines)
-│   ├── resolver.py      # Korean law name/abbreviation resolution (~225 lines)
-│   ├── http_server.py   # HTTP/SSE server for Kakao PlayMCP
-│   ├── stdio_server.py  # Stdio transport entry point
-│   ├── params.py        # Parameter resolution & mapping
-│   ├── validation.py    # Input validation (dates, `jo` normalization)
-│   ├── agency_codes.py  # Ministry/tribunal codes, aliases, cgm_expc/special_decc targets
-│   ├── linkage.py       # Knowledge-base / ordinance-link logic (jo, trm_rlt_cd, link modes)
-│   ├── article_text.py  # Article text extraction (조문내용 + 항/호/목 flattening)
-│   ├── parser.py        # XML parsing utilities
-│   ├── ranking.py       # Relevance ranking
-│   ├── citation.py      # Article citation extraction (Phase 4)
-│   ├── client.py        # HTTP client for law.go.kr API (+ upstream error detection)
-│   ├── errors.py        # Error codes & responses
-│   ├── http_security.py # HTTP auth, rate limit, host validation
-│   ├── raw_logger.py    # PlayMCP traffic logging
-│   └── log_processor.py # Log format converter
-├── tests/                # 122 offline tests
-├── logs/playmcp/         # PlayMCP traffic logs (daily JSONL)
-├── pyproject.toml        # Project configuration
-└── README.md             # This file
-```
-
-### Running Tests
-
-```bash
-# Install test dependencies
-uv sync
-
-# Run all tests (122 offline tests; no network or OC needed)
-uv run pytest tests/
-
-# Run with coverage
-uv run pytest --cov=src/lexlink --cov-report=html
-
-# Test files: test_cache, test_cgm_expc, test_client_errors, test_knowledge_base,
-#             test_ordin_link, test_resources, test_special_decc, test_validation_jo
-
-# Run specific test category
-uv run pytest -m unit
-uv run pytest -m integration
-uv run pytest -m e2e
-```
-
-### Adding New Tools
-
-**Current Status:** 55/55 tools implemented (Phase 1-9 complete). Phase 1-5 tools validated.
-
-For implementing additional tools from the 124+ remaining APIs:
-1. Follow the pattern established in `src/lexlink/server.py`
-2. Use `ctx: Context = None` parameter for MCP logging/progress
-3. Use generic parser functions (`extract_items_list`, `update_items_list`)
-4. Add semantic validation tests
-
-**Tool Implementation Pattern:**
-- Each tool is a decorated function with MCP schema
-- Uses `ctx: Context = None` parameter for MCP context
-- 2-tier OC resolution: tool arg > env var
-- Generic parser functions work with any XML tag
-- Comprehensive error handling with actionable hints
-
-## Deployment
-
-### Deploy to Kakao PlayMCP (HTTP Server)
-
-LexLink can also be deployed as an HTTP server for platforms like Kakao PlayMCP.
-
-> **Important:** Kakao PlayMCP does not accept port numbers in URLs.
-> You must use Nginx as a reverse proxy to serve on port 80.
-
-**Quick Start (Local Testing):**
-```bash
-# Run the HTTP server
-OC=your_oc uv run serve
-
-# Server starts at: http://localhost:8000/sse
-```
-
-**Production Setup:**
-```
-Internet → Nginx (port 80) → LexLink (port 8000)
-```
-
-**PlayMCP Registration:**
-
-| Field | Value |
-|-------|-------|
-| **MCP Endpoint** | `http://YOUR_SERVER_IP/sse` (no port!) |
-| **Authentication** | Key/Token (Header: `OC`) |
-
-For detailed deployment instructions (AWS EC2, Nginx, systemd, HTTPS), see [docs/DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT_GUIDE.md).
-
-### PlayMCP Traffic Logging
-
-LexLink includes built-in logging for PlayMCP traffic analysis. Logs are saved in dashboard-compatible JSONL format.
-
-**Log Location:** `logs/playmcp/YYYY-MM-DD.jsonl`
-
-**Log Schema:**
-```json
-{
-  "rpc_id": "3",
-  "request_id": "d8ee45eb",
-  "session_id": "9ff9dc23431848a4901b4cb6326ba5bd",
-  "timestamp": "2025-12-25T05:40:23.957987",
-  "duration_ms": 1.52,
-  "method": "tools/call",
-  "tool_name": "aiSearch",
-  "params": { "arguments": {"query": "뺑소니 처벌"} },
-  "client": "PlayMCP",
-  "client_version": "2025.0.0",
-  "protocol_version": "2025-06-18",
-  "client_ip": "220.64.111.219",
-  "oc": "user_id",
-  "status": "success",
-  "status_code": 200,
-  "result": { ... }
-}
-```
-
-**Features:**
-- Daily log rotation (one file per day)
-- Dashboard-compatible format for filtering and analysis
-- Captures request/response pairs with timing
-- SSE streaming response parsing
-
-**Converting Old Raw Logs:**
-```bash
-uv run python -m lexlink.log_processor input.jsonl output.jsonl
-```
-
-## Troubleshooting
-
-### "OC parameter is required" error
-
-**Solution:** Set your OC identifier using one of the three methods above.
-
-### Korean characters not displaying correctly
-
-**Solution:** Ensure your terminal supports UTF-8:
-```bash
-export PYTHONIOENCODING=utf-8
-```
-
-### "Timeout" errors
-
-**Solution:** Increase timeout via environment variable:
-```bash
-export LEXLINK_TIMEOUT=90  # Increase from default 60s
-```
-
-### Server won't start after updating dependencies
-
-**Solution:** Re-sync dependencies:
-```bash
-uv sync --reinstall
-```
+Error codes: `VALIDATION_ERROR`, `TIMEOUT`, `UPSTREAM_ERROR`, `INTERNAL_ERROR`, `NOT_FOUND`, `ARTICLE_NOT_FOUND`, `EMPTY_RESPONSE`, `API_NOT_SUBSCRIBED`, `UPSTREAM_HTML_ERROR`. See the [API reference](docs/API_REFERENCE.md#appendix-c-lexlink-구조화-오류-코드).
+
+## Documentation
+
+| Doc | For |
+|---|---|
+| [docs/README.md](docs/README.md) | Index |
+| [docs/API_REFERENCE.md](docs/API_REFERENCE.md) | Tool list, arguments, upstream API catalog, limitations |
+| [docs/OPERATIONS.md](docs/OPERATIONS.md) | HTTP server: deploy, auth, TLS proxy, logging (Korean) |
+| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Code layout, tests, adding tools |
+| [CHANGELOG.md](CHANGELOG.md) | Release history, Unreleased changes |
+| [AGENTS.md](AGENTS.md) | Notes for coding agents |
 
 ## Contributing
 
-Contributions are welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Write tests for new functionality
-4. Ensure all tests pass (`uv run pytest`)
-5. Commit changes (`git commit -m 'Add amazing feature'`)
-6. Push to branch (`git push origin feature/amazing-feature`)
-7. Open a Pull Request
+Fork, branch, add tests, run `uv run pytest tests/`, open a pull request. Details in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ## License
 
-This project is open source. See LICENSE file for details.
+No LICENSE file is included in this repository.
 
 ## Acknowledgments
 
 - **law.go.kr** - Korean National Law Information API
 - **MCP** - Model Context Protocol by Anthropic
-- **[korean-law-mcp](https://github.com/chrisryugj/korean-law-mcp)** - Inspiration for caching, law name resolution, and chain tools (Phase 9)
+- **[korean-law-mcp](https://github.com/chrisryugj/korean-law-mcp)** - inspiration for caching, law name resolution and chain tools
 
 ## Support
 
-- **Issues:** [GitHub Issues](https://github.com/rabqatab/LexLink-ko-mcp/issues)
-- **law.go.kr API:** [Official Documentation](http://open.law.go.kr)
-
----
-
-## Changelog
-
-### v2.1.0 - 2026-03-30
-**New: Caching, Law Name Resolution, Chain Tools (Phase 9)**
-
-- Added intelligent per-tool TTL caching (`cache.py`): search 1hr, articles 24hr, AI search 30min
-- Added law name/abbreviation resolution (`resolver.py`): 52 seed aliases + dynamic learning
-- Added 5 Phase 9 chain tools: `chain_full_research`, `chain_amendment_track`, `chain_dispute_prep`, `chain_law_system`, `cache_stats`
-- Inspired by [korean-law-mcp](https://github.com/chrisryugj/korean-law-mcp)
-- See [CHANGELOG.md](CHANGELOG.md) for full details
-
-### v2.0.0 - 2026-03-30
-**Major Release: Phase 7 Tools, JSON Default, sections Parameter**
-
-- Added 18 new Phase 7 tools (자치법규, 조약, 법령정보 지식베이스, 위원회 결정문, 중앙부처 해석, 특별행정심판)
-- JSON is now the default response format (was XML)
-- Added `sections="summary"` parameter for case law service tools
-- Refactored shared logic into `_helpers.py`
-- See [CHANGELOG.md](CHANGELOG.md) for full details
-
-### v1.5.0 - 2026-02-28
-**Refactor: Remove Smithery Dependency**
-
-- Removed `smithery` package and 8 transitive dependencies
-- Simplified OC resolution to 2-tier (tool arg > env var)
-- Added `stdio_server.py` entry point for stdio transport
-- See [CHANGELOG.md](CHANGELOG.md) for full details
-
-For the full changelog (v1.0.0 – v2.1.0), see [CHANGELOG.md](CHANGELOG.md).
-
----
-
-**Powered by [MCP](https://modelcontextprotocol.io)**
+- Issues: [GitHub Issues](https://github.com/rabqatab/LexLink-ko-mcp/issues)
+- law.go.kr API: [open.law.go.kr](http://open.law.go.kr)
