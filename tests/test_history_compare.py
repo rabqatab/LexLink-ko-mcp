@@ -417,19 +417,27 @@ def test_abrv_dates_forwarded_and_upstream_error_propagates(call):
 
 
 @pytest.mark.unit
-def test_abrv_incomplete_upstream_is_an_error_and_never_cached(call):
+def test_abrv_empty_or_unparsable_is_an_error_and_never_cached(call):
+    good = fx("lsAbrv_list_trimmed.json")
+    empty = json.dumps({"LawSearch": {"target": "lsAbrv", "totalCnt": "0"}})
+    bodies = iter(["{not json", empty, good])
+    t = call({(SEARCH, "lsAbrv"): lambda q: next(bodies)})
+    for _ in range(2):
+        assert_error(t("lsAbrv_search"), "UPSTREAM_ERROR")
+    assert t("lsAbrv_search")["status"] == "ok"          # the 3rd fetch really went upstream: nothing bad was cached
+    assert t("lsAbrv_search")["status"] == "ok" and len(call.holder["up"].calls) == 3   # now cached
+
+
+@pytest.mark.unit
+def test_abrv_count_mismatch_serves_the_rows_with_a_warning_and_does_not_cache(call):
     d = json.loads(fx("lsAbrv_list_trimmed.json"))
-    good = json.dumps(d, ensure_ascii=False)
     d["LawSearch"]["totalCnt"] = str(len(d["LawSearch"]["law"]) + 5)
     mismatch = json.dumps(d, ensure_ascii=False)
-    empty = json.dumps({"LawSearch": {"target": "lsAbrv", "totalCnt": "0"}})
-    bodies = iter([mismatch, empty, "{not json", good])
-    t = call({(SEARCH, "lsAbrv"): lambda q: next(bodies)})
-    for _ in range(3):
-        assert_error(t("lsAbrv_search"), "UPSTREAM_ERROR")
-    assert t("lsAbrv_search")["status"] == "ok"          # the 4th fetch really went upstream: nothing bad was cached
-    assert len(call.holder["up"].calls) == 4
-    assert t("lsAbrv_search")["status"] == "ok" and len(call.holder["up"].calls) == 4   # now cached
+    t = call({(SEARCH, "lsAbrv"): mismatch})
+    a = t("lsAbrv_search", display=100)
+    b = t("lsAbrv_search", display=100)
+    assert a["status"] == "ok" and a["ranked_data"]["law"] and "upstream_total_mismatch" in a["warning"]
+    assert len(call.holder["up"].calls) == 2              # served twice, cached never
 
 
 @pytest.mark.unit
@@ -950,3 +958,81 @@ def test_other_lists_keep_their_total_past_the_last_page(call, tool, target, roo
     assert out["ranked_data"]["totalCnt"] == "9" and out["ranked_data"][key] == []
     assert out.get("warning") != "no_results" and any("no_more_results" in h for h in out["hints"])
     assert len(call.holder["up"].calls) == 1
+
+
+# ---------------------------------------------------------------- second review
+
+@pytest.mark.unit
+def test_gana_uses_ah_for_ieung_and_rejects_a(call):
+    t = call({(SEARCH, "lstrm"): fx("lstrm_list_seoneui.json")})
+    assert_error(t("lstrm_search", gana="a"), "VALIDATION_ERROR")
+    for g in ("ga", "na", "da", "ra", "ma", "ba", "sa", "ah", "ja", "cha", "ka", "ta", "pa", "ha", "etc"):
+        assert t("lstrm_search", gana=g)["status"] == "ok"
+    assert [c[1]["gana"] for c in call.holder["up"].calls][-3:] == ["pa", "ha", "etc"]
+
+
+@pytest.mark.unit
+def test_knd_message_and_codes_use_the_measured_names(call):
+    t = call({(SEARCH, "oldAndNew"): fx("oldAndNew_list_minbeop.json")})
+    err = t("oldAndNew_search", knd="X")
+    assert "A0007" in err["message"] and "A0003" not in err["message"]
+    assert t("oldAndNew_search", knd="A0007")["status"] == "ok"
+    docs = {x.name: x.description for x in asyncio.run(server_mod.create_server().list_tools())}
+    for name in ("oldAndNew_search", "thdCmp_search"):
+        assert "A0007" in docs[name] and "A0003" not in docs[name]
+
+
+@pytest.mark.unit
+def test_ascii_digits_folds_only_fullwidth_zero_to_nine():
+    assert ascii_digits("０１２３４５６７８９") == "0123456789"
+    for other in ("①", "²", "٣", "１２③", "ⅷ"):
+        assert not ascii_digits(other).isascii()
+        with pytest.raises(ToolValidationError):
+            validate_digits(other, "x")
+    with pytest.raises(ToolValidationError):
+        validate_yyyymmdd("２０２６０３１①", "d")
+
+
+@pytest.mark.unit
+def test_enum_args_are_not_folded(call):
+    t = call({(SEARCH, "licbyl"): fx("licbyl_list_gajok.json")})
+    assert_error(t("licbyl_search", query="a", knd="２"), "VALIDATION_ERROR")
+    assert_error(t("licbyl_search", query="a", search="２"), "VALIDATION_ERROR")
+    assert call.holder["up"].calls == []
+
+
+@pytest.mark.unit
+def test_lstrm_entities_without_semicolon_are_left_alone():
+    raw = ('<L><법령용어일련번호>1</법령용어일련번호><법령용어정의><![CDATA[AT&reg 와 &copy x &middot; 와 &#183; &amp;]]></법령용어정의></L>')
+    assert parse_lstrm_xml(raw)[0]["definition"] == "AT&reg 와 &copy x · 와 · &"
+
+
+def so_row(num, text, child=None):
+    row = {"조제목": "", "조가지번호": "00", "조내용": text, "조번호": num}
+    if child:
+        row["시행령조문"] = {"조제목": "", "조가지번호": "00", "법령명": "시행령", "조내용": "", "조번호": child}
+    return row
+
+
+@pytest.mark.unit
+def test_thd_cmp_knd2_row_with_heading_text_and_children_is_kept_with_warning(call):
+    rows = [so_row("0094", "제4절 양도소득금액의 계산 <개정 2009.12.31>", "0157"),
+            so_row("0094", "제4절 양도소득금액의 계산 <개정 2009.12.31>", "0158"),
+            so_row("0094", "제4절 양도소득금액의 계산 <개정 2009.12.31>"),          # plain heading row, no children
+            so_row("0095", "제4절 양도소득금액의 계산 <개정 2009.12.31>", "0160")]
+    body = json.dumps({"LspttnThdCmpLawXService": {"기본정보": {"법령ID": "001565", "법령명": "소득세법", "삼단비교존재여부": "Y"},
+                                                   "위임조문삼단비교": {"법률조문": rows}}}, ensure_ascii=False)
+    out = call({(SERVICE, "thdCmp"): body})("thdCmp_service", id="001565", knd=2, jo=94)
+    assert out["status"] == "ok"
+    kept = json.loads(out["raw_content"])["LspttnThdCmpLawXService"]["위임조문삼단비교"]["법률조문"]
+    assert [r["시행령조문"]["조번호"] for r in kept] == ["0157", "0158"]
+    assert out["selection"]["own_text_is_heading"] is True and out["selection"]["matched_rows"] == 2
+    assert "제목" in out["warning"] and "knd=1" in out["warning"] and "조문으로" not in out["warning"].replace("조문으로 인용하지", "")
+
+
+@pytest.mark.unit
+def test_thd_cmp_plain_headings_are_still_excluded_and_real_articles_have_no_heading_warning(call):
+    t = call({(SERVICE, "thdCmp"): thd_body([so_row("0005", "제5편 벌칙"), so_row("0006", "제6조 삭제 <2010.3.31>")])})
+    assert_error(t("thdCmp_service", knd=1, id="1", jo=5), "ARTICLE_NOT_FOUND")
+    ok = t("thdCmp_service", knd=1, id="1", jo=6)
+    assert ok["status"] == "ok" and "own_text_is_heading" not in ok["selection"] and "warning" not in ok

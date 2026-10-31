@@ -13,7 +13,6 @@ import datetime
 import html
 import json
 import re
-import unicodedata
 import xml.etree.ElementTree as ET
 from typing import Optional
 
@@ -38,16 +37,18 @@ THDCMP_KINDS = {"1": "인용조문", "2": "위임조문"}
 _KIND_ALIASES = {"인용조문": "1", "위임조문": "2"}
 
 
-GANA_INITIALS = {"ga", "na", "da", "ra", "ma", "ba", "sa", "a", "ja", "cha", "ka", "ta", "pa", "ha", "etc"}
-_KND_CODE_RE = re.compile(r"[A-Z][0-9]{4}")  # 법종구분코드, e.g. A0002 법률, A0003 대통령령
+_FULLWIDTH_DIGITS = {ord("０") + i: str(i) for i in range(10)}
+GANA_INITIALS = {"ga", "na", "da", "ra", "ma", "ba", "sa", "ah", "ja", "cha", "ka", "ta", "pa", "ha", "etc"}
+_KND_CODE_RE = re.compile(r"[A-Z][0-9]{4}")  # 법종구분코드, e.g. A0002 법률, A0007 대통령령
 
 
 def ascii_digits(value) -> str:
-    """Trimmed text with full-width digits (and other compatibility forms) folded to ASCII.
+    """Trimmed text with the full-width digits ０-９ folded to ASCII (nothing else is folded).
 
-    Every numeric validator goes through this, so "２０２５０４０１" is "20250401" and
-    nothing relies on str.isdigit() or \\d, which accept non-ASCII digits."""
-    return unicodedata.normalize("NFKC", "" if value is None else str(value)).strip()
+    Every numeric validator goes through this, so "２０２５０４０１" is "20250401"; other
+    look-alikes ("①", Arabic-Indic digits) stay as they are and fail the [0-9] checks.
+    Nothing relies on str.isdigit() or \\d, which accept non-ASCII digits."""
+    return ("" if value is None else str(value)).translate(_FULLWIDTH_DIGITS).strip()
 
 
 def _bad(message: str, hints: Optional[list] = None) -> ToolValidationError:
@@ -120,7 +121,7 @@ def validate_choice(value, name: str, allowed, *, upper: bool = False) -> Option
 
 
 def validate_gana(value) -> Optional[str]:
-    """사전식 검색 초성 code: ga, na, da, ra, ma, ba, sa, a, ja, cha, ka, ta, pa, ha, etc.
+    """사전식 검색 초성 code: ga, na, da, ra, ma, ba, sa, ah (ㅇ), ja, cha, ka, ta, pa, ha, etc.
 
     Anything else is silently ignored by the upstream (the filter is dropped and every
     row comes back), so it is rejected."""
@@ -136,7 +137,7 @@ def validate_gana(value) -> Optional[str]:
 
 
 def validate_law_kind(value) -> Optional[str]:
-    """법령종류 code in the 법종구분코드 form: a letter and 4 digits (A0002 법률, A0003 대통령령).
+    """법령종류 code in the 법종구분코드 form: a letter and 4 digits (A0001 헌법, A0002 법률, A0007 대통령령, A0009 총리령, A0011 부령 ...).
 
     The upstream does not publish the full code list; other shapes give 0 rows."""
     if value is None or str(value).strip() == "":
@@ -144,7 +145,7 @@ def validate_law_kind(value) -> Optional[str]:
     s = str(value).strip().upper()
     if not _KND_CODE_RE.fullmatch(s):
         raise _bad(
-            f"knd must be a 법령종류 code like 'A0002' (법률) or 'A0003' (대통령령), got: {value!r}",
+            f"knd must be a 법령종류 code like 'A0002' (법률) or 'A0007' (대통령령), got: {value!r}",
             hints=["업스트림은 알 수 없는 코드를 0건으로 응답합니다"],
         )
     return s
@@ -318,15 +319,39 @@ _HEADING_RE = re.compile(r"제\s*[0-9]+\s*(?:편|장|절|관)")
 _HANG_HEADING_RE = re.compile(r"제\s*[0-9]+\s*항\s")
 
 
+_BASE_ROW_KEYS = {"조제목", "조가지번호", "조내용", "조번호"}
+
+
+def _has_children(row: dict) -> bool:
+    """A 3단 비교 row carries delegated 시행령/시행규칙 articles as extra keys."""
+    return any(k not in _BASE_ROW_KEYS and v for k, v in row.items())
+
+
+def has_heading_text(row: dict) -> bool:
+    """The row's own 조내용 is a chapter/section heading, not article text."""
+    content = str(row.get("조내용", "") or "").strip()
+    return bool(_HEADING_RE.match(content)) or (not row.get("조제목") and bool(_HANG_HEADING_RE.match(content)))
+
+
 def is_heading_row(row: dict) -> bool:
     """Chapter/section heading rows ("제1편 총칙", "제2장 ...") share a 조번호 with real articles.
 
     A real article may have no 조제목 (e.g. content "제5조 삭제 <2010.3.31>"), so headings are
-    recognized by their content, not by an empty title."""
-    content = str(row.get("조내용", "") or "").strip()
-    if _HEADING_RE.match(content):
-        return True
-    return not row.get("조제목") and bool(_HANG_HEADING_RE.match(content))
+    recognized by their content, not by an empty title. A row that carries delegated
+    시행령/시행규칙 children is not a plain heading: for some laws the upstream fills a
+    knd=2 row's 조내용 with the enclosing chapter heading and still attaches the real
+    delegated articles (measured: 소득세법), so such a row is kept (see thdcmp_heading_only)."""
+    return has_heading_text(row) and not _has_children(row)
+
+
+def thdcmp_heading_only(new_root: dict) -> bool:
+    """True when every row kept by select_thdcmp_article has a heading as its own text."""
+    rows = []
+    for sec_key in ("인용조문삼단비교", "위임조문삼단비교"):
+        section = new_root.get(sec_key)
+        for list_key in _article_lists(section):
+            rows.extend(r for r in as_list(section[list_key]) if isinstance(r, dict))
+    return bool(rows) and all(has_heading_text(r) for r in rows)
 
 
 def select_thdcmp_article(root: dict, jo_code: str) -> tuple:
@@ -400,6 +425,8 @@ def parse_json_root(raw: str):
 # lstrm (법령용어 사전) body
 # ----------------------------------------------------------------------
 
+# only well-formed entities ending in ";": html.unescape would also turn "AT&reg" into "AT®"
+_ENTITY_RE = re.compile(r"&(?:#[0-9]+|#[xX][0-9a-fA-F]+|[A-Za-z][A-Za-z0-9]*);")
 _LSTRM_FIELDS = {
     "법령용어일련번호": "term_id",
     "법령용어명_한글": "name_ko",
@@ -430,7 +457,7 @@ def parse_lstrm_xml(raw: str) -> list:
             continue
         text = "".join(child.itertext()).strip()          # nested tags must not cut the text
         if child.tag in ("법령용어정의", "용례"):
-            text = html.unescape(text)                     # CDATA keeps entities such as &middot; literal
+            text = _ENTITY_RE.sub(lambda m: html.unescape(m.group(0)), text)   # CDATA keeps &middot; literal
         field = _LSTRM_FIELDS[child.tag]
         if not text:
             continue

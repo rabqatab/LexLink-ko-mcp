@@ -36,7 +36,7 @@ from .law_extras import (
     as_list, ascii_digits, filter_abbreviations, normalize_jo_info, normalize_ranked_rows,
     normalize_thdcmp_knd, oldnew_has_none, oldnew_versions, parse_json_root,
     parse_lstrm_xml, select_thdcmp_article, thdcmp_anchor, thdcmp_has_no_comparison,
-    thdcmp_mismatch, total_count, validate_choice, validate_digits, validate_display,
+    thdcmp_heading_only, thdcmp_mismatch, total_count, validate_choice, validate_digits, validate_display,
     validate_gana, validate_law_list_filters, validate_list_type, validate_org, validate_yyyymmdd,
     validate_ymd_range,
 )
@@ -5459,8 +5459,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             rr_cls_cd: 제개정 종류 코드 (300201 제정, 300202 일부개정, 300203 전부개정, 300204 폐지,
                 300205 폐지제정, 300206 일괄개정, 300207 일괄폐지, 300208 기타, 300209 타법개정, 300210 타법폐지)
             org: 소관부처코드
-            knd: 법령종류 code like A0002 (법률), A0003 (대통령령); other shapes are rejected
-            gana: Dictionary-order initial code: ga, na, da, ra, ma, ba, sa, a, ja, cha, ka, ta, pa, ha, etc
+            knd: 법령종류 code (A0001 헌법, A0002 법률, A0007 대통령령, A0009 총리령, A0011 부령 ...); other shapes are rejected
+            gana: Dictionary-order initial code: ga, na, da, ra, ma, ba, sa, ah, ja, cha, ka, ta, pa, ha, etc (ㅇ is `ah`)
             oc: Optional OC override (defaults to env var)
             type: Response format - "JSON" (default), "XML", or "HTML"
             ctx: MCP context (injected automatically)
@@ -5870,16 +5870,17 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             declared = int(str(root.get("totalCnt")).strip()) if root is not None else None
         except ValueError:
             declared = None
-        if root is None or not rows or declared != len(rows):
-            # never cache (or serve) a list that is unparsable, empty or does not match its own count
+        if root is None or not rows:
+            # an unparsable or empty list is never served or cached
             return create_error_response(
                 ErrorCode.UPSTREAM_ERROR,
-                "lsAbrv 응답이 불완전합니다 (JSON 해석 실패, 빈 목록 또는 totalCnt와 행 수 불일치)",
+                "lsAbrv 응답이 불완전합니다 (JSON 해석 실패 또는 빈 목록)",
                 hints=["잠시 후 다시 시도하세요. 불완전한 응답은 캐시하지 않습니다"],
                 request_id=resp.get("request_id"), declared_total=declared, rows=len(rows),
             )
-        if not cached:
-            cache.put("lsAbrv", upstream, resp)
+        mismatch = declared != len(rows)
+        if not cached and not mismatch:
+            cache.put("lsAbrv", upstream, resp)       # a list that disagrees with its own count is served, not cached
         in_range = [r for r in rows
                     if (not std_dt or str(r.get("등록일", "")) >= std_dt) and (not end_dt or str(r.get("등록일", "")) <= end_dt)]
         matched = filter_abbreviations(in_range, query)
@@ -5904,6 +5905,9 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         add_no_more_results_hint(response, page, display)
         if matched and start >= len(matched):
             response["warning"] = "page_out_of_range"
+        if mismatch:
+            response["warning"] = (f"upstream_total_mismatch: upstream totalCnt {declared} but {len(rows)} rows returned; "
+                                   "the list may be incomplete (not cached)")
         return response
 
     # ==================== TOOL 62: licbyl_search ====================
@@ -5943,7 +5947,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             org: 소관부처코드; several separated by commas
             mul_org: With several org: OR (default) or AND
             knd: 1 별표, 2 서식, 3 별지, 4 별도, 5 부록
-            gana: Dictionary-order initial code: ga, na, da, ra, ma, ba, sa, a, ja, cha, ka, ta, pa, ha, etc
+            gana: Dictionary-order initial code: ga, na, da, ra, ma, ba, sa, ah, ja, cha, ka, ta, pa, ha, etc (ㅇ is `ah`)
             oc: Optional OC override (defaults to env var)
             type: Response format - "JSON" (default), "XML", or "HTML"
             ctx: MCP context (injected automatically)
@@ -6024,8 +6028,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             anc_no: 공포번호 or range (10000~20000)
             rr_cls_cd: 제개정 종류 코드 (300201 제정 ... 300210 타법폐지; see oldAndNew_search)
             org: 소관부처코드
-            knd: 법령종류 code like A0002 (법률), A0003 (대통령령); other shapes are rejected
-            gana: Dictionary-order initial code: ga, na, da, ra, ma, ba, sa, a, ja, cha, ka, ta, pa, ha, etc
+            knd: 법령종류 code (A0001 헌법, A0002 법률, A0007 대통령령, A0009 총리령, A0011 부령 ...); other shapes are rejected
+            gana: Dictionary-order initial code: ga, na, da, ra, ma, ba, sa, ah, ja, cha, ka, ta, pa, ha, etc (ㅇ is `ah`)
             oc: Optional OC override (defaults to env var)
             type: Response format - "JSON" (default), "XML", or "HTML"
             ctx: MCP context (injected automatically)
@@ -6156,6 +6160,13 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             )
         response["raw_content"] = json.dumps({root_key: new_root}, ensure_ascii=False)
         response["selection"] = {"jo": jo, "matched_rows": matched, "total_rows": total}
+        if thdcmp_heading_only(new_root):
+            response["selection"]["own_text_is_heading"] = True
+            response["warning"] = (
+                (response["warning"] + " / " if response.get("warning") else "")
+                + "이 knd에서 업스트림의 법률조문 조내용은 조문이 아니라 장·절 제목입니다(조번호만 해당 조문). "
+                  "조문 본문으로 인용하지 마세요. 시행령·시행규칙 하위 조문은 유효하며, 법률 조문 본문은 knd=1 또는 "
+                  "eflaw_service / law_service(jo)로 확인하세요")
         return response
 
     # ==================== TOOL 65: lstrm_search ====================
@@ -6198,7 +6209,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             page: Page number (1-based, default 1)
             sort: lasc/ldes (term name), rasc/rdes (등록일자)
             reg_dt: 등록일자 range YYYYMMDD~YYYYMMDD
-            gana: Dictionary-order initial code: ga, na, da, ra, ma, ba, sa, a, ja, cha, ka, ta, pa, ha, etc
+            gana: Dictionary-order initial code: ga, na, da, ra, ma, ba, sa, ah, ja, cha, ka, ta, pa, ha, etc (ㅇ is `ah`)
             dic_knd_cd: 010101 (법령) or 010102 (행정규칙)
             oc: Optional OC override (defaults to env var)
             type: Response format - "JSON" (default), "XML", or "HTML"
