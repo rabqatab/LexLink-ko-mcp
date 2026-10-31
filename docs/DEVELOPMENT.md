@@ -18,6 +18,7 @@ Tests mock the upstream API (fixtures in `tests/fixtures/`). There is no coverag
 | File | Role |
 |---|---|
 | `server.py` | `create_server()`: all tools, prompts, resources, `SERVER_INSTRUCTIONS` |
+| `tool_policy.py` | `TOOL_POLICIES`: per-tool policy metadata published as `_meta["lexlink/policy"]`, and its validator |
 | `_helpers.py` | `TOOL_ANNOTATIONS`, `handle_tool_error`, `run_search`, `run_service`, the `SLIM_RESPONSE` helpers and size guard |
 | `client.py` | HTTP client for law.go.kr: anti-bot redirect following, structured upstream error detection |
 | `params.py` | snake_case to upstream camelCase mapping, OC resolution (`oc` argument, then `OC` env; the argument is ignored in HTTP mode) |
@@ -51,8 +52,9 @@ Where each runtime variable is read: `grep -rn "getenv\|environ" src/`. The docu
 
 1. Find the upstream endpoint and target in the [API reference](API_REFERENCE.md) or the open.law.go.kr guide, and call it once to see the real response shape.
 2. Add the function in `server.py` following a neighbouring tool; reuse `run_search` / `run_service`.
-3. Add offline tests with a fixture of the real response.
-4. Update the tool list in [API_REFERENCE.md](API_REFERENCE.md) and the counts in the READMEs and AGENTS.md. Regenerate the tool list from the server instead of editing it by hand:
+3. Add an entry for the tool in `TOOL_POLICIES` in `src/lexlink/tool_policy.py` (category, evidence, size, upstream_calls, credential, short note). Decide the values from the code and a live measurement (count requests, measure the response size, check the OC is not in it), not by analogy; the rules are in the module docstring and in [API_REFERENCE.md](API_REFERENCE.md#도구-정책-메타데이터). Without an entry `create_server()` raises and `tests/test_tool_policy.py` fails.
+4. Add offline tests with a fixture of the real response.
+5. Update the tool list in [API_REFERENCE.md](API_REFERENCE.md) and the counts in the READMEs and AGENTS.md. Regenerate the tool list from the server instead of editing it by hand:
 
    ```python
    import asyncio
@@ -61,7 +63,7 @@ Where each runtime variable is read: `grep -rn "getenv\|environ" src/`. The docu
    print(len(tools), sorted(t.name for t in tools))
    ```
 
-5. Add a line under Unreleased in [CHANGELOG.md](../CHANGELOG.md), in both the English and Korean sections.
+6. Add a line under Unreleased in [CHANGELOG.md](../CHANGELOG.md), in both the English and Korean sections.
 
 ## Docs rules
 

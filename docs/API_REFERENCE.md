@@ -178,6 +178,31 @@
 
 ---
 
+## 도구 정책 메타데이터
+
+모든 도구는 `tools/list` 항목의 `_meta["lexlink/policy"]`에 정책(계약 v1)을 싣습니다. 클라이언트가 노출할 도구를 고르는 데 쓰라고 있는 값이며 도구 동작·입력 스키마·annotations는 바꾸지 않습니다. 표는 `src/lexlink/tool_policy.py`의 `TOOL_POLICIES` 한 곳에 있고, 서버에서 바로 읽을 수 있습니다:
+
+```python
+import asyncio
+from lexlink.server import create_server
+for t in asyncio.run(create_server().list_tools()):
+    print(t.name, t.meta["lexlink/policy"])
+```
+
+| 필드 | 값 | 뜻 |
+|---|---|---|
+| `version` | `1` | 계약 버전 |
+| `category` | `law`, `law_history`, `law_compare`, `admin_rule`, `ordinance`, `treaty`, `precedent`, `constitutional`, `interpretation`, `admin_appeal`, `committee`, `knowledge`, `chain`, `assist`, `meta` | 도구 분류 |
+| `evidence` | `primary` / `derived` / `heuristic` / `none` | `primary`: 응답의 법령·결정 본문 필드(조문 본문, 판시사항, 법령명, ID, 날짜 등)가 업스트림 표현을 담는다. primary 텍스트에서 LexLink는 공백 정리와 조·항·호·목 연결(`article_unit_text`)만 할 수 있고 글자는 바꾸지 않는다. 정렬·필터·재페이지, 별도 필드에 담긴 LexLink 계산값(`in_force`, 플래그, diff)은 여전히 `primary`. `derived`: 원문 표현 자체를 편집·재구성해 글자가 원문과 다를 수 있다(`oldAndNew_service`). `heuristic`: 추정·통계·요약(`check_precedent_odds`, `simplify_article`). `none`: 법률 내용 없음(`cache_stats`) |
+| `size` | `normal` / `large` | `large`: 대표 측정 크기가 약 100KB 이상이고 제공되는 제어(`jo`, `sections`, `display`, `id` 등)로도 그 아래로 줄일 수 없음 |
+| `upstream_calls` | 정수 | 통상적인 법령·질의 1건에서 도구 1회 호출당 law.go.kr 요청 수의 통상 최대(캐시 없음). 안티봇 리다이렉트 홉은 세지 않고, 대형 법령의 이력 페이지 추가 등 더 큰 상한은 `notes`에 적는다 |
+| `may_expose_credential` | bool | OC 등 자격 증명이 클라이언트 리댁션 후에도 응답에 있을 수 있으면 true |
+| `notes` | 문자열(선택) | 짧은 주의 |
+
+분류 규칙: `*_search`/목록 도구도 업스트림 필드를 그대로 돌려주면 `primary`입니다(원문을 고쳐 쓰는 `elaw_search`(강조 마크업 제거)와 HTML을 표로 재구성하는 `drlaw_search`만 `derived`). `article_citation`(HTML 스크래핑)과 `thdCmp_service`(`eflaw_service`와 개정 표기·따옴표 문자가 다름: 14개 조문 중 8개)도 `derived`입니다. `jo`/`sections`를 안 주면 매우 커도 그 제어로 줄어드는 도구(`eflaw_service`, `law_service`, `prec_service`, `thdCmp_service`)는 `normal`이고 `notes`에 측정 범위와 제어를 적습니다. 값은 코드를 읽고 실제 응답을 측정해 정했습니다. 새 도구는 표에 항목이 없으면 서버가 시작되지 않습니다([DEVELOPMENT.md](DEVELOPMENT.md#adding-a-tool)).
+
+---
+
 ## LexLink 파생 도구
 
 업스트림 API 하나에 대응하지 않고 여러 호출이나 HTML 파싱으로 만든 도구입니다. 동작은 도구 설명과 CHANGELOG(Unreleased 포함)에 근거하며, 오프라인 테스트가 있습니다.
