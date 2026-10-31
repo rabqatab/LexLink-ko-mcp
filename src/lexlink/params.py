@@ -164,7 +164,7 @@ def map_params_to_upstream(snake_params: dict) -> dict:
         "nw": "nw",
         "ld": "ld",
         "ln": "ln",
-        "lm": "lm",
+        "lm": "LM",          # 법령명 (upstream requires uppercase; lowercase silently matches nothing)
         "lang": "lang",
         "lid": "LID",
         "curt": "curt",      # 법원명 (court name, precedents)

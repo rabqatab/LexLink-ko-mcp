@@ -671,6 +671,49 @@ LEGAL_TERM_SUFFIXES = re.compile(
 )
 
 
+LOW_RELEVANCE_WARNING = (
+    "relevance_unverified: 결과 본문·법령명에서 질의어와 글자가 일치하는 부분을 찾지 못했습니다. "
+    "약어·외국어·구어체 질의는 결과가 맞아도 이 경고가 뜰 수 있으니 내용을 직접 확인하세요"
+)
+RELEVANCE_UNCHECKABLE_WARNING = (
+    "relevance_unverified: 질의에서 비교할 수 있는 2자 이상의 글자를 찾지 못해 "
+    "결과의 관련성을 확인하지 못했습니다. 결과를 직접 확인하세요"
+)
+_RELEVANCE_FIELDS = ("법령명", "조문제목", "조문내용")
+
+
+def _query_grams(query: str) -> set:
+    """Character bigrams of each word. Single-character words and digit-only
+    words yield nothing: they match dates, article numbers and particles by accident."""
+    grams: set = set()
+    for word in re.findall(r"[0-9A-Za-z\u3131-\u318E\uAC00-\uD7A3]+", query.lower()):
+        if word.isdigit():
+            continue
+        grams.update(word[i:i + 2] for i in range(len(word) - 1))
+    return grams
+
+
+def low_relevance_warning(query: str, rows: list) -> Optional[str]:
+    """Soft warning when no result's name/title/body shares a bigram with the query.
+
+    aiSearch exposes no relevance score, so this is only a lexical hint, not a
+    verdict: abbreviations, foreign terms and colloquial queries can warn even
+    when the results are right. Never drops data. Rows without the content
+    fields (e.g. appendix searches) are not judged.
+    """
+    rows = [r for r in rows if isinstance(r, dict) and any(k in r for k in _RELEVANCE_FIELDS)]
+    if not rows:
+        return None
+    grams = _query_grams(query or "")
+    if not grams:
+        return RELEVANCE_UNCHECKABLE_WARNING
+    for row in rows:
+        text = " ".join(str(row.get(k, "")) for k in _RELEVANCE_FIELDS).lower()
+        if any(g in text for g in grams):
+            return None
+    return LOW_RELEVANCE_WARNING
+
+
 # The 주문 ends at ANY following 【...】 heading (이유, 청구취지 및 항소취지, ...)
 # or at a known [..] heading; the body is capped so a missing heading cannot
 # swallow the judgment.

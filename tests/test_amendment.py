@@ -112,12 +112,13 @@ def tools(monkeypatch):
     monkeypatch.setenv("OC", "test")
     FakeClient.calls = []
     from lexlink.cache import get_cache
-    get_cache().clear() if hasattr(get_cache(), "clear") else None
+    get_cache().invalidate()
     server = server_mod.create_server()
 
     def call(name, **kwargs):
         return server._tool_manager.get_tool(name).fn(**kwargs)
-    return call
+    yield call
+    get_cache().invalidate()
 
 
 # ---------------------------------------------------------------- law_amendment_summary
@@ -248,11 +249,12 @@ def test_chain_amendment_track_summary_only(tools):
 
 
 def test_chain_amendment_track_falls_back_to_latest_two(tools):
-    # Window excludes both lsJoHstInf change dates (2020, 2023) → latest two revisions
+    # Window excludes both lsJoHstInf change dates (2020, 2023) → latest two in-force revisions
+    # (the two newest rows, 291259/285693, are 시행예정 and skipped)
     out = tools("chain_amendment_track", law_name="저작권법", article="35의5", date_from="20240101")
     diff = out["article_diff"]
-    assert diff["new_mst"] == "291259" and diff["old_mst"] == "285693"
-    assert "latest two revisions" in diff["basis"]
+    assert diff["new_mst"] == "283335" and diff["old_mst"] == "270165"
+    assert "fallback" in diff["basis"] and "in-force" in diff["basis"]
 
 
 # ---------------------------------------------------------------- precedent fallback
