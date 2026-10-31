@@ -31,7 +31,7 @@ tests/               # 122 offline tests (tracked in git): test_cache, test_cgm_
 
 `__version__` (`src/lexlink/__init__.py`) is read from package metadata and reported as MCP `serverInfo.version` (current release: v2.2.0).
 
-## Tools (54 total)
+## Tools (55 total)
 
 | Phase | Tools | Purpose |
 |-------|-------|---------|
@@ -59,7 +59,7 @@ tests/               # 122 offline tests (tracked in git): test_cache, test_cgm_
 ## MCP Resources (2 total)
 
 1. `lexlink://laws/frequently-used` (static) - Cached mapping of ~20 frequently-used law names to 법령ID codes
-2. `lexlink://law/{name}` (template) - Look up a specific law's 법령ID by Korean name or abbreviation. The name is URL-decoded, resolver aliases are consulted (e.g. 자통법 → 자본시장과 금융투자업에 관한 법률, `010513`), and one live `law_search` exact-name lookup is the fallback
+2. `lexlink://law/{name}` (resource template; `{name}` is a placeholder, read e.g. `lexlink://law/자통법` without braces) - Look up a specific law's 법령ID by Korean name or abbreviation. The name is URL-decoded, resolver aliases are consulted (e.g. 자통법 → 자본시장과 금융투자업에 관한 법률, `010513`), and one live `law_search` exact-name lookup is the fallback
 
 ## Key Patterns
 

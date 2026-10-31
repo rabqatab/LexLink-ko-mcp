@@ -192,3 +192,80 @@ def attach_parsed_data(response: dict, response_type: str) -> dict:
     if parsed:
         response["parsed_data"] = parsed
     return response
+
+
+# Only exact synonyms are reported: 상위어/하위어/연관어/반의어 links can invert or shift the legal sense.
+GLOSS_RELATIONS = ("동의어",)
+
+
+def pick_linked_term(root: Any, name_key: str, term: str = "") -> tuple[str, str, bool]:
+    """Pick a synonym from a lstrmRlt/dlytrmRlt body root as ``(name, relation, ambiguous)``.
+
+    The upstream shape is ``root[<법령용어|일상용어>]`` = one dict, or a list of dicts
+    for homonyms, each holding ``연계용어`` (list, or a dict for a single link).
+    Entities whose own name differs from ``term`` are ignored (exact match only). With
+    several homonym entities the sense is unknown, so nothing is picked and
+    ``ambiguous`` is True. Only 동의어 links are used; a link equal to ``term`` is skipped.
+    """
+    if not isinstance(root, dict):
+        return "", "", False
+    entities: list = []
+    for value in root.values():
+        for entity in (value if isinstance(value, list) else [value]):
+            if not (isinstance(entity, dict) and "연계용어" in entity):
+                continue
+            own = str(entity.get("법령용어명") or entity.get("일상용어명") or "").strip()
+            if term and own and own != term:
+                continue
+            entities.append(entity)
+    if len(entities) > 1:
+        return "", "", True
+    if not entities:
+        return "", "", False
+    linked = entities[0]["연계용어"]
+    links = linked if isinstance(linked, list) else [linked]
+    for relation in GLOSS_RELATIONS:
+        for link in links:
+            if isinstance(link, dict) and link.get("용어관계") == relation:
+                name = str(link.get(name_key) or "").strip()
+                if name and name != term:
+                    return name, relation, False
+    return "", "", False
+
+
+def parse_drlaw_html(html: str) -> Optional[dict]:
+    """Parse the drlaw (법령-자치법규 연계현황) HTML dashboard into plain data.
+
+    Returns ``{"total", "columns", "rows"}`` where each row holds 소관부처, 법령명,
+    조문 and ``자치법규수`` (counts keyed by the column headers: 전체, 서울, ...),
+    or None when the expected statistics table is missing.
+    """
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html or "", "html.parser")
+    table = soup.find("table", id="unOrdinStatsTb")
+    body = table.find("tbody") if table else None
+    if body is None:
+        return None
+    header_rows = table.find("thead").find_all("tr") if table.find("thead") else []
+    columns = [th.get_text(strip=True) for th in header_rows[-1].find_all("th")] if header_rows else []
+    rows = []
+    for tr in body.find_all("tr"):
+        cells = tr.find_all("td")
+        if len(cells) < 3:
+            continue
+        # The article <td> is never closed upstream, so the count cells nest inside it:
+        # read only its own text and take the counts by class.
+        article = "".join(cells[2].find_all(string=True, recursive=False)).strip()
+        counts = [c.get_text(strip=True) for c in tr.find_all("td", class_="unordTd")]
+        rows.append({
+            "소관부처": cells[0].get_text(strip=True),
+            "법령명": cells[1].get_text(strip=True),
+            "조문": article,
+            "자치법규수": dict(zip(columns, counts)) if len(columns) == len(counts) else counts,
+        })
+    total = None
+    num = soup.select_one(".lelitop .num strong")
+    if num and num.get_text(strip=True).isdigit():
+        total = int(num.get_text(strip=True))
+    return {"total": total, "columns": columns, "rows": rows}

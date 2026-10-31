@@ -16,7 +16,7 @@ LexLink is an MCP (Model Context Protocol) server that exposes the Korean Nation
 
 ## Features
 
-- **54 MCP Tools + 2 MCP Resources** for comprehensive Korean law information access
+- **55 MCP Tools + 2 MCP Resources** for comprehensive Korean law information access
   - Search and retrieve Korean laws (effective date & announcement date)
   - Search and retrieve English-translated laws
   - Search and retrieve administrative rules (행정규칙)
@@ -35,7 +35,7 @@ LexLink is an MCP (Model Context Protocol) server that exposes the Korean Nation
     - Related laws discovery (aiRltLs_search)
   - **MCP Resources - Law ID Cache**
     - Cached mapping of ~20 frequently-used law names to stable 법령ID codes
-    - Template lookup by Korean name or abbreviation (`lexlink://law/{name}`): URL-decodes the name, consults resolver aliases (e.g. 자통법 → 자본시장과 금융투자업에 관한 법률, 010513), and falls back to one live `law_search` exact-name lookup
+    - Template lookup by Korean name or abbreviation (resource template `lexlink://law/{name}`; `{name}` is a placeholder - read e.g. `lexlink://law/자통법` without braces): URL-decodes the name, consults resolver aliases (e.g. 자통법 → 자본시장과 금융투자업에 관한 법률, 010513), and falls back to one live `law_search` exact-name lookup
     - Dynamic caching: search results automatically populate the cache
 - **Smart Features** (inspired by [korean-law-mcp](https://github.com/chrisryugj/korean-law-mcp)):
   - **Intelligent Caching** - Per-tool TTL caching (search 1hr, articles 24hr, AI search 30min)
