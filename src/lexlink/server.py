@@ -31,10 +31,11 @@ from .resolver import get_resolver
 from ._helpers import (
     TOOL_ANNOTATIONS, stringify_id, handle_tool_error, ToolValidationError,
     slim_response, run_search, run_service, annotate_prec_body_availability,
-    extract_outcome, extract_key_factors, extract_legal_terms, compute_text_diff, run_coroutine_sync,
-    compact_limit, slim_limited, slim_enabled, mark_slim_cut,
+    extract_order, classify_order, extract_key_factors, extract_legal_terms, compute_text_diff, run_coroutine_sync,
+    compact_limit, slim_limited, slim_enabled, mark_slim_cut, low_relevance_warning,
     rename_row_ids_to_rank, run_ranked_paging, validate_paging, OVER_FETCH_WINDOW,
-    add_no_more_results_hint, add_no_results_guidance,
+    add_no_more_results_hint, add_no_results_guidance, body_is_all_null,
+    trim_raw_to_ranked,
     NO_RESULTS_MESSAGE, NO_RESULTS_HINTS, NO_RESULTS_BODY_HINT, OUTCOME_NOTE,
 )
 
@@ -67,7 +68,7 @@ When a user asks about a specific law article (e.g., "건축법 제3조", "자�
 
 2. **Citations**: ALWAYS use `article_citation` to get referenced laws
    - Parameters: mst, law_name, article number
-   - This provides 100% accurate citation data
+   - Parsed from the official law.go.kr hyperlinks (not LLM-based); "같은 법" is resolved heuristically, so verify against the article text when it matters
 
 3. **Response**: Include citation summary
    - Total count, external vs internal
@@ -131,7 +132,7 @@ Use `sections="full"` only when the complete judgment text is specifically neede
 
 **Public Legal Assistance:**
 - legal_resolver: Given a situation, find all applicable laws, precedents, and interpretations in one call
-- simplify_article: Get a law article with legal terms replaced by everyday Korean (쉬운 법률)
+- simplify_article: Get a law article with a glossary of database synonym links for its legal terms (text is not rewritten)
 - check_precedent_odds: Find precedent statistics and key outcome factors for a legal question
 - law_amendment_summary: See all revisions of a law in a date range
 - article_amendment_diff: Compare how a specific article changed between two versions
@@ -139,7 +140,7 @@ Use `sections="full"` only when the complete judgment text is specifically neede
 **Guided Workflows (Prompts):**
 - analyze-legal-situation: Describe your situation in plain Korean → get applicable laws, rights, and action steps
 - explain-legal-document: Paste a legal document → get plain Korean explanation
-- check-legal-precedent: Ask a yes/no legal question → get precedent-backed answer with success rate
+- check-legal-precedent: Ask a yes/no legal question → get precedent-backed answer (outcome distribution, not a win rate)
 
 ## Tool Selection for Casual Users
 
@@ -438,7 +439,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
     @server.resource(
         "lexlink://law/{name}",
         name="law-code-lookup",
-        description="Look up a specific Korean law's stable 법령ID by name (Korean). Returns the law's ID, full name, abbreviation, and type. If not found, use eflaw_search or law_search tool instead.",
+        description="Look up a specific Korean law's stable 법령ID by name (Korean). Replace {name} with the plain name, no braces (e.g. lexlink://law/자통법). Returns the law's ID, full name, abbreviation, and type. If not found, use eflaw_search or law_search tool instead.",
         mime_type="application/json",
     )
     def get_law_by_name(name: str) -> str:
@@ -675,6 +676,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         ef_yd: Optional[int] = None,
         jo: Optional[Union[str, int]] = None,
         chr_cls_cd: Optional[str] = None,
+        lm: Optional[str] = None,
         oc: Optional[str] = None,
         type: str = "JSON",
         ctx: Context = None,
@@ -689,9 +691,10 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         Using `jo` returns only the requested article, which is much faster and cleaner.**
 
         Args:
-            id: Law ID (either id or mst is required)
+            id: Law ID (either id, mst or lm is required)
             mst: Law serial number (MST/lsi_seq)
-            ef_yd: Effective date (YYYYMMDD) - required when using mst
+            ef_yd: Effective date (YYYYMMDD) - required when using mst without id
+            lm: Law name (alternative to id/mst)
             jo: **REQUIRED for specific articles.** Article number. Accepts 35, "35", "35의5",
                 "제35조의5", "35-5" or the 6-digit code "003505" (all normalized to XXXXXX:
                 first 4 digits = article number zero-padded, last 2 digits = branch suffix, 00=main).
@@ -713,12 +716,20 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         """
         (id, mst, jo) = stringify_id(id, mst, jo)
         resolved_oc = resolve_oc(override_oc=oc)
-        if not id and not mst:
-            raise ValueError("Either 'id' or 'mst' parameter is required")
+        if not id and not mst and not lm:
+            raise ValueError("One of 'id', 'mst' or 'lm' parameter is required")
+        if mst and not id and not ef_yd:
+            # Upstream answers MST-only eflaw requests with the misleading
+            # "미신청" page; ef_yd is what it actually needs.
+            raise ValueError(
+                "'ef_yd' (effective date, YYYYMMDD) is required when using 'mst' without 'id'. "
+                "Take it from eflaw_search (시행일자) or pass 'id' instead."
+            )
         jo = _normalize_jo_arg(jo)
         snake_params = {"oc": resolved_oc, "target": "eflaw", "type": type}
         if id: snake_params["id"] = id
         if mst: snake_params["mst"] = mst
+        if lm: snake_params["lm"] = lm
         if ef_yd: snake_params["ef_yd"] = ef_yd
         if jo: snake_params["jo"] = jo
         if chr_cls_cd: snake_params["chr_cls_cd"] = chr_cls_cd
@@ -777,8 +788,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         """
         (id, mst, jo) = stringify_id(id, mst, jo)
         resolved_oc = resolve_oc(override_oc=oc)
-        if not id and not mst:
-            raise ValueError("Either 'id' or 'mst' parameter is required")
+        if not id and not mst and not lm:
+            raise ValueError("One of 'id', 'mst' or 'lm' parameter is required")
         jo = _normalize_jo_arg(jo)
         snake_params = {"oc": resolved_oc, "target": "law", "type": type}
         if id: snake_params["id"] = id
@@ -1012,7 +1023,14 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 parsed = parse_xml_response(raw_content)
             if not parsed:
                 return None
-            return parsed, extract_law_list(parsed)
+            laws = extract_law_list(parsed)
+            # Upstream wraps matched keywords, e.g. NURSING <strong class="tbl_tx_type">ACT</strong>
+            from .article_text import strip_html
+            for law in laws:
+                for key, value in law.items():
+                    if isinstance(value, str) and "<" in value:
+                        law[key] = strip_html(value)
+            return parsed, laws
 
         def _rank(laws: list) -> list:
             # elaw target accepts both Korean and English queries, so detect language
@@ -1048,6 +1066,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             response["ranking_applied"] = applied
         add_no_more_results_hint(response, page, display)
         add_no_results_guidance(response)
+        if ranking_enabled:
+            trim_raw_to_ranked(response, type)
         rename_row_ids_to_rank(response)
         return slim_response(response)
 
@@ -1075,7 +1095,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         Args:
             id: Law ID (required if mst not provided)
             mst: Law master number (required if id not provided)
-            lm: Law name (alternative search method)
+            lm: Korean law name (exact; English names do not match). Alone it is enough
+                (alternative to id/mst).
             ld: Announcement date (YYYYMMDD)
             ln: Announcement number
             oc: Optional OC override (defaults to env var)
@@ -1093,8 +1114,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             >>> elaw_service(mst="127280", type="XML")
         """
         (id, mst) = stringify_id(id, mst)
-        if not id and not mst:
-            raise ValueError("Either 'id' or 'mst' parameter is required")
+        if not id and not mst and not lm:
+            raise ValueError("One of 'id', 'mst' or 'lm' parameter is required")
         resolved_oc = resolve_oc(override_oc=oc)
         snake_params = {"oc": resolved_oc, "target": "elaw", "type": type}
         if id: snake_params["id"] = id
@@ -1414,7 +1435,19 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         params = {"oc": resolved_oc, "target": "drlaw"}
         upstream_params = map_params_to_upstream(params)
         client = _get_client()
-        return client.get("/DRF/lawSearch.do", upstream_params, response_type="HTML")
+        response = client.get("/DRF/lawSearch.do", upstream_params, response_type="HTML")
+        if response.get("status") == "ok" and isinstance(response.get("raw_content"), str):
+            from .linkage import parse_drlaw_html
+            parsed = parse_drlaw_html(response["raw_content"])
+            if parsed is not None:
+                # The ~36KB HTML page is a rendered dashboard, not data: return the table instead.
+                response = {k: v for k, v in response.items() if k != "raw_content"}
+                response["parsed_data"] = parsed
+                response["content_note"] = (
+                    "원본 HTML 대시보드를 표로 파싱했습니다 (첫 페이지 기준: rows는 업스트림이 돌려준 "
+                    f"{len(parsed['rows'])}건, total은 전체 건수). 조문별 자치법규수는 지자체별 건수입니다."
+                )
+        return response
 
     # ==================== TOOL 15: lsDelegated_service ====================
     @server.tool(annotations=TOOL_ANNOTATIONS)
@@ -1568,7 +1601,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
 
         Args:
             id: Precedent sequence number (판례일련번호, not the search row number)
-            lm: Precedent name (optional)
+            lm: Precedent name; must be the exact title and is only used without id
+                (ignored when id is given, since a mismatch makes upstream report no match)
             sections: Response detail level:
                 - "summary": Returns 판시사항, 판결요지, 참조조문, 참조판례 only (~5KB).
                   Excludes 판례내용 (full judgment text, often 15-25KB).
@@ -1592,7 +1626,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             "oc": resolved_oc, "target": "prec",
             "id": str(id), "type": type,
         }
-        if lm: snake_params["lm"] = lm
+        if lm and not id: snake_params["lm"] = lm
         return run_service(get_client=_get_client, target="prec",
                           snake_params=snake_params, response_type=type,
                           sections=sections,
@@ -1683,7 +1717,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
 
         Args:
             id: Constitutional Court decision sequence number (헌재결정례일련번호, not the search row number)
-            lm: Decision name (optional)
+            lm: Decision name; must be the exact title and is only used without id
+                (ignored when id is given, since a mismatch makes upstream report no match)
             sections: "summary" to exclude 전문 (full text), or "full"/None for everything.
                 **Recommended: "summary" for PlayMCP** to stay under 20KB.
             oc: Optional OC override
@@ -1701,7 +1736,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             "oc": resolved_oc, "target": "detc",
             "id": str(id), "type": type,
         }
-        if lm: snake_params["lm"] = lm
+        if lm and not id: snake_params["lm"] = lm
         return run_service(get_client=_get_client, target="detc",
                           snake_params=snake_params, response_type=type,
                           sections=sections,
@@ -1976,7 +2011,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
 
         This tool extracts all legal citations referenced by a specific law article.
         It parses the official hyperlinked citations from law.go.kr HTML pages,
-        providing 100% accurate citation data with zero API cost.
+        with zero API cost. "같은 법" and article lists are resolved heuristically
+        (not guaranteed), so verify against the article text when it matters.
 
         The tool identifies:
         - External citations (references to other laws)
@@ -2112,10 +2148,17 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             "oc": resolved_oc, "target": "aiSearch", "type": type,
             "query": query, "search": search, "display": display, "page": page,
         }
-        return run_search(
+        result = run_search(
             get_client=_get_client, target="aiSearch", query=query,
             snake_params=snake_params, response_type=type, display=display,
         )
+        if result.get("status") == "ok":
+            rows = next((v for v in (result.get("ranked_data") or {}).values()
+                         if isinstance(v, list)), [])
+            low = low_relevance_warning(query, rows)
+            if low:
+                result["warnings"] = list(result.get("warnings") or []) + [low]
+        return result
 
     # ==================== TOOL 26: aiRltLs_search ====================
     @server.tool(annotations=TOOL_ANNOTATIONS)
@@ -2275,8 +2318,9 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         ⚠️ 응답이 클 수 있고 크기 제어 옵션 없음.
 
         Args:
-            id: Ordinance ID (either id or mst is required)
-            mst: Ordinance master number (either id or mst is required)
+            id: 자치법규ID (either id or mst is required). NOT the 자치법규일련번호 -
+                a 일련번호 passed as id returns NOT_FOUND.
+            mst: 자치법규일련번호 (ordinance master/serial number; either id or mst is required)
             oc: Optional OC override (defaults to env var)
             type: Response format - "JSON" (default), "XML", or "HTML"
             ctx: MCP context (injected automatically)
@@ -2708,7 +2752,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         if mst: snake_params["mst"] = mst
         response = run_service(get_client=_get_client, target="lstrmRltJo",
                                snake_params=snake_params, response_type=type)
-        return attach_parsed_data(response, type)
+        return add_no_results_guidance(attach_parsed_data(response, type))
 
     # ==================== TOOL 37: jo_rlt_lstrm_search ====================
     @server.tool(annotations=TOOL_ANNOTATIONS)
@@ -2929,8 +2973,17 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             "oc": resolved_oc, "target": target,
             "id": str(id), "type": type,
         }
-        return run_service(get_client=_get_client, target=target,
-                          snake_params=snake_params, response_type=type)
+        response = run_service(get_client=_get_client, target=target,
+                               snake_params=snake_params, response_type=type)
+        # Unknown ids come back as 200 with every field the literal "null"/blank
+        if (response.get("status") == "ok" and isinstance(response.get("raw_content"), str)
+                and body_is_all_null(response["raw_content"], type, str(id))):
+            return create_error_response(
+                ErrorCode.NOT_FOUND,
+                f"{committee} 결정문일련번호 {id}에 해당하는 결정문이 없습니다 (본문 필드가 모두 비어 있음).",
+                hints=["committee_search 결과의 실제 결정문일련번호를 사용하세요"],
+            )
+        return response
 
     # ==================== TASK 13: 중앙부처 1차 해석 ====================
 
@@ -3334,14 +3387,30 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         best["all_failed"] = succeeded == 0
         return best
 
+    HISTORY_MAX_PAGES = 30  # safety cap: 100 rows/page
+
+    def _upstream_failure_response(law_name: str, failure: dict) -> dict:
+        return create_error_response(
+            error_code=failure["error_code"],
+            message=f"법령 '{law_name}' 조회 중 upstream 오류가 발생했습니다 ({failure['source']}={failure['error_code']}). Upstream request failed.",
+            hints=["법령이 없는 것이 아니라 조회가 실패했습니다. 잠시 후 다시 시도하세요",
+                   "OC 승인 및 해당 API 신청 여부(open.law.go.kr)와 네트워크 상태를 확인하세요"],
+            success=False,
+            failed_sources=[dict(failure)],
+        )
+
     def _resolve_law_versions(law_name: str, resolved_oc: str, response_type: str,
                               need_history: bool = False) -> dict:
         """Resolve a law name to one 법령ID and (optionally) all of its versions.
 
         Step 1: eflaw search by name → rows for the best-matching 법령ID
                 (exact 법령명한글, 법률 preferred unless the user named a 시행령/시행규칙).
-        Step 2 (need_history): eflaw search filtered by LID (paged) → every
-                연혁/현행/시행예정 row of that law, de-duplicated by MST.
+        Step 2 (need_history): eflaw search filtered by LID (paged, nw=1,2,3: JSON
+                returns only the 현행 row without it) → every 연혁/현행/시행예정 row
+                of that law, de-duplicated by MST.
+
+        An upstream failure returns the error response itself (``status == "error"``)
+        so callers can pass it on instead of reporting "법령을 찾을 수 없습니다".
         """
         search_params = {
             "oc": resolved_oc, "target": "eflaw", "type": response_type,
@@ -3353,6 +3422,9 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             ranking_field="법령명한글", list_type="law",
             over_fetch_key="numOfRows",
         )
+        err = _result_error(search_result, "eflaw 법령 검색")
+        if err:
+            return _upstream_failure_response(law_name, err)
         rows = select_law_rows(law_rows(search_result), law_name)
         if not rows:
             raise ToolValidationError(
@@ -3371,22 +3443,32 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         all_rows = list(rows)
         if need_history and law_id:
             fetched: list = []
+            raw_count = 0
             page = 1
-            while page <= 3:
+            while page <= HISTORY_MAX_PAGES:
                 lid_params = {
                     "oc": resolved_oc, "target": "eflaw", "type": response_type,
-                    "lid": law_id, "display": 100, "page": page,
+                    "lid": law_id, "display": 100, "page": page, "nw": "1,2,3",
                 }
                 lid_result = run_search(
                     get_client=_get_client, target="eflaw", query="",
                     snake_params=lid_params, response_type=response_type, display=100,
                     ranking_field=None, list_type=None,
                 )
-                page_rows = [r for r in law_rows(lid_result) if r.get("법령ID") == law_id]
-                fetched.extend(page_rows)
+                err = _result_error(lid_result, "eflaw 연혁 조회")
+                if err:
+                    return _upstream_failure_response(law_name, err)
+                raw_rows = law_rows(lid_result)
+                fetched.extend(r for r in raw_rows if r.get("법령ID") == law_id)
+                raw_count += len(raw_rows)
                 _, total = _items_from_result(lid_result, response_type)
-                if not page_rows or len(fetched) >= total or len(page_rows) < 100:
+                if not raw_rows or raw_count >= total:
                     break
+                if page == HISTORY_MAX_PAGES:
+                    info["warnings"] = [
+                        f"연혁 조회가 {HISTORY_MAX_PAGES}페이지({raw_count}행)에서 중단되었습니다 "
+                        f"(upstream 총 {total}행): 오래된 개정 이력이 누락되었을 수 있습니다"
+                    ]
                 page += 1
             if fetched:
                 all_rows = fetched
@@ -3451,10 +3533,11 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         ctx: Context = None,
     ) -> dict:
         """
-        Find precedent statistics and key outcome factors for a legal question (판례 승률 분석).
+        Find precedent statistics and key outcome factors for a legal question (판례 결과 분포).
 
-        Searches court precedents, analyzes outcomes (인용/기각/파기), and extracts
-        key factors that influenced decisions. Useful for assessing legal odds.
+        Searches court precedents, classifies each case's 주문 (disposition, e.g. 파기환송/
+        상고기각/항소기각/각하/일부인용; 불명 when unclear) and extracts key factors. This is a
+        distribution of dispositions, NOT a win rate: see outcome_note before drawing conclusions.
 
         Args:
             query: Legal question or keywords (e.g., "택배 파손 보상", "임대차 보증금 반환")
@@ -3515,7 +3598,6 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             svc_result = run_service(
                 get_client=_get_client, target="prec",
                 snake_params=svc_params, response_type=type,
-                sections="summary", full_text_fields=["판례내용"],
             )
 
             # Body unavailable (NOT_FOUND etc.): skip, try the next candidate
@@ -3527,6 +3609,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             raw = svc_result.get("raw_content", "")
             holding = ""
             summary_text = ""
+            body_text = ""  # 판례내용: the only place the 주문 lives
 
             if raw and type == "JSON":
                 try:
@@ -3535,6 +3618,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                     root = list(jd.values())[0] if jd else {}
                     holding = root.get("판시사항", "")
                     summary_text = root.get("판결요지", "")
+                    body_text = root.get("판례내용", "")
                 except:
                     pass
             elif raw:
@@ -3545,13 +3629,18 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                     holding = h_match.group(1).strip()
                 if s_match:
                     summary_text = s_match.group(1).strip()
+                b_match = _re.search(r'<판례내용>(.*?)</판례내용>', raw, _re.DOTALL)
+                if b_match:
+                    body_text = b_match.group(1).strip()
 
             # Upstream prose carries <br/> tags; strip them before analysis/output
             holding = strip_html(holding)
             summary_text = strip_html(summary_text)
 
             # Extract outcome and factors
-            outcome = extract_outcome(summary_text)
+            # Outcome comes from the 주문 only; recitals/판결요지 are never read
+            order = extract_order(body_text)
+            outcome = classify_order(order)
             outcomes[outcome] = outcomes.get(outcome, 0) + 1
             factors = [strip_html(f) for f in extract_key_factors(holding)]
             all_factors.extend(f for f in factors if f)
@@ -3563,6 +3652,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 "case_number": item.get("사건번호", ""),
                 "court": item.get("법원명", ""),
                 "outcome": outcome,
+                "order": order[:compact_limit(300)] if order else "",
                 "holding": holding[:compact_limit(500)] if holding else "",
                 "summary": summary_text[:compact_limit(500)] if summary_text else "",
             })
@@ -3661,6 +3751,11 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 articles = val
                 break
 
+        resolver_warnings: list[str] = []
+        low = None if _e else low_relevance_warning(situation, articles[:display])
+        if low:
+            resolver_warnings.append(low)
+
         law_names_seen = set()
         for art in articles[:display]:
             law_name = art.get("법령명", "")
@@ -3710,7 +3805,6 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
 
         # Step 3: Citation network for top article
         citations = []
-        resolver_warnings: list[str] = []
         if applicable_laws:
             top = applicable_laws[0]
             mst = ""
@@ -3839,11 +3933,12 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         ctx: Context = None,
     ) -> dict:
         """
-        Get a law article with legal terms replaced by everyday Korean (쉬운 법률 읽기).
+        Get a law article plus a glossary of its legal terms (쉬운 법률 읽기).
 
         Fetches a law article (heading + 항 + 호 + 목, from the 현행 version of the
-        law) and annotates legal jargon with plain Korean equivalents using the
-        official 법제처 legal terminology database.
+        law) and lists, in term_glossary, exact 동의어 links from the 법제처 legal
+        terminology database. The article text is never rewritten: simplified_text
+        equals original_text, and the links may differ from the legal meaning.
 
         Args:
             law_name: Law name (e.g., "민법", "근로기준법")
@@ -3854,12 +3949,14 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             type: Response format - "JSON" (default), "XML", or "HTML"
 
         Returns:
-            Original text, simplified text with inline annotations, and term glossary
+            Original text (unchanged), and a term glossary of database synonym links
 
         Examples:
             >>> simplify_article(law_name="민법", article=750)
             >>> simplify_article(law_name="건축법", article=37, article_branch=2)
         """
+        from .linkage import pick_linked_term
+
         resolved_oc = resolve_oc(override_oc=oc)
         fmt = _internal_format(type)
         article, article_branch = normalize_article(article, article_branch)
@@ -3867,6 +3964,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         # Step 1: Resolve the law and pick its 현행 version (not the first row,
         # which is typically a 시행예정 MST)
         law_info = _resolve_law_versions(law_name, resolved_oc, fmt)
+        if law_info.get("status") == "error":
+            return law_info
         current = law_info["current"]
         mst = str(current.get("법령일련번호", ""))
         if not mst:
@@ -3879,15 +3978,16 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         client = _get_client()
 
         # Step 3: Extract legal terms
-        terms = extract_legal_terms(original_text)
+        terms = list(dict.fromkeys(extract_legal_terms(original_text)))
 
         # Step 4: Look up each term in knowledge base
         glossary = []
-        simplified = original_text
         terms_mapped = 0
 
         for term in terms:
             plain_korean = ""
+            relation = ""
+            ambiguous = False
             source = "not_found"
 
             # Try 법령용어→일상용어
@@ -3904,17 +4004,9 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                     import json as _json
                     td = _json.loads(term_raw)
                     root = list(td.values())[0] if td else {}
-                    for k, v in root.items():
-                        if isinstance(v, list) and v:
-                            plain_korean = v[0].get("일상용어명", "")
-                            if plain_korean:
-                                source = "법령용어DB"
-                            break
-                        elif isinstance(v, dict) and "일상용어명" in v:
-                            plain_korean = v.get("일상용어명", "")
-                            if plain_korean:
-                                source = "법령용어DB"
-                            break
+                    plain_korean, relation, ambiguous = pick_linked_term(root, "일상용어명", term)
+                    if plain_korean:
+                        source = "법령용어DB"
             except:
                 pass
 
@@ -3932,30 +4024,30 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                         import json as _json
                         td2 = _json.loads(term_raw2)
                         root2 = list(td2.values())[0] if td2 else {}
-                        for k, v in root2.items():
-                            if isinstance(v, list) and v:
-                                plain_korean = v[0].get("법령용어명", "") or v[0].get("일상용어명", "")
-                                if plain_korean and plain_korean != term:
-                                    source = "일상용어DB"
-                                else:
-                                    plain_korean = ""
-                                break
+                        plain_korean, relation, amb2 = pick_linked_term(root2, "법령용어명", term)
+                        ambiguous = ambiguous or amb2
+                        if plain_korean:
+                            source = "일상용어DB"
                 except:
                     pass
 
-            glossary.append({
+            entry = {
                 "term": term,
                 "plain_korean": plain_korean,
+                "relation": relation,
                 "source": source,
-            })
+            }
+            if ambiguous and not plain_korean:
+                entry["source"] = "ambiguous"
+                entry["note"] = "동음이의어가 여러 개라 뜻을 특정할 수 없어 연결하지 않았습니다"
+            glossary.append(entry)
 
             if plain_korean:
                 terms_mapped += 1
-                simplified = simplified.replace(term, f"{term}({plain_korean})")
 
         article_display = f"제{article}조" if article_branch == 0 else f"제{article}조의{article_branch}"
 
-        return {
+        result = {
             "status": "ok",
             "law_name": law_info["law_name"],
             "query": law_name,
@@ -3970,12 +4062,18 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 "law_type": current.get("법령구분명", ""),
             },
             "original_text": original_text,
-            "simplified_text": simplified,
+            "simplified_text": original_text,
             "term_glossary": glossary,
             "terms_found": len(terms),
             "terms_mapped": terms_mapped,
             "disclaimer": "용어 해설은 법제처 법령용어 데이터베이스 기준이며, 맥락에 따라 의미가 다를 수 있습니다.",
         }
+        result["note"] = (
+            "simplified_text는 법률 원문과 같으며 본문을 바꾸지 않았습니다. term_glossary의 항목은 "
+            "법령용어DB의 동의어 연결일 뿐 법적 의미와 다를 수 있으므로 원문 해석에 쓰지 마세요."
+            + ("" if terms_mapped else " 이번 조문에서는 연결된 용어가 없었습니다.")
+        )
+        return result
 
     # ==================== TOOL 48: law_amendment_summary ====================
     @server.tool(annotations=TOOL_ANNOTATIONS)
@@ -4018,6 +4116,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
 
         # Resolve to one 법령ID and fetch all of its versions (eflaw, LID filter)
         law_info = _resolve_law_versions(law_name, resolved_oc, fmt, need_history=True)
+        if law_info.get("status") == "error":
+            return law_info
 
         revisions = [
             revision_record(row) for row in law_info["versions"]
@@ -4025,7 +4125,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         ]
         current = law_info.get("current") or {}
 
-        return {
+        out = {
             "status": "ok",
             "law_name": law_info["law_name"],
             "query": law_name,
@@ -4038,6 +4138,9 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             "total_versions": len(law_info["versions"]),
             "source": "eflaw_search (target=eflaw, 법령ID filter; 현행연혁코드 = status)",
         }
+        if law_info.get("warnings"):
+            out["warnings"] = law_info["warnings"]
+        return out
 
     # ==================== TOOL 49: article_amendment_diff ====================
     @server.tool(annotations=TOOL_ANNOTATIONS)
@@ -4209,6 +4312,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             "precedent_analysis": {
                 "total_found": odds.get("total_found", 0),
                 "outcome_summary": odds.get("outcome_summary", {}),
+                "outcome_note": odds.get("outcome_note", OUTCOME_NOTE),
                 "key_factors": odds.get("key_factors", []),
                 "representative_cases": odds.get("representative_cases", [])[:compact_limit(3)],
                 "search_mode": odds.get("search_mode", ""),
@@ -4278,6 +4382,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
 
         # Step 1: Resolve the law and list every version of that single 법령ID
         law_info = _resolve_law_versions(law_name, resolved_oc, fmt, need_history=True)
+        if law_info.get("status") == "error":
+            return law_info
         all_versions = [revision_record(r) for r in law_info["versions"]]
         revisions = [r for r in all_versions if date_from <= r["date"] <= date_to]
         current = law_info.get("current") or {}
@@ -4293,6 +4399,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             "total_revisions": len(revisions),
             "period": f"{date_from}~{date_to}",
         }
+        if law_info.get("warnings"):
+            result["warnings"] = law_info["warnings"]
 
         if not article or str(article).strip() in ("0", ""):
             return result
@@ -4304,7 +4412,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         if law_info["law_id"]:
             hist_params = {
                 "oc": resolved_oc, "target": "lsJoHstInf", "type": fmt,
-                "id": law_info["law_id"], "jo": jo,
+                "id": law_info["law_id"], "jo": jo, "display": 100,
             }
             hist_result = run_service(
                 get_client=_get_client, target="lsJoHstInf",
@@ -4332,8 +4440,18 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 basis = f"lsJoHstInf: {change.get('change_date')} {change.get('reason')} (MST {change['mst']})"
                 break
         if pair is None and len(revisions) >= 2:
-            pair = (revisions[1], revisions[0])
-            basis = "latest two revisions in period (no article-level history matched)"
+            # Prefer in-force versions (현행/연혁): two 시행예정 rows, or a 시행예정
+            # vs. an in-force one, are not a meaningful before/after pair.
+            in_force = [r for r in revisions if r.get("status") != "시행예정"]
+            candidates = in_force if len(in_force) >= 2 else revisions
+            pair = (candidates[1], candidates[0])
+            why = ("lsJoHstInf had no entry in the period" if not history else
+                   f"none of the {len(history)} lsJoHstInf entries matched a version in the period")
+            basis = (
+                f"fallback: latest two {'in-force (현행/연혁)' if candidates is in_force else 'listed'} "
+                f"revisions in period, MST {candidates[1]['mst']} vs {candidates[0]['mst']} "
+                f"(article-level history did not match: {why})"
+            )
 
         if pair is None:
             result["article_diff"] = None
@@ -4483,6 +4601,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         # Step 1: Find the law — one 법령ID, 현행 version preferred over 시행예정
         fmt = _internal_format(type)
         resolved = _resolve_law_versions(law_name, resolved_oc, fmt)
+        if resolved.get("status") == "error":
+            return resolved
         law_info = resolved["current"]
         law_id = resolved["law_id"]
         mst = str(law_info.get("법령일련번호", ""))
@@ -4498,7 +4618,10 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             "ministry": law_info.get("소관부처명", ""),
         }
 
+        warnings: list[str] = []
+
         # Step 2: Get delegation tree
+        delegated_entries: list = []
         if law_id or mst:
             del_params = {
                 "oc": resolved_oc, "target": "lsDelegated", "type": type,
@@ -4517,62 +4640,64 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 )
                 if result["delegation_tree"].get("truncated"):
                     mark_slim_cut(result, "SLIM_RESPONSE: 위임 조문 목록을 80건으로 줄였습니다. 전체는 lsDelegated_service 또는 jo 지정 조회를 쓰세요.")
+                delegated_entries = compact_delegation_tree(
+                    del_r.get("raw_content", ""), type,
+                ).get("entries", [])
             else:
                 result["delegation_tree"] = {
                     "entries": [], "entry_count": 0,
                     "note": del_r.get("message", "lsDelegated 조회 실패"),
                 }
+                warnings.append(
+                    f"lsDelegated 조회 실패 ({del_r.get('error_code') or ErrorCode.UPSTREAM_ERROR}): "
+                    "admin_rules를 확인하지 못했습니다"
+                )
 
-        # Step 3: Linked ordinances
-        lnk_params = {
-            "oc": resolved_oc, "target": "lnkLs", "type": type,
-            "query": law_info.get("법령명한글", law_name), "display": 10, "page": 1,
-        }
-        lnk_r = run_search(
-            get_client=_get_client, target="lnkLs",
-            query=law_info.get("법령명한글", law_name),
-            snake_params=lnk_params, response_type=type, display=10,
-            ranking_field="법령명한글", list_type="law",
-            over_fetch_key="numOfRows", over_fetch=False,
-        )
-        lnk_ranked = lnk_r.get("ranked_data", {})
-        linked_laws = []
-        for k, v in lnk_ranked.items():
-            if isinstance(v, list):
-                for item in v[:10]:
-                    linked_laws.append({
-                        "name": item.get("법령명한글", ""),
-                        "id": item.get("법령ID", ""),
-                        "type": item.get("법령구분명", ""),
+        # Step 3: Linked ordinances (자치법규) — lnkLsOrd lists the ordinances
+        # that implement this law (lnkLs would list laws, not ordinances).
+        linked_ordinances: list = []
+        if law_id:
+            lnk_params = {
+                "oc": resolved_oc, "target": "lnkLsOrd", "type": type,
+                "knd": law_id, "display": 10, "page": 1,
+            }
+            lnk_r = run_search(
+                get_client=_get_client, target="lnkLsOrd", query="*",
+                snake_params=lnk_params, response_type=type, display=10,
+                ranking_field="자치법규명", list_type="law",
+                over_fetch_key="display",
+            )
+            lnk_err = _result_error(lnk_r, "lnkLsOrd 연계 자치법규")
+            if lnk_err:
+                warnings.extend(_failure_warnings([lnk_err]))
+            else:
+                _, lnk_total = _items_from_result(lnk_r, type)
+                for item in law_rows(lnk_r)[:10]:
+                    linked_ordinances.append({
+                        "name": item.get("자치법규명", ""),
+                        "id": item.get("자치법규ID", ""),
+                        "type": item.get("자치법규종류", ""),
                     })
-                break
-        result["linked_ordinances"] = linked_laws
+                result["linked_ordinances_total"] = lnk_total
+        result["linked_ordinances"] = linked_ordinances
 
-        # Step 4: Related admin rules
-        admrul_params = {
-            "oc": resolved_oc, "target": "admrul", "type": type,
-            "query": law_info.get("법령명한글", law_name),
-            "display": 5, "page": 1, "nw": 1, "search": 1,
-        }
-        admrul_r = run_search(
-            get_client=_get_client, target="admrul",
-            query=law_info.get("법령명한글", law_name),
-            snake_params=admrul_params, response_type=type, display=5,
-            ranking_field="행정규칙명", list_type="admrul",
-            over_fetch_key="numOfRows",
-        )
-        admrul_ranked = admrul_r.get("ranked_data", {})
-        admin_rules = []
-        for k, v in admrul_ranked.items():
-            if isinstance(v, list):
-                for item in v[:5]:
-                    admin_rules.append({
-                        "name": item.get("행정규칙명", ""),
-                        "type": item.get("행정규칙종류", ""),
-                        "ministry": item.get("소관부처명", ""),
-                    })
-                break
+        # Step 4: Admin rules — the 위임행정규칙 entries of the delegation tree.
+        # (admrul title search for the law name returns nothing for most laws,
+        # e.g. 건축법, and the body search returns unrelated rules.)
+        admin_rules: list = []
+        seen_rules: set = set()
+        for entry in delegated_entries:
+            if entry.get("kind") != "위임행정규칙" or entry.get("target") in seen_rules:
+                continue
+            seen_rules.add(entry.get("target"))
+            admin_rules.append({
+                "name": entry.get("target", ""),
+                "id": entry.get("target_id", ""),
+                "article": entry.get("article", ""),
+            })
         result["admin_rules"] = admin_rules
+        if warnings:
+            result["warnings"] = warnings
 
         return result
 
@@ -4887,7 +5012,7 @@ Tool selection priority for unclear queries:
 1. **관련 법령 찾기**: legal_resolver 도구를 사용하여 종합 분석을 수행하세요.
    - legal_resolver(situation="{situation}")
 
-2. **판례 확인**: check_precedent_odds 도구로 유사 판례와 승률을 확인하세요.
+2. **판례 확인**: check_precedent_odds 도구로 유사 판례의 결과 분포(승률 아님; outcome_note 참고)를 확인하세요.
    - check_precedent_odds(query="{situation}")
 
 3. **결과 정리**: 다음 형식으로 응답하세요:
@@ -4965,7 +5090,7 @@ Tool selection priority for unclear queries:
 
     @server.prompt(
         name="check-legal-precedent",
-        description="Ask a yes/no legal question → get precedent-backed answer with success rate"
+        description="Ask a yes/no legal question → get precedent-backed answer (outcome distribution, not a win rate)"
     )
     def check_legal_precedent(question: str) -> list:
         """
@@ -4995,7 +5120,7 @@ Tool selection priority for unclear queries:
 - 예 / 아니오 / 경우에 따라 다름 — 법적 근거와 함께
 
 **📊 판례 통계**
-- 전체 N건 중 인용 M건 (N건 분석)
+- 분석한 N건의 주문 분포(예: 파기환송 a건, 상고기각 b건, 불명 c건). 승소율/성공률로 환산하지 말고 outcome_note의 해석 주의를 그대로 전달
 - 핵심 판단 요소 나열
 
 **📋 대표 판례**

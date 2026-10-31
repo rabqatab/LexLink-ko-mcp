@@ -33,7 +33,7 @@ LexLink는 대한민국 국가법령정보 API ([open.law.go.kr](https://open.la
     - 연관 법령 탐색 (aiRltLs_search)
   - **MCP 리소스 - 법령 ID 캐시**
     - 자주 사용되는 ~20개 법령명과 안정적인 법령ID 매핑 캐시
-    - 한글 법령명 또는 약칭으로 조회 (`lexlink://law/{name}`): 이름을 URL 디코딩하고 해석기 별칭(예: 자통법 → 자본시장과 금융투자업에 관한 법률, 010513)을 참조하며, 없으면 `law_search` 정확 일치 조회를 한 번 시도
+    - 한글 법령명 또는 약칭으로 조회 (리소스 템플릿 `lexlink://law/{name}`; `{name}`은 자리표시자이므로 중괄호 없이 `lexlink://law/자통법`처럼 읽으세요): 이름을 URL 디코딩하고 해석기 별칭(예: 자통법 → 자본시장과 금융투자업에 관한 법률, 010513)을 참조하며, 없으면 `law_search` 정확 일치 조회를 한 번 시도
     - 동적 캐싱: 검색 결과가 자동으로 캐시에 추가
 - **스마트 기능** ([korean-law-mcp](https://github.com/chrisryugj/korean-law-mcp)에서 영감):
   - **지능형 캐싱** - 도구별 TTL 캐싱 (검색 1시간, 조문 24시간, AI 검색 30분)

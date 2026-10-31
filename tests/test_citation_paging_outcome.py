@@ -7,7 +7,7 @@ import pytest
 
 import lexlink.citation as citation_mod
 import lexlink.server as server_mod
-from lexlink._helpers import ToolValidationError, extract_outcome, run_search
+from lexlink._helpers import ToolValidationError, run_search
 from lexlink.errors import ErrorCode, create_error_response
 from lexlink.cache import ResponseCache
 from lexlink.cache import get_cache
@@ -308,39 +308,6 @@ def test_composites_report_no_results(monkeypatch):
         out = tm.get_tool(name).fn(**kw)
         assert out["status"] == "ok" and out["warning"] == "no_results", name
     assert "outcome_note" in tm.get_tool("check_precedent_odds").fn(query="없는질의")
-
-
-# ------------------------------------------------------------------ outcome
-
-@pytest.mark.unit
-@pytest.mark.parametrize("text, expected", [
-    ("", "불명"),
-    ("원고의 청구를 일부인용한다", "일부인용"),
-    ("청구를 일부 인용하고 나머지를 기각한다", "일부인용"),
-    ("항소를 일부기각한다", "일부기각"),
-    ("원심판결을 파기하고 사건을 환송한다. 파기환송", "파기환송"),
-    ("원심판결을 파기자판한다", "파기자판"),
-    ("원심판결을 파기한다", "파기"),
-    ("상고를 기각한다", "기각"),
-    ("피고의 항소를 기각하였다", "기각"),
-    ("이 사건 심판청구를 각하한다", "각하"),
-    ("청구를 인용한다", "인용"),
-    ("신청을 인용하는 결정", "인용"),
-    ("처분을 취소한다", "취소"),
-    ("원심판결 인용", "불명"),
-    ("원심판결을 인용하여 상고를 기각한다", "기각"),
-    ("제1심 판결 이유를 인용하여 판단한다", "불명"),
-    ("청구를 인용하지 아니한다", "불명"),
-    ("인용된 판례에 비추어", "불명"),
-    ("임대인은 보증금을 반환할 의무가 있다", "불명"),
-])
-def test_extract_outcome_table(text, expected):
-    assert extract_outcome(text) == expected
-
-
-@pytest.mark.unit
-def test_extract_outcome_docstring_notes_heuristic():
-    assert "Heuristic" in extract_outcome.__doc__
 
 
 # ============================================================ round 3 regressions
@@ -711,60 +678,6 @@ def test_citation_not_found_is_hard_error_with_success_false(cite):
     out = cite(mst="9", law_name="민법", article=3)
     assert out["error_code"] == "NOT_FOUND" and out["success"] is False
     assert cite.extracted == []
-
-
-# ---- 6. extract_outcome rewrite (REPORT cases)
-
-@pytest.mark.unit
-@pytest.mark.parametrize("text, expected", [
-    ("청구를 기각하지 아니한다", "불명"),
-    ("청구를 기각하지 않는다", "불명"),
-    ("상고를 기각하지 않을 수 없다", "불명"),
-    ("청구를 기각할 수 없다", "불명"),
-    ("상고는 기각될 것이다", "불명"),
-    ("항소는 각하되어야 한다", "불명"),
-    ("청구는 인용될 수 없다", "불명"),
-    ("청구를 인용할 수 없다", "불명"),
-    ("신청을 인용할 수 없다", "불명"),
-    ("청구를 인용할 수 있다", "불명"),
-    ("청구를 인용함에 있어서는", "불명"),
-    ("원심판결을 파기하지 아니한다", "불명"),
-    ("파기사유가 없으므로 상고를 기각한다", "기각"),
-    ("재심청구 사유가 없으므로 기각해야 한다", "불명"),
-    ("원심판결을 파기하고 사건을 서울고등법원에 환송한다", "파기환송"),
-    ("원심판결을 파기하고 사건을 서울고등법원에 환송하며", "파기환송"),
-    ("원심판결 파기, 환송", "파기환송"),
-    ("원심판결을 파기하고, 원고의 청구를 기각한다", "파기"),
-    ("원심판결을 파기한다", "파기"),
-    ("피고인의 상고를 기각한다. 파기환송 판결 취지에 따라", "기각"),
-    ("항소를 기각하고 상고를 각하한다", "기각"),
-    ("원고의 주위적 청구를 기각하고 예비적 청구를 인용한다", "기각"),
-    ("원고의 청구 중 일부를 인용한다", "일부인용"),
-    ("청구를 일부만 인용한다", "일부인용"),
-    ("원고의 청구를 일부 인용하고 나머지를 기각한다", "일부인용"),
-    ("청구를 일부 기각한다", "일부기각"),
-    ("원고가 청구한 취소소송은 제소기간 내에 제기하여야 한다", "불명"),
-    ("소송의 청구취지는 처분의 취소를 구하는 것이다", "불명"),
-    ("행정처분의 취소를 청구하는 경우 이해관계가 있어야 한다", "불명"),
-    ("처분을 취소한다", "취소"),
-    ("이 사건 처분을 취소하였다", "취소"),
-    ("처분을 취소하지 아니한다", "불명"),
-    ("소를 각하한다", "각하"),
-    ("청구기각", "기각"),
-])
-def test_extract_outcome_position_based(text, expected):
-    assert extract_outcome(text) == expected
-
-
-@pytest.mark.unit
-def test_extract_outcome_is_linear_on_1mb_inputs():
-    import time
-    shapes = ["가" * 10**6, "기각" * 500000, ("청구" + "가" * 25 + "인용") * 35000,
-              "파기하고 " * 150000, ("상고" * 5 + "를 ") * 90000]
-    for text in shapes:
-        t0 = time.perf_counter()
-        extract_outcome(text)
-        assert time.perf_counter() - t0 < 0.2
 
 
 @pytest.mark.unit
