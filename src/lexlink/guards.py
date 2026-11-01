@@ -55,11 +55,11 @@ DPA_YD_WARNING = (
 )
 NB_NUMERIC_WARNING = (
     "nb_substring: 숫자만 넣은 사건번호는 업스트림에서 부분일치로 처리되어 다른 연도·사건종류의 사건이 "
-    "함께 나올 수 있습니다. 정확한 조회는 '2022헌마1312'처럼 연도·사건부호까지 넣으세요"
+    "함께 나올 수 있습니다. 연도·사건부호·번호를 모두 넣어도 접두 일치라 확인이 필요합니다 (nb_prefix_match 참고)"
 )
-LM_IGNORED_WARNING = (
-    "lm_ignored: id가 있으므로 lm은 보내지 않았습니다 (업스트림은 lm이 정확한 제목과 다르면 "
-    "유효한 id도 '일치하는 … 없습니다'로 응답합니다). 반환된 사건명을 직접 확인하세요"
+LM_NOT_SENT_NOTE = (
+    "lm_not_sent: id로 조회하므로 lm은 업스트림에 보내지 않았습니다 (lm이 정확한 제목과 다르면 업스트림이 "
+    "유효한 id도 '일치하는 … 없습니다'로 응답하기 때문). lm과의 일치 여부는 확인하지 않았습니다"
 )
 
 
@@ -71,6 +71,14 @@ LS_RLT_EXACT_NAME_HINT = (
     "ls_rlt_search는 정확한 법령명만 일치합니다 (부분 문자열·약칭·주제어는 0건): "
     "law_search로 정식 법령명을 확인한 뒤 그 이름으로 다시 검색하세요"
 )
+
+
+def add_notes(response: dict, *notes: Optional[str]) -> dict:
+    """Append neutral, non-warning ``notes`` to an ok dict response."""
+    new = [n for n in notes if n]
+    if new and isinstance(response, dict) and response.get("status") == "ok":
+        response["notes"] = list(response.get("notes") or []) + new
+    return response
 
 
 def add_warnings(response: dict, *warnings: Optional[str]) -> dict:
@@ -137,6 +145,7 @@ def attach_filters_applied(response: dict, applied: Optional[dict]) -> dict:
 
 
 _CASE_NO_DASH_RE = re.compile(r"^[가-힣]+-(\d{4})-([가-힣]+)-(\d+)$")
+_CASE_NO_TOKEN_RE = re.compile(r"(?:[가-힣]+-)?\d{2,4}-?[가-힣]+-?\d+")
 
 
 def normalize_case_number(value, name: str = "nb") -> Optional[str]:
@@ -156,9 +165,55 @@ def normalize_case_number(value, name: str = "nb") -> Optional[str]:
             f"{name}에는 사건번호를 하나만 넣을 수 있습니다 (쉼표로 구분한 목록은 업스트림이 항상 0건으로 응답합니다): {value!r}",
             hints=["사건번호마다 따로 호출하세요 (예: nb='2023다287663')"],
         )
+    tokens = s.split()
+    if len(tokens) > 1 and sum(1 for t in tokens if _CASE_NO_TOKEN_RE.fullmatch(t)) >= 2:
+        raise ToolValidationError(
+            f"{name}에는 사건번호를 하나만 넣을 수 있습니다 (공백으로 이어 붙인 여러 번호는 하나의 번호로 합쳐져 "
+            f"엉뚱한 값이 됩니다): {value!r}",
+            hints=["사건번호마다 따로 호출하세요 (예: nb='2023다287663')"],
+        )
     s = re.sub(r"\s+", "", s)
     m = _CASE_NO_DASH_RE.fullmatch(s)
     return f"{m.group(1)}{m.group(2)}{m.group(3)}" if m else s
+
+
+def check_nb_exactness(response: dict, nb: Optional[str]) -> dict:
+    """The upstream matches ``nb`` as a prefix (``2010헌바1`` returned 109 rows, first 2010헌바125).
+
+    If a returned row's 사건번호 is not exactly ``nb``: keep only the exact rows in
+    ``ranked_data`` when exactly one row matches (``raw_content`` is left as returned and the
+    warning says so), otherwise warn and leave the rows. Nothing happens when all rows are exact.
+    """
+    ranked = response.get("ranked_data") if isinstance(response, dict) else None
+    if not nb or response.get("status") != "ok" or not isinstance(ranked, dict):
+        return response
+    key = next((k for k, v in ranked.items()
+                if (isinstance(v, list) and v and isinstance(v[0], dict) and "사건번호" in v[0])
+                or (isinstance(v, dict) and "사건번호" in v)), None)
+    if key is None:
+        return response
+    rows = ranked[key] if isinstance(ranked[key], list) else [ranked[key]]
+
+    def exact(row):
+        value = str(row.get("사건번호", "")).strip()
+        m = _CASE_NO_DASH_RE.fullmatch(value)
+        return (f"{m.group(1)}{m.group(2)}{m.group(3)}" if m else value) == nb
+
+    hits = [r for r in rows if exact(r)]
+    if len(hits) == len(rows):
+        return response
+    shown = ", ".join(str(r.get("사건번호", "")) for r in rows[:5])
+    if len(hits) == 1:
+        ranked[key] = hits
+        ranked["totalCnt"] = "1"
+        ranked.pop("numOfRows", None)
+        return add_warnings(response, (
+            f"nb_prefix_match: nb={nb}는 접두 일치라 업스트림이 {len(rows)}건 이상을 돌려줬고(예: {shown}) "
+            f"ranked_data에는 정확히 일치하는 1건만 남겼습니다. raw_content는 업스트림 응답 그대로입니다"))
+    return add_warnings(response, (
+        f"nb_prefix_match: 반환된 행 중 사건번호가 nb={nb}와 정확히 일치하는 행이 "
+        f"{'없습니다' if not hits else str(len(hits)) + '건뿐입니다'} (업스트림은 접두 일치, 예: {shown}). "
+        f"행의 사건번호를 직접 확인하세요"))
 
 
 def nb_numeric_warning(nb: Optional[str]) -> Optional[str]:
@@ -263,46 +318,64 @@ def ordin_identity(raw_content: Optional[str], response_type: str = "JSON") -> O
     return found if found.get("자치법규ID") or found.get("자치법규일련번호") else None
 
 
+def ordin_resolved(raw_content: Optional[str], response_type: str) -> dict:
+    """The ``resolved`` block returned with every ok ordin_service response: what the lookup returned."""
+    ident = ordin_identity(raw_content, response_type)
+    if not ident:
+        return {"available": False, "note": f"type={response_type}에서는 반환된 자치법규를 읽지 못했습니다 (JSON/XML에서 제공)"}
+    return {
+        "자치법규명": ident.get("자치법규명", ""),
+        "지자체기관명": ident.get("지자체기관명", ""),
+        "자치법규ID": ident.get("자치법규ID", ""),
+        "자치법규일련번호": ident.get("자치법규일련번호", ""),
+    }
+
+
 def ordin_id_collision(requested_id: str, main: Optional[dict], probe: Optional[dict]) -> Optional[str]:
-    """Warning text when ``requested_id`` is a 자치법규ID of one ordinance and also the
+    """Neutral note when ``requested_id`` is the 자치법규ID of one ordinance and also the
     자치법규일련번호 of a different one; None when there is no collision."""
     if not probe or probe.get("자치법규일련번호") != requested_id:
         return None
     if main and main.get("자치법규ID") == probe.get("자치법규ID"):
         return None
-    desc = lambda i: f"'{i.get('자치법규명', '')}' ({i.get('지자체기관명', '')}, 자치법규ID {i.get('자치법규ID', '')})"
+    desc = lambda i: f"'{i.get('자치법규명', '')}' ({i.get('지자체기관명', '')}, 자치법규ID {i.get('자치법규ID', '')}, 일련번호 {i.get('자치법규일련번호', '')})"
     if main:
         return (
-            f"id_collision: {requested_id}는 자치법규ID로 조회되어 {desc(main)}를 반환했습니다. "
-            f"같은 숫자는 다른 자치법규의 자치법규일련번호이기도 합니다: {desc(probe)}. "
-            f"일련번호로 조회하려면 mst={requested_id}를 사용하세요"
+            f"id_collision: {requested_id}는 두 자치법규에 모두 해당합니다. 자치법규ID로는 {desc(main)}, "
+            f"자치법규일련번호로는 {desc(probe)}. 이 응답의 본문은 id를 자치법규ID로 조회한 결과"
+            f"({main.get('자치법규명', '')})입니다. 다른 쪽이 필요하면 mst={requested_id}로 조회하세요"
         )
     return (
-        f"id_is_serial_number: {requested_id}는 자치법규ID가 아니라 {desc(probe)}의 자치법규일련번호입니다. "
-        f"mst={requested_id}로 조회하세요"
+        f"id_is_serial_number: {requested_id}는 자치법규ID로는 조회되지 않고 {desc(probe)}의 "
+        f"자치법규일련번호입니다. mst={requested_id}로 조회하세요"
     )
 
 
 def check_ordin_id_collision(
     response: dict, requested_id: str, response_type: str, probe: Callable[[], Optional[dict]],
 ) -> dict:
-    """Probe ``mst=<requested_id>`` and warn on an id/일련번호 collision (best effort).
+    """``verify_id=True``: probe ``mst=<requested_id>`` and report an id/일련번호 collision.
 
-    ``probe`` returns the JSON-form upstream response dict (or None). A failed probe is
-    reported, because silence would read as "no collision".
+    ``probe`` returns the JSON-form upstream response dict (or None). Anything that cannot be
+    determined (HTML body, failed probe) is reported, because silence would read as "no collision".
     """
-    main = ordin_identity(response.get("raw_content"), response_type) if response.get("status") == "ok" else None
+    ok = response.get("status") == "ok"
+    main = ordin_identity(response.get("raw_content"), response_type) if ok else None
+    if ok and main is None:
+        return add_warnings(response, (
+            f"id_check_undetermined: type={response_type}에서는 반환된 자치법규를 읽지 못해 "
+            "id와 일련번호의 충돌 여부를 판단할 수 없습니다 (type=JSON 또는 XML로 다시 확인하세요)"))
     try:
         probed = probe()
     except Exception:  # best effort; the warning below says the check did not run
         probed = None
     if probed is None or (probed.get("status") != "ok" and probed.get("error_code") != "NOT_FOUND"):
-        return add_warnings(response, "id_check_skipped: id와 일련번호의 충돌 여부를 확인하지 못했습니다 (mst 조회 실패)")
+        return add_warnings(response, "id_check_undetermined: mst 조회가 실패해 id와 일련번호의 충돌 여부를 확인하지 못했습니다")
     other = ordin_identity(probed.get("raw_content"), "JSON") if probed.get("status") == "ok" else None
     msg = ordin_id_collision(requested_id, main, other)
     if not msg:
         return response
-    if response.get("status") == "ok":
+    if ok:
         return add_warnings(response, msg)
     response = dict(response)
     response["hints"] = list(response.get("hints") or []) + [msg]

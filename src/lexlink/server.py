@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+import threading
 import uuid
 import xml.etree.ElementTree as ET
 from typing import Annotated, Optional, Union
@@ -409,6 +410,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
 
     # In-memory cache: law_name -> {id, full_name, abbrev, type}
     _law_cache: dict[str, dict] = {}
+    _law_cache_lock = threading.Lock()  # tool functions run in worker threads
 
     def _seed_cache() -> None:
         """Populate cache with frequently-referenced Korean laws."""
@@ -435,10 +437,11 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             {"id": "009290", "full_name": "민사집행법", "abbrev": None, "type": "법률"},
             {"id": "001676", "full_name": "특정범죄 가중처벌 등에 관한 법률", "abbrev": "특정범죄가중법", "type": "법률"},
         ]
-        for entry in seed:
-            _law_cache[entry["full_name"]] = entry
-            if entry["abbrev"]:
-                _law_cache[entry["abbrev"]] = entry
+        with _law_cache_lock:
+            for entry in seed:
+                _law_cache[entry["full_name"]] = entry
+                if entry["abbrev"]:
+                    _law_cache[entry["abbrev"]] = entry
 
     _seed_cache()
 
@@ -452,9 +455,10 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             "abbrev": abbrev or None,
             "type": law_type,
         }
-        _law_cache[full_name] = entry
-        if entry["abbrev"]:
-            _law_cache[entry["abbrev"]] = entry
+        with _law_cache_lock:
+            _law_cache[full_name] = entry
+            if entry["abbrev"]:
+                _law_cache[entry["abbrev"]] = entry
 
     @server.resource(
         "lexlink://laws/frequently-used",
@@ -468,7 +472,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         # Deduplicate by id (abbrev keys point to same entry)
         seen_ids: set[str] = set()
         unique: list[dict] = []
-        for entry in _law_cache.values():
+        for entry in list(_law_cache.values()):  # snapshot: worker threads may add entries meanwhile
             if entry["id"] not in seen_ids:
                 seen_ids.add(entry["id"])
                 unique.append(entry)
@@ -1603,8 +1607,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             if not picked["selection"]["matched"]:
                 response = guards.add_warnings(
                     response,
-                    f"no_delegation_for_article: {describe_jo(jo_code)}에는 위임 항목이 없습니다 "
-                    f"(이 법에서 위임 항목이 있는 조문은 {picked['selection']['articles_with_delegation_in_law']}개)",
+                    f"no_delegation_for_article: {describe_jo(jo_code)} 위임 항목 없음 (조문 존재 여부는 확인하지 않음; "
+                    f"이 법에서 위임 항목이 있는 조문은 {picked['selection']['articles_with_delegation_in_law']}개)",
                 )
         elif response.get("status") == "ok" and isinstance(response.get("raw_content"), str) \
                 and len(response["raw_content"]) > 1_000_000:
@@ -1646,6 +1650,12 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         Search court precedents (판례 목록 조회).
 
         Search Korean court precedents from Supreme Court and lower courts.
+
+        Row order: without `sort`, a keyword query (not "*") is re-ranked by 사건명 relevance
+        (exact, starts-with, word, substring, shorter first) inside the first 100 upstream rows; the
+        upstream's own order is 선고일자 descending. This is a behaviour change from earlier versions
+        (the old ranking field never matched, so rows came back in upstream order). Pass
+        `sort="ddes"` (or any sort) to keep upstream order.
 
         Args:
             query: Search keyword (default "*" for all)
@@ -1707,6 +1717,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             over_fetch_key="display",
         ))
         guards.attach_filters_applied(response, date_applied)
+        guards.check_nb_exactness(response, nb)
         return guards.add_warnings(response, capped, guards.nb_numeric_warning(nb))
 
     # ==================== TOOL 17: prec_service ====================
@@ -1727,7 +1738,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             id: Precedent sequence number (판례일련번호, not the search row number; required, the guide has no
                 name-only lookup)
             lm: Precedent name. Not sent when id is given (the upstream answers a title that is not exact
-                with "일치하는 판례가 없습니다" even for a valid id); the response carries `lm_ignored`.
+                with "일치하는 판례가 없습니다" even for a valid id); the response carries a neutral `notes` entry `lm_not_sent`.
             sections: Response detail level ("summary" or "full"; other values are rejected):
                 - "summary": Returns 판시사항, 판결요지, 참조조문, 참조판례 only (~5KB).
                   Excludes 판례내용 (full judgment text, often 15-25KB).
@@ -1758,7 +1769,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                           sections=sections,
                           full_text_fields=["판례내용"],
                           summary_required_fields=["판시사항", "판결요지"])
-        return guards.add_warnings(dict(response), guards.LM_IGNORED_WARNING if lm else None)
+        return guards.add_notes(dict(response), guards.LM_NOT_SENT_NOTE if lm else None)
 
     # ==================== TOOL 18: detc_search ====================
     @server.tool(annotations=TOOL_ANNOTATIONS)
@@ -1843,6 +1854,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             over_fetch_key="display",
         )
         guards.attach_filters_applied(response, date_applied)
+        guards.check_nb_exactness(response, nb)
         return guards.add_warnings(response, capped, guards.nb_numeric_warning(nb))
 
     # ==================== TOOL 19: detc_service ====================
@@ -1862,7 +1874,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         Args:
             id: Constitutional Court decision sequence number (헌재결정례일련번호, not the search row number)
             lm: Decision name. Not sent when id is given (the upstream answers a title that is not exact
-                with "일치하는 헌재결정례가 없습니다" even for a valid id); the response carries `lm_ignored`.
+                with "일치하는 헌재결정례가 없습니다" even for a valid id); the response carries a neutral `notes` entry `lm_not_sent`.
             sections: "summary" to exclude 전문 (full text), or "full"/None for everything (other values are rejected).
                 **Recommended: "summary" for PlayMCP** to stay under 20KB.
             oc: Optional OC override
@@ -1886,7 +1898,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                           snake_params=snake_params, response_type=type,
                           sections=sections,
                           full_text_fields=["전문"])
-        return guards.add_warnings(dict(response), guards.LM_IGNORED_WARNING if lm else None)
+        return guards.add_notes(dict(response), guards.LM_NOT_SENT_NOTE if lm else None)
 
     # ==================== TOOL 20: expc_search ====================
     @server.tool(annotations=TOOL_ANNOTATIONS)
@@ -1913,6 +1925,10 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
 
         This tool searches Korean legal interpretation precedents issued by government
         agencies in response to inquiries about how to interpret specific laws.
+
+        Row order: without `sort`, a keyword query (not "*") is re-ranked by 안건명 relevance inside the
+        first 100 upstream rows. Earlier versions ranked on a field that does not exist, so rows came
+        back in upstream order; pass `sort` to keep upstream order.
 
         Args:
             query: Search keyword (default "*")
@@ -1993,7 +2009,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         Args:
             id: Legal interpretation sequence number (법령해석례일련번호, required; not the search row number)
             lm: Legal interpretation name. Not sent when id is given (the upstream answers a title that is not
-                exact with "일치하는 법령해석례가 없습니다" even for a valid id); the response carries `lm_ignored`.
+                exact with "일치하는 법령해석례가 없습니다" even for a valid id); the response carries a neutral `notes` entry `lm_not_sent`.
             sections: "summary" to exclude 이유 (detailed reasoning), or "full"/None for everything (other values are rejected).
                 Returns 안건명, 질의요지, 회답 in summary mode (~2KB vs ~5KB full).
             oc: Optional OC override (defaults to env var)
@@ -2007,7 +2023,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             Retrieve by ID:
             >>> expc_service(id="334617", type="XML")
 
-            Retrieve with name:
+            lm is not sent when id is given (the response notes `lm_not_sent`):
             >>> expc_service(id="315191", lm="여성가족부 - 건강가정기본법 제35조 제2항 관련", type="XML")
         """
         resolved_oc = resolve_oc(override_oc=oc)
@@ -2021,7 +2037,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                           snake_params=snake_params, response_type=type,
                           sections=sections,
                           full_text_fields=["이유"])
-        return guards.add_warnings(dict(response), guards.LM_IGNORED_WARNING if lm else None)
+        return guards.add_notes(dict(response), guards.LM_NOT_SENT_NOTE if lm else None)
 
     # ==================== TOOL 18: decc_search ====================
     @server.tool(annotations=TOOL_ANNOTATIONS)
@@ -2128,7 +2144,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         Args:
             id: Administrative appeal decision sequence number (행정심판재결례일련번호, required; not the search row number)
             lm: Decision name. Not sent when id is given (the upstream answers a title that is not exact
-                with "일치하는 행정심판례가 없습니다" even for a valid id); the response carries `lm_ignored`.
+                with "일치하는 행정심판례가 없습니다" even for a valid id); the response carries a neutral `notes` entry `lm_not_sent`.
             sections: "summary" to exclude 이유 (detailed reasoning), or "full"/None for everything (other values are rejected).
                 Returns 사건명, 청구취지, 재결요지, 주문 in summary mode.
             oc: Optional OC override (defaults to env var)
@@ -2142,7 +2158,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             Retrieve by ID:
             >>> decc_service(id="243263", type="XML")
 
-            Retrieve with case name:
+            lm is not sent when id is given (the response notes `lm_not_sent`):
             >>> decc_service(id="245011", lm="과징금 부과처분 취소청구", type="XML")
         """
         resolved_oc = resolve_oc(override_oc=oc)
@@ -2156,7 +2172,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                           snake_params=snake_params, response_type=type,
                           sections=sections,
                           full_text_fields=["이유"])
-        return guards.add_warnings(dict(response), guards.LM_IGNORED_WARNING if lm else None)
+        return guards.add_notes(dict(response), guards.LM_NOT_SENT_NOTE if lm else None)
 
     # ==================== PHASE 4: ARTICLE CITATION ====================
 
@@ -2331,6 +2347,12 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 paged = False
             if paged:
                 guards.add_warnings(result, guards.AI_PAGE_IGNORED_WARNING)
+                # page is ignored upstream, so "page past the last page" would contradict page_ignored
+                hints = [h for h in (result.get("hints") or []) if h != NO_MORE_RESULTS_HINT]
+                if hints:
+                    result["hints"] = hints
+                else:
+                    result.pop("hints", None)
         return result
 
     # ==================== TOOL 26: aiRltLs_search ====================
@@ -2481,6 +2503,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         mst: Optional[Union[str, int]] = None,
         oc: Optional[str] = None,
         type: str = "JSON",
+        verify_id: bool = False,
         ctx: Context = None,
     ) -> dict:
         """
@@ -2492,12 +2515,17 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
 
         Args:
             id: 자치법규ID (either id or mst is required). NOT the 자치법규일련번호. A 일련번호 passed as id
-                is NOT_FOUND, or silently returns a different ordinance when the same number is
-                also some ordinance's 자치법규ID (measured: 2116749). The tool therefore probes
-                mst=<id> once and reports `id_collision` / `id_is_serial_number` in `warnings`.
+                is NOT_FOUND, or returns a different ordinance when the same number is also some
+                ordinance's 자치법규ID (measured: 2116749). Take the key from ordin_search: use
+                `자치법규ID` as id, or `자치법규일련번호` as mst. Every ok response carries a `resolved`
+                block (자치법규명, 지자체기관명, 자치법규ID, 자치법규일련번호): compare it with what you asked for.
             mst: 자치법규일련번호 (ordinance master/serial number; either id or mst is required)
             oc: Optional OC override (defaults to env var)
-            type: Response format - "JSON" (default), "XML", or "HTML"
+            type: Response format - "JSON" (default), "XML", or "HTML". `resolved` and `verify_id` need JSON or XML.
+            verify_id: Default False (one upstream request). True also looks up mst=<id> (a second request, up to a
+                full ordinance body) and reports `id_collision` / `id_is_serial_number` in `warnings` when the
+                number is both an 자치법규ID and a 일련번호 (both are true; the result is what the id resolved to).
+                With type=HTML it reports `id_check_undetermined`.
             ctx: MCP context (injected automatically)
 
         Returns:
@@ -2519,7 +2547,10 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         if mst: snake_params["mst"] = mst
         response = run_service(get_client=_get_client, target="ordin",
                           snake_params=snake_params, response_type=type)
-        if id and not mst and re.fullmatch(r"[0-9]+", id):
+        if response.get("status") == "ok":
+            response = dict(response)
+            response["resolved"] = guards.ordin_resolved(response.get("raw_content"), type)
+        if verify_id and id and not mst and re.fullmatch(r"[0-9]+", id):
             # the same number can be one ordinance's 자치법규ID and another's 일련번호: look it up as mst too
             def probe():
                 probe_params = map_params_to_upstream(

@@ -101,7 +101,7 @@ TOOL_POLICIES: dict[str, dict] = {
     "admrul_search": _p("admin_rule", "primary", "normal", 1),
     "admrul_service": _p("admin_rule", "primary", "normal", 1, "측정 1.4~122KB(표본 소수), 크기 제어 없음"),
     "ordin_search": _p("ordinance", "primary", "normal", 1),
-    "ordin_service": _p("ordinance", "primary", "normal", 2, "id 조회는 mst=id 충돌 점검 요청 1회 추가(mst 조회는 1회). 측정 44건 중앙값 약 18KB, 범위 1.7~292KB, 100KB 이상 6건(대도시 도시계획·건축 조례). 크기 제어 없음"),
+    "ordin_service": _p("ordinance", "primary", "normal", 1, "verify_id=true는 mst=id 요청 1회를 더해 2회. 측정 44건 중앙값 약 18KB, 범위 1.7~292KB, 100KB 이상 6건(대도시 도시계획·건축 조례). 크기 제어 없음"),
     "ordinLsCon_search": _p("ordinance", "primary", "normal", 1),
     "lnkLs_search": _p("ordinance", "primary", "normal", 1),
     "lnkLsOrdJo_search": _p("ordinance", "primary", "normal", 1),

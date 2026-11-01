@@ -220,7 +220,8 @@ def test_sections_validated_and_lm_not_sent(tool, name):
     assert RecordingClient.calls == []
     out = tool(name, id="1", sections="Summary", lm="틀린 이름")
     assert "LM" not in last_params()
-    assert any(w.startswith("lm_ignored") for w in out["warnings"])
+    assert any(n.startswith("lm_not_sent") for n in out["notes"])
+    assert "warnings" not in out      # neutral note, not a warning, even for a correct lm
     assert tool(name, id="2", sections="full")["status"] == "ok"
 
 
@@ -306,46 +307,72 @@ def _ordin_upstream(endpoint, params, response_type):
 
 
 @pytest.mark.unit
-def test_ordin_id_equal_to_other_serial_number_warns(tool):
+def test_ordin_default_is_one_request_with_resolved_block(tool):
     RecordingClient.bodies["ordin"] = _ordin_upstream
     out = tool("ordin_service", id="2116749")
+    assert len(RecordingClient.calls) == 1            # no probe by default
+    assert "warnings" not in out
+    assert out["resolved"] == {"자치법규명": "정읍시립도서관 관리운영 조례 시행규칙", "지자체기관명": "전북특별자치도 정읍시",
+                               "자치법규ID": "2116749", "자치법규일련번호": "2007843"}
+    RecordingClient.calls = []
+    by_mst = tool("ordin_service", mst="2116749")
+    assert len(RecordingClient.calls) == 1
+    assert by_mst["resolved"]["자치법규명"] == "서울특별시 건축 조례"
+
+
+@pytest.mark.unit
+def test_ordin_verify_id_reports_collision_neutrally(tool):
+    RecordingClient.bodies["ordin"] = _ordin_upstream
+    out = tool("ordin_service", id="2116749", verify_id=True)
     assert out["status"] == "ok" and "정읍시립도서관" in out["raw_content"]
     (w,) = [w for w in out["warnings"] if w.startswith("id_collision")]
-    assert "서울특별시 건축 조례" in w and "mst=2116749" in w
+    assert "두 자치법규에 모두 해당" in w and "서울특별시 건축 조례" in w and "mst=2116749" in w
     assert len(RecordingClient.calls) == 2           # the id lookup and the mst probe
 
 
 @pytest.mark.unit
-def test_ordin_serial_number_as_id_not_found_gets_hint(tool):
+def test_ordin_verify_id_html_is_undetermined_not_a_false_claim(tool):
+    RecordingClient.bodies["ordin"] = lambda e, p, t: (
+        {"status": "ok", "request_id": "r", "upstream_type": "HTML", "raw_content": "<html>x</html>"}
+        if p.get("ID") else _ordin_upstream(e, p, t))
+    out = tool("ordin_service", id="2116749", type="HTML", verify_id=True)
+    assert any(w.startswith("id_check_undetermined") for w in out["warnings"])
+    assert not any(w.startswith(("id_collision", "id_is_serial_number")) for w in out["warnings"])
+    assert out["resolved"]["available"] is False
+    assert len(RecordingClient.calls) == 1
+
+
+@pytest.mark.unit
+def test_ordin_verify_id_serial_number_as_id_not_found_gets_hint(tool):
     RecordingClient.bodies["ordin"] = lambda e, p, t: (
         _ordin_upstream(e, p, t) if p.get("MST") else
         {"status": "error", "error_code": "NOT_FOUND", "message": "x", "request_id": "r"})
-    out = tool("ordin_service", id="2116749")
+    out = tool("ordin_service", id="2116749", verify_id=True)
     assert out["error_code"] == "NOT_FOUND"
     assert any(h.startswith("id_is_serial_number") for h in out["hints"])
 
 
 @pytest.mark.unit
-def test_ordin_no_collision_no_warning_and_mst_has_no_probe(tool):
+def test_ordin_verify_id_without_collision_and_mst(tool):
     RecordingClient.bodies["ordin"] = lambda e, p, t: (
         {"status": "ok", "request_id": "r", "upstream_type": "JSON", "raw_content": JEONGEUP} if p.get("ID") else
         {"status": "error", "error_code": "NOT_FOUND", "message": "x", "request_id": "r"})
-    out = tool("ordin_service", id="2116749")
+    out = tool("ordin_service", id="2116749", verify_id=True)
     assert "warnings" not in out
     RecordingClient.calls = []
-    tool("ordin_service", mst="2116749")
+    tool("ordin_service", mst="2116749", verify_id=True)
     assert len(RecordingClient.calls) == 1
 
 
 @pytest.mark.unit
-def test_ordin_probe_failure_is_reported_not_silent(tool):
+def test_ordin_verify_id_probe_failure_is_reported_not_silent(tool):
     def flaky(e, p, t):
         if p.get("MST"):
             return {"status": "error", "error_code": "TIMEOUT", "message": "x", "request_id": "r"}
         return {"status": "ok", "request_id": "r", "upstream_type": "JSON", "raw_content": JEONGEUP}
     RecordingClient.bodies["ordin"] = flaky
-    out = tool("ordin_service", id="2116749")
-    assert any(w.startswith("id_check_skipped") for w in out["warnings"])
+    out = tool("ordin_service", id="2116749", verify_id=True)
+    assert any(w.startswith("id_check_undetermined") for w in out["warnings"])
 
 
 # ---------- 9. aiSearch / ls_rlt ----------
@@ -429,3 +456,71 @@ def test_tool_fn_stays_synchronous_and_cache_is_threadsafe():
     [t.start() for t in threads]
     [t.join() for t in threads]
     assert errors == []
+
+
+# ---------- review follow-ups ----------
+
+@pytest.mark.unit
+def test_nb_whitespace_joined_numbers_rejected(tool):
+    for nb in ("2023다287663 2024마7294", "2022헌마1312 2017헌바323"):
+        assert tool("prec_search", nb=nb)["error_code"] == "VALIDATION_ERROR"
+    assert RecordingClient.calls == []
+    tool("prec_search", nb="2022 헌마 1312")                       # spaces inside one number are fine
+    assert last_params()["nb"] == "2022헌마1312"
+
+
+def _detc_rows(*numbers):
+    return {"DetcSearch": {"totalCnt": str(len(numbers)), "Detc": [
+        {"id": str(i), "사건번호": n, "사건명": f"사건 {n}"} for i, n in enumerate(numbers, 1)]}}
+
+
+@pytest.mark.unit
+def test_nb_prefix_match_keeps_single_exact_row_and_says_so(tool):
+    RecordingClient.bodies["detc"] = _detc_rows("2010헌바125", "2010헌바1", "2010헌바13")
+    out = tool("detc_search", nb="2010헌바1")
+    rows = out["ranked_data"]["Detc"]
+    assert [r["사건번호"] for r in rows] == ["2010헌바1"] and out["ranked_data"]["totalCnt"] == "1"
+    assert "2010헌바125" in out["raw_content"]
+    assert any(w.startswith("nb_prefix_match") for w in out["warnings"])
+
+
+@pytest.mark.unit
+def test_nb_prefix_match_without_exact_row_warns_and_keeps_rows(tool):
+    RecordingClient.bodies["detc"] = _detc_rows("2010헌바125", "2010헌바13")
+    out = tool("detc_search", nb="2010헌바1")
+    assert len(out["ranked_data"]["Detc"]) == 2
+    assert any(w.startswith("nb_prefix_match") and "정확히 일치하는 행이 없습니다" in w for w in out["warnings"])
+
+
+@pytest.mark.unit
+def test_nb_exact_rows_have_no_warning(tool):
+    RecordingClient.bodies["detc"] = _detc_rows("2022헌마1312")
+    assert "warnings" not in tool("detc_search", nb="2022헌마1312")
+
+
+@pytest.mark.unit
+def test_lsdelegated_no_match_wording(tool):
+    RecordingClient.bodies["lsDelegated"] = DELEGATED
+    out = tool("lsDelegated_service", id="000798", jo=9999)
+    (w,) = [w for w in out["warnings"] if w.startswith("no_delegation_for_article")]
+    assert "위임 항목 없음" in w and "조문 존재 여부는 확인하지 않음" in w
+    assert len(RecordingClient.calls) == 1
+
+
+@pytest.mark.unit
+def test_aisearch_page_ignored_has_no_contradicting_no_more_results_hint(tool):
+    RecordingClient.bodies["aiSearch"] = {"aiSearch": {"검색결과개수": "2", "법령조문": [
+        {"법령명": "형법", "조문제목": "도주", "조문내용": "도주한"}, {"법령명": "형법", "조문제목": "도주2", "조문내용": "도주한"}]}}
+    out = tool("aiSearch", query="도주", page=5, display=7)
+    assert any(w.startswith("page_ignored") for w in out["warnings"])
+    assert not any("no_more_results" in h for h in out.get("hints", []))
+
+
+@pytest.mark.unit
+def test_prec_and_expc_descriptions_state_the_ranking_change():
+    server = server_mod.create_server()
+    for name in ("prec_search", "expc_search"):
+        doc = server._tool_manager.get_tool(name).description
+        assert "re-ranked" in doc and "sort" in doc
+    for name in ("expc_service", "decc_service"):
+        assert "lm_not_sent" in server._tool_manager.get_tool(name).description

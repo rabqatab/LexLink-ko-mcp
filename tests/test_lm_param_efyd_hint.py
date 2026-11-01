@@ -104,7 +104,8 @@ def test_case_service_with_id_does_not_send_lm(tool, name, kw):
     out = tool(name, lm="이름", type="XML", **kw)
     (_, params), = RecordingClient.calls
     assert "LM" not in params and "lm" not in params
-    assert any(w.startswith("lm_ignored") for w in out["warnings"])
+    assert any(n.startswith("lm_not_sent") for n in out["notes"])
+    assert "warnings" not in out
 
 
 @pytest.mark.unit
