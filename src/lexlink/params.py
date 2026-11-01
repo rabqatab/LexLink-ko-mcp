@@ -60,6 +60,14 @@ def resolve_oc(override_oc: Optional[str] = None) -> str:
         return env_oc
 
     # Fail with helpful message
+    if _IGNORE_OC_OVERRIDE:
+        # HTTP mode: the `oc` tool argument is ignored, so telling the caller to pass it is wrong
+        raise ValueError(
+            "OC is not configured on this server. The `oc` tool argument is ignored in HTTP mode; "
+            "the server operator must set the OC environment variable (see docs/OPERATIONS.md). "
+            "서버에 OC 환경변수가 설정되어 있지 않습니다. HTTP 모드에서는 `oc` 인자를 무시하므로 "
+            "서버 운영자가 OC를 설정해야 합니다."
+        )
     raise ValueError(
         "OC parameter is required but not provided. "
         "Please provide it via:\n"

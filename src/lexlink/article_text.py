@@ -39,6 +39,7 @@ from .validation import format_article_number
 
 __all__ = [
     "ArticleNotFoundError",
+    "VersionNotFoundError",
     "normalize_article",
     "article_label",
     "article_jo",
@@ -75,6 +76,14 @@ _BR_RE = re.compile(r"<\s*br\s*/?\s*>", re.IGNORECASE)
 
 class ArticleNotFoundError(ToolValidationError):
     """Raised when a law payload has no article text to extract."""
+
+
+class VersionNotFoundError(ArticleNotFoundError):
+    """Raised when the upstream has no law at all for the MST (unknown or retired MST).
+
+    Unlike a plain ArticleNotFoundError the version itself is missing, so the
+    article cannot be called absent from it.
+    """
 
 
 # ---------------------------------------------------------------------------

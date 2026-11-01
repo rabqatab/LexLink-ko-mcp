@@ -8,6 +8,16 @@ All notable changes to LexLink are documented here in both English and Korean.
 
 ### Unreleased
 
+#### Status labels and error classification
+- `eflaw_search` `nw` is 1=연혁, 2=시행예정, 3=현행 (measured live; the docs and error text said 2=현행, 3=시행예정, so `nw="2"` returned scheduled rows labelled 현행). `admrul_search` / `ordin_search` `nw` 1=현행, 2=연혁 re-measured and unchanged (3 behaves like 1).
+- `article_amendment_diff`: an unknown MST (`NOT_FOUND` upstream) is now a `NOT_FOUND` error; "Article added/deleted" is only reported when both versions exist and the article is really absent from one. `chain_amendment_track` reports a failed diff in `warnings` as well as in `article_diff.error`.
+- `*_service` tools (`prec`, `detc`, `expc`, `decc`, `trty`, `cgm_expc`, `special_decc`): an ok response whose body fields are all empty (e.g. `detc_service` id 150756, 150770) carries `warning: "empty_body"`, `empty_fields`, `message`, `hints`.
+- The upstream shows the "미신청" page for a wrong `ef_yd`, an unknown id and an invalid `type` too. An invalid `type` is `VALIDATION_ERROR` before the call (on every tool); for a lawService call the client now checks one list request of the same target: list also 미신청 -> `API_NOT_SUBSCRIBED`, list works -> `UPSTREAM_HTML_ERROR` ("parameters rejected"), no answer -> `API_NOT_SUBSCRIBED` with an "unconfirmed" hint.
+- Blank or whitespace `query` / `law_name` / `situation` is `VALIDATION_ERROR` before any upstream call (`chain_law_system`, `legal_resolver`, `check_precedent_odds` and 11 more; the 16 list tools whose query defaults to `*` reject an explicit blank).
+- `lnkLsOrdJo_search` `jo` accepts `20`, `"0020"`, `"제20조"`, `"20의2"`, `"002002"` (was `int()` error on `"제11조"`); a branch in `jo` fills `jobr`, a conflict is an error.
+- `article_citation`: non-numeric `mst` is `VALIDATION_ERROR`; ranges such as 「신탁법」 제46조부터 제48조 list every article from start to end (`range_text`, `range_note`; branch articles inside a range are not enumerated); docstring example fixed (제35조의5; 제37조의2 does not exist) and the Quick Reference states "000300" = 제3조, not 제300조 ("030000").
+- Non-numeric `id`/`mst` is `VALIDATION_ERROR` (was a 500-class "not your fault" hint). `admrul_search` `date` accepts int or str and a bad value is a structured `VALIDATION_ERROR`. The missing-OC message in HTTP mode no longer tells callers to pass `oc` (it is ignored there).
+
 #### Tool policy metadata
 - Every tool's `tools/list` entry now carries `_meta["lexlink/policy"]` (contract v1): `version`, `category`, `evidence` (primary / derived / heuristic / none), `size` (normal / large), `upstream_calls` (usual maximum law.go.kr requests per call), `may_expose_credential` and optional `notes`. The table is `TOOL_POLICIES` in `src/lexlink/tool_policy.py`, filled from the code and live measurements; it is registered through the existing `server.tool` wrapper (FastMCP 1.26 `meta=`). A tool without an entry makes `create_server()` fail. Tool behaviour, input schemas and annotations are unchanged. Contract: `docs/API_REFERENCE.md`; tests: `tests/test_tool_policy.py` (real clients over stdio and Streamable HTTP).
 
@@ -23,7 +33,7 @@ All notable changes to LexLink are documented here in both English and Korean.
 
 #### As-of-date lookup (hypeproof-legal #59)
 - New tool `law_as_of(law_name, as_of, article?, article_branch?, as_of_end?)`: the law (or one article) in force on date D. It lists every (MST, 시행일) of the law, picks the latest 시행일 <= D and fetches that exact revision (`lawService target=eflaw`, MST + efYd). Returns MST, 시행일, 공포일, article text, difference from the current text, later/scheduled/promulgated-not-yet-effective versions, a period mode (`as_of_end`) and a plain statement. `in_force` is true / false / null: false has `BEFORE_FIRST_ENFORCEMENT`, `BEFORE_EARLIEST_AVAILABLE_VERSION`, `AFTER_REPEAL` (`폐지제정` is not a repeal); null is `NOT_CURRENT_UPSTREAM` (law with no 현행/시행예정 row and no repeal). Same-name older 법령ID is used only within one lineage (same 법령구분명 and a 법률/대통령령/헌법 or the same ministry). 부칙 clauses that delay an article are quoted in `partial_effect.article_scan`. Upstream failures are never reported as "not found". Tool count 54 -> 55.
-- `eflaw_search` gets optional `nw` (1=연혁, 2=현행, 3=시행예정); default unchanged. Its `ef_yd` doc now says it is a 시행일 range filter.
+- `eflaw_search` gets optional `nw` (1=연혁, 2=시행예정, 3=현행); default unchanged. Its `ef_yd` doc now says it is a 시행일 range filter.
 - `law_amendment_summary` gets `date_basis` ("announced" default = 공포일, or "effective" = 시행일 and always includes the revision in force at `date_from`); schema descriptions added to the date arguments and to `chain_amendment_track`.
 - `eflaw_service` / `eflaw_josub`: `ef_yd` without `mst` (id + ef_yd) is a `VALIDATION_ERROR` (upstream ignores it or returns `{}`); with `mst` + `ef_yd` the `id` is dropped (with `id` upstream returns the current text). `ef_yd` accepts int or str.
 - Schema-level `Field` descriptions on `id` / `mst` / `ef_yd` of the service tools point to `law_as_of`. `article="007602"` with a conflicting `article_branch` is an error.
@@ -620,6 +630,16 @@ All notable changes to LexLink are documented here in both English and Korean.
 
 ### 미배포 (Unreleased)
 
+#### 상태 표기와 오류 분류
+- `eflaw_search` `nw`는 1=연혁, 2=시행예정, 3=현행(실측). 문서와 오류 문구가 2=현행, 3=시행예정으로 적혀 있어 `nw="2"`가 시행예정 행을 현행으로 오인하게 했음. `admrul_search` / `ordin_search`의 `nw` 1=현행, 2=연혁은 재측정해 그대로(3은 1과 동일 동작).
+- `article_amendment_diff`: 없는 MST(업스트림 `NOT_FOUND`)는 `NOT_FOUND` 오류. "조문 신설/삭제"는 두 버전이 모두 존재하고 조문이 실제로 한쪽에 없을 때만 보고. `chain_amendment_track`은 비교 실패를 `article_diff.error`와 함께 `warnings`에도 보고.
+- `*_service`(`prec`, `detc`, `expc`, `decc`, `trty`, `cgm_expc`, `special_decc`): ok 응답이어도 본문 필드가 모두 비어 있으면(예: `detc_service` id 150756, 150770) `warning: "empty_body"`, `empty_fields`, `message`, `hints`를 반환.
+- 업스트림은 잘못된 `ef_yd`, 없는 id, 잘못된 `type`에도 "미신청" 페이지를 반환. 잘못된 `type`은 모든 도구에서 호출 전에 `VALIDATION_ERROR`. lawService 호출에서 이 페이지가 오면 같은 target의 목록 조회를 한 번 확인: 목록도 미신청이면 `API_NOT_SUBSCRIBED`, 목록이 정상이면 `UPSTREAM_HTML_ERROR`(인자 거부 안내), 응답이 없으면 '확인하지 못함' 힌트가 붙은 `API_NOT_SUBSCRIBED`.
+- 빈 문자열·공백 `query` / `law_name` / `situation`은 업스트림 호출 전에 `VALIDATION_ERROR`(`chain_law_system`, `legal_resolver`, `check_precedent_odds` 외 11개; 기본값이 `*`인 목록 도구 16개는 명시적 빈 값을 거부).
+- `lnkLsOrdJo_search`의 `jo`는 `20`, `"0020"`, `"제20조"`, `"20의2"`, `"002002"`를 받음(`"제11조"`는 `int()` 오류였음). `jo`의 가지번호는 `jobr`로 전달하고 충돌하면 오류.
+- `article_citation`: 숫자가 아닌 `mst`는 `VALIDATION_ERROR`. 「신탁법」 제46조부터 제48조 같은 범위는 시작~끝 모든 조문을 나열(`range_text`, `range_note`; 범위 사이의 가지조문은 나열하지 않음). docstring 예시 수정(제35조의5; 제37조의2는 없음), Quick Reference에 "000300" = 제3조(제300조는 "030000") 명시.
+- 숫자가 아닌 `id`/`mst`는 `VALIDATION_ERROR`(기존: 500계열 "not your fault" 힌트). `admrul_search`의 `date`는 정수/문자열을 받고 잘못된 값은 구조화된 `VALIDATION_ERROR`. HTTP 모드의 OC 누락 메시지가 더 이상 `oc` 인자 전달을 안내하지 않음(HTTP에서는 무시됨).
+
 #### 도구 정책 메타데이터
 - 모든 도구의 `tools/list` 항목에 `_meta["lexlink/policy"]`(계약 v1)가 실립니다: `version`, `category`, `evidence`(primary / derived / heuristic / none), `size`(normal / large), `upstream_calls`(호출당 law.go.kr 요청 수 통상 최대), `may_expose_credential`, 선택 `notes`. 표는 `src/lexlink/tool_policy.py`의 `TOOL_POLICIES`이며 코드 분석과 라이브 측정으로 채웠습니다. 기존 `server.tool` 래퍼로 등록합니다(FastMCP 1.26 `meta=`). 항목이 없는 도구가 있으면 `create_server()`가 실패합니다. 도구 동작, 입력 스키마, annotations는 그대로입니다. 계약: `docs/API_REFERENCE.md`, 테스트: `tests/test_tool_policy.py`(stdio와 Streamable HTTP 실제 클라이언트).
 
@@ -635,7 +655,7 @@ All notable changes to LexLink are documented here in both English and Korean.
 
 #### 기준일 시점 조회 (hypeproof-legal #59)
 - 새 도구 `law_as_of(law_name, as_of, article?, article_branch?, as_of_end?)`: D일에 시행 중이던 법령(또는 한 조문). 법령의 (MST, 시행일) 목록에서 시행일 <= D 중 가장 늦은 것을 골라 그 개정본을 `lawService target=eflaw`(MST + efYd)로 조회한다. MST, 시행일, 공포일, 조문, 현행과의 차이, 이후/시행예정/공포 후 미시행 버전, 기간 조회(`as_of_end`), 설명문을 반환. `in_force`는 true / false / null: false의 `reason`은 `BEFORE_FIRST_ENFORCEMENT`, `BEFORE_EARLIEST_AVAILABLE_VERSION`, `AFTER_REPEAL`(`폐지제정`은 폐지 아님); null은 `NOT_CURRENT_UPSTREAM`(현행/시행예정 행도 폐지 표시도 없는 법령). 동일 명칭의 구법(다른 법령ID)은 같은 계통(같은 법령구분명이고 법률/대통령령/헌법이거나 소관부처가 같음)일 때만 사용. 조문 시행을 늦추는 부칙은 `partial_effect.article_scan`에 인용. 업스트림 실패를 "없음"으로 보고하지 않는다. 도구 수 54 -> 55.
-- `eflaw_search`에 선택 인자 `nw`(1=연혁, 2=현행, 3=시행예정) 추가(기본 동작 동일). `ef_yd`는 시행일 범위 필터임을 명시.
+- `eflaw_search`에 선택 인자 `nw`(1=연혁, 2=시행예정, 3=현행) 추가(기본 동작 동일). `ef_yd`는 시행일 범위 필터임을 명시.
 - `law_amendment_summary`에 `date_basis`("announced" 기본 = 공포일, "effective" = 시행일이며 `date_from` 당시 시행 중이던 개정본도 항상 포함) 추가. 날짜 인자와 `chain_amendment_track`에 스키마 설명 추가.
 - `eflaw_service` / `eflaw_josub`: `mst` 없이 `ef_yd`만(id + ef_yd)은 `VALIDATION_ERROR`(upstream이 무시하거나 `{}` 반환). `mst` + `ef_yd`가 있으면 `id`는 제거(id가 있으면 upstream이 현재본 반환). `ef_yd`는 int/str 모두 허용.
 - 서비스 도구의 `id` / `mst` / `ef_yd` 스키마 설명에서 `law_as_of`를 안내. `article="007602"`와 충돌하는 `article_branch`는 오류.

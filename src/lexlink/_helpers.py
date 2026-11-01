@@ -878,6 +878,7 @@ def run_service(
     sections: Optional[str] = None,
     full_text_fields: Optional[list[str]] = None,
     summary_required_fields: Optional[list[str]] = None,
+    body_fields: Optional[list[str]] = None,
 ) -> dict:
     """Common service tool logic. Handles: param mapping, API call, section filtering.
 
@@ -889,7 +890,19 @@ def run_service(
         summary_required_fields: Fields that make a summary useful (e.g. 판시사항,
                          판결요지). If all are empty, full_text_fields are kept and
                          sections="summary_fallback" is reported.
+        body_fields: The fields that carry the document itself. When the upstream
+                         answers ok but every one of them is empty (a record exists, its
+                         text was not supplied), the result gets ``warning: "empty_body"``
+                         with ``empty_fields`` so the caller does not read it as a decision
+                         with no content. Applies in every ``sections`` mode.
     """
+    # A non-numeric id/mst makes law.go.kr answer HTTP 500, which would read as an upstream
+    # fault ("not your fault"); it is the caller's input, so refuse it before the call.
+    from .law_extras import validate_digits
+    for key in ("id", "mst"):
+        if snake_params.get(key) is not None:
+            snake_params[key] = validate_digits(snake_params[key], key, allow_empty=True) or snake_params[key]
+
     upstream_params = map_params_to_upstream(snake_params)
 
     # Check cache (only for full responses — summary mode always fetches fresh then strips)
@@ -906,6 +919,7 @@ def run_service(
     cache.put(target, upstream_params, response)
 
     # Section filtering must not mutate the cached full response
+    cached_full = response
     response = dict(response)
 
     # Section filtering: strip full-text fields when sections="summary"
@@ -952,6 +966,21 @@ def run_service(
                 response["excluded_fields"] = full_text_fields
             except:
                 pass  # If JSON parsing fails, return unmodified
+
+    if body_fields and response.get("status") == "ok":
+        full = cached_full.get("raw_content", "")
+        if full and _fields_empty(full, response_type, body_fields):
+            response["warning"] = "empty_body"
+            response["empty_fields"] = list(body_fields)
+            response["message"] = (
+                "업스트림이 이 문서의 본문 필드(" + ", ".join(body_fields) + ")를 모두 비워서 반환했습니다. "
+                "기록은 존재하지만 내용이 제공되지 않았으므로 본문이 없다고 단정하지 말고 다른 출처로 확인하세요. "
+                "The upstream returned this record with every body field empty."
+            )
+            response["hints"] = [
+                "법제처 데이터 자체가 비어 있는 경우입니다(LexLink가 내용을 지우지 않음)",
+                "같은 사건의 다른 일련번호나 원 출처(법원·헌법재판소·부처 사이트)에서 본문을 확인하세요",
+            ]
 
     return response
 

@@ -45,6 +45,9 @@ class Citation:
     citation_type: str = "unknown"            # internal/external
     link_class: str = ""                      # sfon1/sfon2/sfon3/sfon4
     gap_before: str = ""                      # Plain text since the previous link (parsing aid)
+    range_text: Optional[str] = None          # "제46조부터 제48조" when this article comes from a range
+    range_note: Optional[str] = None          # why a range could not be listed completely
+    range_end: Optional[Tuple[int, int]] = None  # (article, branch) of the range end (parsing aid)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -66,6 +69,10 @@ class Citation:
             result["target_item"] = self.target_item
         if self.target_subitem:
             result["target_subitem"] = self.target_subitem
+        if self.range_text:
+            result["range_text"] = self.range_text
+        if self.range_note:
+            result["range_note"] = self.range_note
 
         return result
 
@@ -77,7 +84,7 @@ class CitationResult:
     success: bool
     law_id: str
     law_name: str
-    article: str                              # Display format: "제3조" or "제37조의2"
+    article: str                              # Display format: "제3조" or "제35조의5"
     citation_count: int
     citations: List[Dict[str, Any]]
 
@@ -127,6 +134,9 @@ class CitationExtractor:
 
     # Regex patterns
     ARTICLE_PATTERN = re.compile(r'제(\d+)조(?:의(\d+))?')
+    # "제46조부터 제48조" inside one link: law.go.kr links the whole range once
+    RANGE_PATTERN = re.compile(r'제(\d+)조(?:의(\d+))?\s*(?:부터|에서)\s*제(\d+)조(?:의(\d+))?')
+    MAX_RANGE_EXPANSION = 200
     PARAGRAPH_PATTERN = re.compile(r'제(\d+)항')
     ITEM_PATTERN = re.compile(r'제(\d+)호')
     LAW_NAME_PATTERN = re.compile(r'「([^」]+)」')
@@ -210,7 +220,7 @@ class CitationExtractor:
         Args:
             lsi_seq: Law sequence ID
             article_no: Article number (조번호)
-            article_branch: Article branch number (조가지번호, e.g., 제37조의2 → branch=2)
+            article_branch: Article branch number (조가지번호, e.g., 제35조의5 → branch=5)
 
         Returns:
             HTML content if successful, None otherwise
@@ -298,9 +308,63 @@ class CitationExtractor:
                     # "이 법" = the source law; later "같은 법" refers to it
                     last_named_law = None
 
+            if citation.link_class == 'sfon2' and citation.range_end is not None:
+                citations.append(citation)
+                citations.extend(self._expand_range(citation, include_end=True))
+                continue
+            if (citation.link_class == 'sfon2' and citation.gap_before.strip() == '부터'
+                    and citations and citations[-1].link_class == 'sfon2'
+                    and citations[-1].target_article is not None):
+                # "제46조" + "부터" + "제48조" as two links: add what lies between
+                start = citations[-1]
+                citation.range_text = f"{start.target_text}부터 {citation.target_text}"
+                start.range_text = citation.range_text
+                start.range_end = (citation.target_article or 0, citation.target_article_branch or 0)
+                citations.extend(self._expand_range(start, include_end=False))
+
             citations.append(citation)
 
         return citations
+
+    def _expand_range(self, start: Citation, include_end: bool) -> List[Citation]:
+        """Citations for the articles after ``start`` up to its range end.
+
+        Only whole articles between two plain article numbers (제46조부터 제48조) can be
+        listed; branch articles inside the range (제46조의2) are part of the range but are
+        not enumerated, which ``range_note`` says on every article taken from a range.
+        """
+        end_article, end_branch = start.range_end or (None, 0)
+        first = start.target_article
+        if end_article is None or first is None:
+            return []
+        start.range_end = None
+        branches = bool(start.target_article_branch) or bool(end_branch)
+        note = None
+        if branches or end_article < first or end_article - first > self.MAX_RANGE_EXPANSION:
+            note = ("범위의 시작/끝에 가지조문(의N)이 있거나 범위가 너무 커서 중간 조문을 나열하지 못했습니다. "
+                    f"원문 범위: {start.range_text}")
+            numbers = [(end_article, end_branch)] if (include_end and end_article >= first) else []
+        else:
+            numbers = [(n, 0) for n in range(first + 1, end_article + (1 if include_end else 0))]
+            note = ("범위 사이의 가지조문(제N조의M)은 나열하지 않았습니다. "
+                    f"원문 범위: {start.range_text}")
+        start.range_note = note
+        clones = []
+        for number, branch in numbers:
+            label = f"제{number}조" + (f"의{branch}" if branch else "")
+            clones.append(Citation(
+                target_text=label,
+                target_ref_id=start.target_ref_id,
+                target_type=start.target_type,
+                target_article=number,
+                target_article_branch=branch or None,
+                citation_type=start.citation_type,
+                link_class='sfon2',
+                gap_before=",",
+                range_text=start.range_text,
+                range_note=note,
+            ))
+        return clones
 
     @staticmethod
     def _gap_before(link) -> str:
@@ -378,6 +442,10 @@ class CitationExtractor:
                 citation.target_article = int(art_match.group(1))
                 if art_match.group(2):
                     citation.target_article_branch = int(art_match.group(2))
+            range_match = self.RANGE_PATTERN.search(link_text)
+            if range_match:
+                citation.range_text = range_match.group(0)
+                citation.range_end = (int(range_match.group(3)), int(range_match.group(4) or 0))
 
         elif link_class == 'sfon3':
             # Paragraph: 제N항
@@ -456,6 +524,8 @@ class CitationExtractor:
                             last.target_article = citation.target_article
                             last.target_article_branch = citation.target_article_branch
                             last.target_text += " " + citation.target_text
+                            last.range_text = citation.range_text
+                            last.range_note = citation.range_note
                             current_internal_article_idx = None
                             continue
                         # "「법」 제14조와 제15조": a bare article joined by a
@@ -470,7 +540,9 @@ class CitationExtractor:
                                 target_article=citation.target_article,
                                 target_article_branch=citation.target_article_branch,
                                 citation_type="external",
-                                link_class=citation.link_class
+                                link_class=citation.link_class,
+                                range_text=citation.range_text,
+                                range_note=citation.range_note,
                             ))
                             continue
                         # Else: external law already has article, treat as new internal
