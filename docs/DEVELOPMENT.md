@@ -23,6 +23,7 @@ Tests mock the upstream API (fixtures in `tests/fixtures/`). There is no coverag
 | `client.py` | HTTP client for law.go.kr: anti-bot redirect following, structured upstream error detection |
 | `params.py` | snake_case to upstream camelCase mapping, OC resolution (`oc` argument, then `OC` env; the argument is ignored in HTTP mode) |
 | `validation.py` | date and `jo` validation/normalization |
+| `guards.py` | argument guards for the case-law/interpretation tools (`date` translation, `nb`, `inq`, enums, `display` cap, `lm`/`sections`), `lsDelegated` `jo` filter, ordinance id/serial collision check |
 | `law_extras.py` | validation and normalization for the history/comparison/appendix/dictionary tools (oldAndNew, thdCmp, lsJoHstInf, lsHstInf, delHst, lsAbrv, licbyl, lstrm) |
 | `linkage.py` | knowledge-base and ordinance-link request logic |
 | `agency_codes.py` | ministry, committee and tribunal code tables and aliases |
@@ -30,7 +31,7 @@ Tests mock the upstream API (fixtures in `tests/fixtures/`). There is no coverag
 | `article_text.py` | article text extraction (조문내용, 항/호/목 flattening) |
 | `citation.py` | HTML citation extraction (BeautifulSoup) for `article_citation` |
 | `parser.py`, `ranking.py` | response parsing and relevance ranking |
-| `cache.py`, `resolver.py` | per-tool TTL cache; law-name abbreviation resolution |
+| `cache.py`, `resolver.py` | per-tool TTL cache (locked: tool functions run in worker threads); law-name abbreviation resolution |
 | `errors.py` | `ErrorCode` and structured error responses |
 | `stdio_server.py`, `http_server.py` | transport entry points (`uv run stdio`, `uv run serve`) |
 | `http_security.py` | bearer auth, rate limit, session binding, Host/Origin validation (pure ASGI) |
