@@ -201,13 +201,21 @@ def _dates_in(text: str) -> set[str]:
 # the period starts the day after 공포일 and the date it reaches is the day it has "elapsed"
 # (공포 2021-04-20 + 6개월 -> 2021-10-21). Checked against eflaw 시행일자 of real laws.
 _REL_RE = re.compile(
-    r"공포\s*(?:한\s*날\s*)?(?:후|부터)\s*(\d{1,3})\s*(개월|월|년|일)\s*(?:이\s*)?(?:경과한|지난)\s*날"
+    r"공포\s*(?P<han>한\s*날\s*)?(?:후|부터)\s*"
+    r"(?:(?P<y>\d{1,3})\s*년\s*)?(?:(?P<m>\d{1,3})\s*(?:개월|월)\s*)?(?:(?P<dd>\d{1,3})\s*일\s*)?"
+    r"(?:이\s*)?(?:경과한|지난)\s*날"
 )
+# what follows "…경과한 날": "이 속하는 달의 1일" / "의 다음 날" are computed, any other continuation
+# ("이 속하는 달의 다음 달 1일", "의 전날", "부터 1년 이내") makes the date unresolved
+_TAIL_FIRST_OF_MONTH = re.compile(r"^\s*이\s*속하는\s*(?:달|월)의\s*(?:1일|초일)")
+_TAIL_NEXT_DAY = re.compile(r"^\s*의\s*다음\s*날")
+_TAIL_OTHER = re.compile(r"^\s*(?:이|의|로부터|까지|부터\s*\d)")
 # dates this module cannot compute from the 부칙 alone
 _DELEGATED_RE = re.compile(
     r"(?:대통령령|총리령|[가-힣]{1,12}부령|대법원규칙|헌법재판소규칙|[가-힣]{1,12}규칙)\s*(?:으로|으로서)?\s*정(?:하는|한|하여\s*고시하는)\s*날"
     r"|(?:이\s*법\s*)?시행\s*(?:후|일부터)\s*\d{1,3}\s*(?:개월|월|년|일)\s*(?:이\s*)?(?:경과한|지난)\s*날"
     r"|공포\s*(?:한\s*날\s*)?(?:후|부터)\s*\d{1,3}\s*(?:개월|월|년|일)\s*(?:이\s*)?(?:되는|이내)"
+    r"|공포\s*\d{1,3}\s*(?:개월|월|년|일)\s*(?:이\s*)?후"   # "공포 6개월 후": counted from the 공포일 or the day after?
 )
 
 
@@ -241,7 +249,22 @@ def _relative_dates(text: str, announced: str) -> tuple[set, list]:
     dates: set = set()
     unresolved: list = []
     for m in _REL_RE.finditer(text):
-        got = relative_enforcement_date(announced, int(m.group(1)), m.group(2))
+        y, mo, dd = (int(m.group(k)) if m.group(k) else 0 for k in ("y", "m", "dd"))
+        # "공포한 날부터 N개월이 경과한 날" is not checked against real data: left unresolved, like a
+        # number-less match or days mixed with months
+        if not (y or mo or dd) or m.group("han") or (dd and (y or mo)):
+            unresolved.append(m.group(0))
+            continue
+        got = (relative_enforcement_date(announced, y * 12 + mo, "개월") if (y or mo)
+               else relative_enforcement_date(announced, dd, "일"))
+        tail = text[m.end():m.end() + 40]
+        if got and _TAIL_FIRST_OF_MONTH.match(tail):
+            got = got[:6] + "01"
+        elif got and _TAIL_NEXT_DAY.match(tail):
+            got = (date(int(got[:4]), int(got[4:6]), int(got[6:])) + timedelta(days=1)).strftime("%Y%m%d")
+        elif got and _TAIL_OTHER.match(tail):
+            unresolved.append(m.group(0) + tail.split("시행")[0][:30])
+            continue
         if got:
             dates.add(got)
         else:
@@ -276,7 +299,20 @@ def _names_article(sentence: str, article: int, branch: int, at_chunk_start: boo
     return False
 
 
-def scan_bupchik(units: list[dict], article: int, branch: int, d: str, limit: int = 5) -> list[dict]:
+_ITEM_RE = re.compile(r"^\s*(?:\d{1,2}|[가-힣])[.)]\s")
+
+
+def _is_own_unit(unit: dict, own: Optional[tuple]) -> bool:
+    """Is ``unit`` the 부칙 of the amendment ``own`` = (공포일자, 공포번호)? ``own=None``: every unit counts."""
+    if own is None:
+        return True
+    if str(unit.get("부칙공포일자", "") or "") != str(own[0] or ""):
+        return False
+    return not own[1] or _int(unit.get("부칙공포번호")) == _int(own[1])
+
+
+def scan_bupchik(units: list[dict], article: int, branch: int, d: str, limit: int = 5,
+                 own: Optional[tuple] = None) -> list[dict]:
     """부칙 clauses that tie ``제N조[의B]`` of this law to a 시행 date later than ``d``.
 
     A chunk is one 항-sized passage (starts at ①.., 제N조, or a 부칙 header). Within it the
@@ -285,10 +321,15 @@ def scan_bupchik(units: list[dict], article: int, branch: int, d: str, limit: in
     of that sentence count; when it says "각 호" the following item lines belong to it.
     Relative dates ("공포 후 6개월이 경과한 날") are computed from the 부칙's own 공포일
     (``relative_enforcement_date``). A date that cannot be computed (대통령령으로 정하는 날, 시행일 기준
-    상대일, unknown 공포일) gives a hit with ``unresolved`` and no ``later_dates``. Returns quoted text only.
+    상대일, unknown 공포일) gives a hit with ``unresolved`` and no ``later_dates`` when it comes from the
+    chosen version's own 부칙 (``own`` = (공포일자, 공포번호)); in an older amendment's 부칙 the same
+    phrase is a ``settled_unresolved`` hit (a later revision has taken effect since, so it cannot
+    decide whether the article is in force). Item lines under a "각 호" head that name the article are
+    evaluated on their own. Returns quoted text only.
     """
     hits: list[dict] = []
     for unit in units:
+        is_own = _is_own_unit(unit, own)
         lines = _flatten_lines(unit.get("부칙내용"))
         header = lines[0].strip() if lines and lines[0].lstrip().startswith("부칙") else ""
         chunks: list[list[str]] = []
@@ -300,11 +341,19 @@ def scan_bupchik(units: list[dict], article: int, branch: int, d: str, limit: in
         for chunk in chunks:
             if "다음과 같이 개정한다" in "".join(chunk):
                 continue
+            under_each_ho = False  # a "...다음 각 호의 구분에 따른 날부터 시행한다" head precedes these lines
             for li, line in enumerate(chunk):
+                is_item = bool(_ITEM_RE.match(line)) and under_each_ho
+                if "각 호" in line and "시행" in line:
+                    under_each_ho = True
+                elif not _ITEM_RE.match(line) and li > 0:
+                    under_each_ho = False
                 sentences = [seg for sent_ in _SENT_SPLIT_RE.split(line.strip())
                              for seg in _CLAUSE_SPLIT_RE.split(sent_)]  # "…시행하고, …시행하며, …시행한다"
                 for sent in sentences:
-                    if "시행" not in sent or not _names_article(sent, article, branch, at_chunk_start=(li == 0)):
+                    if not _names_article(sent, article, branch, at_chunk_start=(li == 0)):
+                        continue
+                    if "시행" not in sent and not is_item:
                         continue
                     clause = sent + ("\n" + "\n".join(s.strip() for s in chunk[li + 1:]) if "각 호" in sent else "")
                     announced = str(unit.get("부칙공포일자", "") or "")
@@ -314,10 +363,13 @@ def scan_bupchik(units: list[dict], article: int, branch: int, d: str, limit: in
                         hit = {"bupchik": header or unit.get("부칙공포번호", ""),
                                "announced_date": announced,
                                "text": clause[:600], "later_dates": later}
+                        if is_item:
+                            hit["from_item_list"] = True
                         if rel_dates:
                             hit["computed_from_announcement"] = sorted(rel_dates)
                         if unresolved and not later:
-                            hit["unresolved"] = unresolved  # a date the 부칙 gives but that cannot be computed here
+                            # a date the 부칙 gives but that cannot be computed here
+                            hit["unresolved" if is_own else "settled_unresolved"] = unresolved
                         hits.append(hit)
                         if len(hits) >= limit:
                             return hits

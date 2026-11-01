@@ -118,6 +118,80 @@ def test_law_as_of_reports_computed_relative_date_for_the_article(stalking):
     assert after["partial_effect"]["article_scan"]["article_staged_enforcement_found"] is False
 
 
+FAMILY = json.loads((pathlib.Path(__file__).parent / "fixtures" / "bupchik_family_register_2016_unit.json").read_text(encoding="utf-8"))
+
+
+def test_old_amendments_delegated_date_does_not_apply_to_later_versions():
+    # 가족관계의 등록 등에 관한 법률 부칙 <제14169호,2016.5.29>: 제14조제5항 전단 및 제15조 ... 대법원규칙으로 정하는 날
+    unit_ = FAMILY["unit"]
+    own_2016 = scan_bupchik([unit_], 15, 0, "20180101", own=("20160529", "14169"))
+    assert own_2016 and own_2016[0].get("unresolved") and not own_2016[0].get("settled_unresolved")
+    later = scan_bupchik([unit_], 15, 0, "20180101", own=("20171031", "14963"))     # version of the 2017 amendment
+    assert later and later[0].get("settled_unresolved") and "unresolved" not in later[0]
+    assert scan_bupchik([unit_], 14, 0, "20260101", own=("20231226", "19841"))[0].get("settled_unresolved")
+
+
+@pytest.fixture
+def family(as_of):
+    name = "가족등록테스트법"
+    rows = [
+        _row("002003", name, "198473", "20171031", "20171031", "14963", "일부개정", "연혁"),
+        _row("002003", name, "257203", "20231226", "20231226", "19841", "일부개정", "현행"),
+    ]
+    ROWS.extend(rows)
+    for key in (("198473", "20171031"), ("257203", "20231226")):
+        BODIES[key] = {"제15조": "제15조(증명서) 본문"}
+        BUPCHIK[key] = [FAMILY["unit"]]
+    yield as_of, name
+    for r in rows:
+        ROWS.remove(r)
+    for key in (("198473", "20171031"), ("257203", "20231226")):
+        BODIES.pop(key, None)
+        BUPCHIK.pop(key, None)
+
+
+@pytest.mark.parametrize("d", ["20180101", "20260101"])
+def test_law_as_of_in_force_does_not_regress_on_old_delegated_date(family, d):
+    as_of, name = family
+    out = as_of(law_name=name, as_of=d, article=15)
+    assert out["in_force"] is True and "reason" not in out
+    assert out["partial_effect"]["earlier_amendment_unresolved_dates"][0]["phrases"] == ["대법원규칙으로 정하는 날"]
+    assert any("이전 개정의 부칙" in c and "쓰지 않았습니다" in c for c in out["caveats"])
+
+
+@pytest.mark.parametrize("text,expected", [
+    # 공포 2020-01-15
+    ("제2조 제5조는 공포 후 1년 6개월이 경과한 날부터 시행한다.", [["20210716"]]),
+    ("제2조 제5조는 공포 후 6개월이 경과한 날이 속하는 달의 1일부터 시행한다.", [["20200701"]]),
+    ("제2조 제5조는 공포 후 6개월이 경과한 날의 다음 날부터 시행한다.", [["20200717"]]),
+    ("제2조 제5조는 공포 후 6개월이 경과한 날이 속하는 달의 다음 달 1일부터 시행한다.", "unresolved"),
+    ("제2조 제5조는 공포 후 6개월이 경과한 날의 전날부터 시행한다.", "unresolved"),
+    ("제2조 제5조는 공포 6개월 후부터 시행한다.", "unresolved"),
+    ("제2조 제5조는 공포한 날부터 6개월이 경과한 날부터 시행한다.", "unresolved"),
+    ("제2조 제5조는 공포 후 1년 2일이 경과한 날부터 시행한다.", "unresolved"),
+])
+def test_relative_forms(text, expected):
+    u = {"부칙공포일자": "20200115", "부칙공포번호": "1", "부칙내용": [["부칙 <제1호,2020.1.15>", text]]}
+    hits = scan_bupchik([u], 5, 0, "20200116")
+    if expected == "unresolved":
+        assert len(hits) == 1 and hits[0].get("unresolved") and not hits[0]["later_dates"], hits
+    else:
+        assert [h["later_dates"] for h in hits] == expected, hits
+
+
+def test_items_under_each_ho_that_name_the_article():
+    u = {"부칙공포일자": "20200115", "부칙공포번호": "1", "부칙내용": [[
+        "부칙 <제1호,2020.1.15>",
+        "제1조(시행일) 이 법은 다음 각 호의 구분에 따른 날부터 시행한다.",
+        "  1. 제5조: 2024년 1월 1일",
+        "  2. 제6조: 공포 후 1년이 경과한 날",
+        "  3. 제7조: 대통령령으로 정하는 날"]]}
+    assert [h["later_dates"] for h in scan_bupchik([u], 5, 0, "20200116")] == [["20240101"]]
+    assert [h["later_dates"] for h in scan_bupchik([u], 6, 0, "20200116")] == [["20210116"]]
+    assert scan_bupchik([u], 7, 0, "20200116")[0].get("unresolved")
+    assert scan_bupchik([u], 8, 0, "20200116") == []
+
+
 def test_law_as_of_in_force_is_null_when_the_date_cannot_be_computed(stalking):
     as_of, _ = stalking
     out = as_of(law_name="위임테스트법", as_of="20230801", article=9)

@@ -46,6 +46,8 @@ LISTS = {
 class FakeClient:
     calls: list = []
     body_missing: set = set()
+    garbage: set = set()        # ids whose 200 body is not a 판례 body
+    totals: dict = {}           # (kind, term) -> totalCnt larger than the rows returned
 
     def __init__(self, *a, **k):
         pass
@@ -55,10 +57,13 @@ class FakeClient:
         if endpoint == "/DRF/lawSearch.do":
             kind, term = ("nb", params["nb"]) if params.get("nb") else ("q", (params.get("query") or "").strip('"'))
             rows = LISTS.get((kind, term), [])
-            body = {"PrecSearch": {"totalCnt": str(len(rows)), "page": "1", "prec": rows}}
+            total = FakeClient.totals.get((kind, term), len(rows))
+            body = {"PrecSearch": {"totalCnt": str(total), "page": "1", "prec": rows}}
             return {"status": "ok", "request_id": "fake", "upstream_type": "JSON",
                     "raw_content": json.dumps(body, ensure_ascii=False)}
         pid = str(params.get("ID"))
+        if pid in FakeClient.garbage:
+            return {"status": "ok", "request_id": "fake", "upstream_type": "JSON", "raw_content": "<html>점검 중</html>"}
         if pid in FakeClient.body_missing:
             return {"status": "error", "error_code": "NOT_FOUND", "message": "일치하는 판례가 없습니다", "request_id": "fake"}
         if pid == "187486":
@@ -77,6 +82,8 @@ def status(monkeypatch):
     monkeypatch.delenv("SLIM_RESPONSE", raising=False)
     FakeClient.calls = []
     FakeClient.body_missing = set()
+    FakeClient.garbage = set()
+    FakeClient.totals = {}
     get_cache().invalidate()
     server = server_mod.create_server()
     return lambda **kw: server._tool_manager.get_tool("prec_status").fn(**kw)
@@ -169,9 +176,98 @@ def test_generic_change_sentence_is_only_a_lead(status):
 
 def test_unknown_target_and_no_hits_state_scope(status):
     out = status(case_number="99다1")
-    assert out["overruling_status"] == ps.NONE_FOUND and out["target"]["found_in_index"] is False
+    assert out["overruling_status"] == ps.CASE_NOT_FOUND and out["target"]["found_in_index"] is False
     assert out["searched_scope"]["scanned"] == [] and out["searched_scope"]["search_rows_total"] == 0
     assert any("선고일을 알 수 없습니다" in c for c in out["caveats"])
+    assert "확인 필요" in out["statement"] and out["overruling_status"] != ps.NONE_FOUND
+
+
+@pytest.mark.parametrize("text", [
+    "94므1713", "1994므1713", "94므1713, 1720", "대법원 94므1713 판결", "대법원 1995. 5. 23. 선고 94므1713 판결",
+    "대법원 1995. 5. 23. 선고 94므1713, 1720 판결(공1995하, 2265)",
+])
+def test_citation_forms_and_year_digits_resolve_to_the_same_case(status, text):
+    out = status(case_number=text)
+    assert out["overruling_status"] == ps.OVERRULED_FOUND, text
+    assert out["target"]["found_in_index"] is True and out["target"]["case_number"] == "94므1713"
+    assert out["evidence"][0]["source"]["case_number"] == "2013므2250"
+
+
+@pytest.mark.parametrize("text", ["2099다99999", "94므1720"])
+def test_unknown_numbers_and_joined_second_number_are_not_a_clean_result(status, text):
+    out = status(case_number=text)        # 94므1720 is only the second number of the joined case 94므1713, 1720
+    assert out["overruling_status"] == ps.CASE_NOT_FOUND
+    assert out["target"]["found_in_index"] is False
+    assert any("첫 번호" in c for c in out["caveats"]) and "확인 필요" in out["statement"]
+
+
+def test_truncated_citing_list_is_incomplete_not_clean(status):
+    FakeClient.totals[("q", "92다17754")] = 500        # 500 citing decisions, one page returned
+    out = status(case_number="92다17754")
+    assert out["searched_scope"]["search_list_truncated"] is True
+    assert out["overruling_status"] == ps.INCOMPLETE and "일부만 확인" in out["statement"]
+    # positive evidence stays positive, with the partial scope stated
+    FakeClient.totals[("q", "94므1713")] = 500
+    found = status(case_number="94므1713")
+    assert found["overruling_status"] == ps.OVERRULED_FOUND and "일부만 확인" in found["statement"]
+
+
+def test_unparsable_200_body_names_the_candidate_and_is_incomplete(status):
+    FakeClient.garbage = {"187486"}
+    out = status(case_number="94므1713")
+    assert out["overruling_status"] == ps.INCOMPLETE
+    assert out["searched_scope"]["unreadable"][0]["case_number"] == "2013므2250"
+    assert out["searched_scope"]["unscannable"] == []
+    assert "2013므2250" in out["statement"] and "해석하지 못한" in out["statement"]
+
+
+def test_statement_counts_decisions_not_evidence_items():
+    fields = {"참조판례": "대법원 1995. 5. 23. 선고 94므1713 판결(변경)",
+              "판례내용": "대법원 1995. 5. 23. 선고 94므1713 판결은 변경한다."}
+    found = ps.find_evidence(fields, (1994, "므", 1713))
+    assert {e["evidence"] for e in found["explicit"]} == {"explicit_marker", "explicit_sentence"}
+    out = ps.check_status(
+        key=(1994, "므", 1713), co_keys=[], case_text="94므1713", target_row=R_94,
+        search=lambda p: {"total": 2, "rows": [R_2013, R_94]}, service=lambda pid: fields)
+    assert len(out["evidence"]) == 2
+    text = ps.statement(out["overruling_status"], "94므1713", out["searched_scope"], 1)
+    assert "판결 1건" in text and "2건" not in text
+
+
+def test_minority_opinion_hit_is_not_a_finding():
+    maj = "[다수의견] 우리는 종전 입장을 유지한다. "
+    dis = "[대법관 홍길동의 반대의견] 대법원 1995. 5. 23. 선고 94므1713 판결은 변경한다."
+    f = ps.find_evidence({"판결요지": maj + dis}, (1994, "므", 1713))
+    assert f["explicit"] == [] and f["cited"][0]["opinion"] == "minority"
+    body = ("이유 1. 쟁점 대법원 1995. 5. 23. 선고 94므1713 판결은 변경한다. 2. 대법관 김철수, 이영희의 반대의견은 다음과 같다. "
+            "대법원 1998. 6. 12. 선고 98므213 판결은 변경한다.")
+    assert ps.find_evidence({"판례내용": body}, (1994, "므", 1713))["explicit"]
+    assert ps.find_evidence({"판례내용": body}, (1998, "므", 213))["explicit"] == []
+    out = ps.check_status(
+        key=(1998, "므", 213), co_keys=[], case_text="98므213", target_row=R_98,
+        search=lambda p: {"total": 2, "rows": [R_2013, R_98]}, service=lambda pid: {"판례내용": body})
+    assert out["overruling_status"] == ps.NONE_FOUND
+
+
+def test_sentence_naming_two_cases_ties_the_wording_to_the_right_one():
+    s = ("대법원 1995. 5. 23. 선고 94므1713 판결은 그대로 유지하되, 대법원 1998. 6. 12. 선고 98므213 판결은 변경한다.")
+    assert ps.find_evidence({"판례내용": s}, (1994, "므", 1713))["explicit"] == []
+    assert ps.find_evidence({"판례내용": s}, (1998, "므", 213))["explicit"]
+    both = "대법원 1995. 5. 23. 선고 94므1713, 대법원 1998. 6. 12. 선고 98므213 판결 등은 변경한다."
+    assert ps.find_evidence({"판례내용": both}, (1994, "므", 1713))["explicit"]
+    assert ps.find_evidence({"판례내용": both}, (1998, "므", 213))["explicit"]
+
+
+@pytest.mark.parametrize("wording", ["변경함이 상당하다", "변경하는 것이 타당하다", "폐기된다"])
+def test_soft_wording_is_a_lead_not_evidence(wording):
+    f = ps.find_evidence({"판례내용": f"대법원 1995. 5. 23. 선고 94므1713 판결은 이 판결과 저촉되는 범위에서 {wording}."},
+                         (1994, "므", 1713))
+    assert f["explicit"] == [] and f["soft"]
+    out = ps.check_status(
+        key=(1994, "므", 1713), co_keys=[], case_text="94므1713", target_row=R_94,
+        search=lambda p: {"total": 2, "rows": [R_2013, R_94]},
+        service=lambda pid: {"판례내용": f"대법원 1995. 5. 23. 선고 94므1713 판결은 이 판결과 저촉되는 범위에서 {wording}."})
+    assert out["overruling_status"] == ps.POSSIBLE and out["leads"][0]["wording"] == "soft_change_wording"
 
 
 def test_by_id_and_validation(status):
@@ -180,13 +276,16 @@ def test_by_id_and_validation(status):
     assert out["overruling_status"] == ps.NONE_FOUND
     err = status()
     assert err["status"] == "error" and err["error_code"] == "VALIDATION_ERROR"
-    assert status(case_number="사건번호 없음")["error_code"] == "VALIDATION_ERROR"
+    bad = status(case_number="사건번호 없음")
+    assert bad["error_code"] == "VALIDATION_ERROR" and bad["hints"]
+    for junk in ("abc", "12x", "1; drop"):
+        assert status(id=junk)["error_code"] == "VALIDATION_ERROR", junk
 
 
 def test_unreadable_body_is_reported_not_hidden(status):
     FakeClient.body_missing = {"187486"}
     out = status(case_number="94므1713")
-    assert out["overruling_status"] == ps.NONE_FOUND
+    assert out["overruling_status"] == ps.INCOMPLETE          # a candidate that could not be read is not "no overruling"
     assert out["searched_scope"]["unscannable"][0]["case_number"] == "2013므2250"
 
 
@@ -211,6 +310,7 @@ def test_scan_budget_is_bounded(status, monkeypatch):
     assert len(scope["scanned"]) + len(scope["unscannable"]) == 2 and len(scope["not_scanned_en_banc"]) == 6
     assert out["upstream_calls"] <= 1 + 1 + 2
     assert any("본문을 확인했습니다" in c for c in out["caveats"])
+    assert out["overruling_status"] == ps.INCOMPLETE and "읽지 않은 후보" in out["statement"]
 
 
 def test_policy_entry_and_registration():
