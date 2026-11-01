@@ -112,7 +112,7 @@ def test_all_new_tools_registered(call):
     c = call({})
     server = server_mod.create_server()
     names = {t.name for t in asyncio.run(server.list_tools())}
-    assert len(names) == 66
+    assert len(names) == 68
     for n in ("oldAndNew_search", "oldAndNew_service", "lsJoHstInf_search", "lsHstInf_search",
               "delHst_search", "lsAbrv_search", "licbyl_search", "thdCmp_search",
               "thdCmp_service", "lstrm_search", "lstrm_service"):

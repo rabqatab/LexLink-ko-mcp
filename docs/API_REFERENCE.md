@@ -10,7 +10,7 @@
 
 ## LexLink 도구 목록
 
-도구 66개, 프롬프트 9개, 리소스 2개. 아래 표는 서버의 `list_tools()`에서 생성했습니다(필수 인자, 선택 인자와 기본값). 모든 도구는 선택 인자 `oc`를 받지만 HTTP 모드에서는 무시됩니다. 같은 모양으로 직접 확인하려면 [DEVELOPMENT.md](DEVELOPMENT.md#adding-a-tool)의 스니펫을 쓰세요.
+도구 68개, 프롬프트 9개, 리소스 2개. 아래 표는 서버의 `list_tools()`에서 생성했습니다(필수 인자, 선택 인자와 기본값). 모든 도구는 선택 인자 `oc`를 받지만 HTTP 모드에서는 무시됩니다. 같은 모양으로 직접 확인하려면 [DEVELOPMENT.md](DEVELOPMENT.md#adding-a-tool)의 스니펫을 쓰세요.
 
 ### 법령 (Laws)
 
@@ -47,6 +47,8 @@
 |---|---|---|
 | `prec_search` | - | query=*, display=20, page=1, type=JSON, search, sort, org, curt, jo, gana, date, prnc_yd, nb, dat_src_nm, pop_yn |
 | `prec_service` | id | lm, sections, type=JSON |
+| `prec_status` | - (case_number 또는 id 중 하나) | case_number, id, max_scan=5 |
+| `law_constitutional_check` | law_name, article | article_branch=0, max_scan=6 |
 | `detc_search` | - | query=*, display=20, page=1, type=JSON, search, gana, sort, date, ed_yd, nb, pop_yn |
 | `detc_service` | id | lm, sections, type=JSON |
 | `expc_search` | - | query=*, display=20, page=1, type=JSON, search=1, inq, rpl, gana, itmno, reg_yd, expl_yd, sort, pop_yn |
@@ -151,7 +153,7 @@
 | 구분 | 도구 수 | 비고 |
 |---|---|---|
 | 업스트림 API를 그대로 감싼 도구 | 54 | 신규 11개(`oldAndNew_*`, `thdCmp_*`, `lsJoHstInf_search`, `lsHstInf_search`, `delHst_search`, `lsAbrv_search`, `licbyl_search`, `lstrm_*`) 포함. `committee_*`(위원회 12개), `cgm_expc_*`(부처 39개), `special_decc_*`(심판원 4개)는 인자로 대상을 고르는 도구 |
-| LexLink 파생 도구 | 12 | `law_as_of`, `article_citation`, `check_precedent_odds`, `legal_resolver`, `simplify_article`, `law_amendment_summary`, `article_amendment_diff`, `chain_*` 4개, `cache_stats` |
+| LexLink 파생 도구 | 14 | `prec_status`, `law_constitutional_check`, `law_as_of`, `article_citation`, `check_precedent_odds`, `legal_resolver`, `simplify_article`, `law_amendment_summary`, `article_amendment_diff`, `chain_*` 4개, `cache_stats` |
 
 업스트림 카탈로그 195종 중 이 도구들이 다루지 않는 API는 각 절에 `NOT IMPLEMENTED`로 표시했습니다.
 
@@ -210,6 +212,8 @@ for t in asyncio.run(create_server().list_tools()):
 | 도구 | 동작 |
 |---|---|
 | `law_as_of` | 기준일 D에 시행 중이던 개정본을 골라 조문을 반환 (1.2.3절) |
+| `prec_status` | 판례 변경(overruling) 확인. 업스트림에 판례 인용·변경 API가 없어, 사건번호를 본문 검색(`prec_search query="사건번호" search=2`, 따옴표 구문 검색)해 **이후의 대법원 전원합의체 판결**만 후보로 삼고(판례 변경은 전원합의체만 가능, 방향이 중요: 옛 판결은 자신을 변경한 판결을 인용하지 않음) 각 후보를 `prec_service`로 읽어 ① `참조판례`의 `대법원 … 선고 94므1713, 1720 판결(공1995하, 2265)(변경)` 표지(`explicit_marker`, high) ② 사건번호를 지목하고 같은 문장에서 변경/폐기하는 문장(`explicit_sentence`, medium)을 근거로 반환한다(출처 판결 + 원문 그대로의 인용). 사건번호는 지목하지 않고 일반적인 "견해에 배치되는 범위 내에서 변경한다" 문장만 있으면 `leads`(`possible_overruling_needs_review`)이며 확정이 아니다. 결과는 `overruled_found` / `possible_overruling_needs_review` / `no_overruling_found_in_searched_set`이고, 마지막 값은 "변경되지 않았다"가 아니라 `searched_scope`(검색 행 수, 읽은/못 읽은 후보, 읽지 않은 비전원합의체 인용 판결 수)에 한정된 결과다. 업스트림 호출: 사건번호 확인 1 + 목록 1~3 + 후보 본문 `max_scan`(기본 5, 최대 10). 하급심의 파기, 헌재 결정, 법령 개정은 다루지 않는다. 단기 연호 사건번호(4292형상242)는 해석하지만 인용 표기가 다르면 놓칠 수 있다 |
+| `law_constitutional_check` | 헌법재판소 위헌·헌법불합치 **단서**. `law_as_of`는 시행일 데이터만 보므로 위헌결정으로 효력을 잃은 조문(형법 제241조 2015-02-26)을 감지하지 못한다. `detc_search query="법령명 제N조" search=2`(1쪽 100건, 최신순) 중 **사건명에 법령명과 해당 조문이 있는** 결정만 후보(`관세법 제241조`, `군형법`, `제241조의2`는 제외)로 삼아 `detc_service`로 `전문`의 `주문`을 읽고 위헌 / 헌법불합치 / 한정위헌 / 합헌 / 각하 / 기각으로 분류한다(주문이 여러 조항이면 해당 조문을 지목한 문장만 연결하고 못 찾으면 `article_specific=false`). 확인한 조문: 형법 제241조(2009헌바17 위헌 2015-02-26, 2007헌가17 합헌 2008-10-30, 나머지 각하), 민법 제847조 제1항(95헌가14 헌법불합치 1997-03-27, 2012헌바357 합헌 2015-03-26), 민법 제809조(95헌가6 헌법불합치 1997-07-16, 2018헌바115 합헌 2022-10-27이며 같은 주문의 제815조 제2호는 헌법불합치로 제809조와 구분됨), 민법 제844조(2013헌마623 헌법불합치 2015-04-30). `in_force`는 바꾸지 않으며 효력 시점(형벌조항 소급효), 헌법불합치의 잠정적용·개선입법 시한, 이후 개정은 계산하지 않는다. 사건명에 조문이 드러나지 않는 결정(`등`으로 묶인 조문, 입법부작위)은 놓칠 수 있고, 결과 없음은 위헌 판단이 없었다는 뜻이 아니다. 업스트림 호출: 검색 1 + 결정 본문 `max_scan`(기본 6, 최대 10) |
 | `law_amendment_summary` | 법령의 개정 이력. `date_from`/`date_to`는 기본으로 공포일 기준, `date_basis="effective"`면 시행일 기준(`date_from` 당시 시행 중이던 개정본 포함) |
 | `article_amendment_diff` | 두 MST의 한 조문(항/호/목 포함)을 줄 단위로 비교 |
 | `check_precedent_odds` | 판례의 주문만으로 결과를 분류한 분포. 라벨: 파기환송, 파기자판, 파기, 상고기각, 항소기각, 항고기각, 원판결변경, 일부인용, 인용, 기각, 각하, 취소, 무죄, 유죄, 공소기각, 불명. 승소율이 아님(`outcome_note`). 본문이 없는 판례는 건너뛰고 `unavailable_cases`로 보고 |
@@ -242,6 +246,9 @@ for t in asyncio.run(create_server().list_tools()):
 - **계정 단위 API 신청**: OC마다 신청한 API 범위가 다릅니다. 신청하지 않은 API는 `API_NOT_SUBSCRIBED` 오류가 됩니다(예: 현행법령 시행일 본문 `eflaw`는 `law_service`/`eflaw_josub`으로 대신할 수 있음).
 - **서버 IP 등록**: law.go.kr은 OC와 호출 IP를 함께 검증합니다. 등록되지 않은 IP에서는 "사용자 정보 검증에 실패하였습니다" 오류가 납니다([OPERATIONS.md](OPERATIONS.md)).
 - **`simplify_article`**: 본문을 쉬운 말로 바꾸지 않습니다. 법제처 용어 DB에 연결이 있는 용어만 `term_glossary`에 나오며, 연결이 법적 의미와 다를 수 있습니다.
+- **`prec_search`의 `nb`는 접두 일치이고 결합사건은 첫 번호로만 색인됩니다.** `nb=2013므`는 2013년 므 사건 전체(11건)를, `nb=2013므3`은 `2013므3383`만 돌려줍니다. 결합사건 "94므1713, 1720"은 `nb=94므1713`으로만 찾아지고 `nb=94므1720`은 0건이며, `nb="94므1713, 1720"`의 쉼표는 여러 건 조건이라 첫 건만 나옵니다. `query`는 사건명 검색(`search=1`)이고 사건번호를 본문에서 찾으려면 `search=2`와 따옴표 구문(`query='"94므1713"'`)을 쓰세요(따옴표가 없으면 `70도29`가 6,403건과 맞고 따옴표를 쓰면 3건).
+- **대법원 2015.6.24. 선고 2013므3963, 3970 판결은 법제처 판례 DB에 없습니다(검색 버그가 아니라 업스트림 공백).** 2026-11-01 직접 확인: `nb`를 `2013므3963` / `2013므3970` / `2013므3963, 3970` / `2013므3963,2013므3970` / `2013므3963ㆍ3970` / `2013므 3963`으로 호출하면 모두 0건, `nb=2013므`(접두)는 11건(2013므4133, 568, 2397, 2441, 4591, 4201, 2250, 1196, 5495, 3383, 1455)에 3963·3970이 없고, 선고일 2015-06-24 전체 57건에도 므 사건이 없으며, LexLink의 검색 계층(`run_search`)을 거치지 않고 HTTP 클라이언트로 `lawSearch.do`를 직접 호출해도 같은 결과입니다. 이런 판결은 `prec_search`/`prec_service`로 찾을 수 없으니 "확인 필요"로 다루세요.
+- **`prec_status`**: 변경 표시를 찾은 경우에만 `overruled_found`입니다. `no_overruling_found_in_searched_set`은 변경되지 않았다는 뜻이 아니며, 법제처가 본문을 제공하지 않는 판결, 인용 표기가 다른 판결, 목록 상한(3쪽 300건)·`max_scan`을 넘는 후보는 확인하지 못합니다. 방식과 측정은 CHANGELOG 참조.
 - **`check_precedent_odds`**: 판례 주문의 분포이며 승소율이나 결과 예측이 아닙니다.
 - **프롬프트/지침 준수는 모델마다 다릅니다.** 서버 지침(`SERVER_INSTRUCTIONS`)을 모든 LLM이 따르는 것은 아닙니다. 모델별 준수율 수치(과거 시험)는 [archive/ISSUES.md](archive/ISSUES.md)에 있으며 현재 버전에서 다시 측정하지 않았습니다.
 - **HTTP 서버**: 단일 프로세스 전제, SSE 전송의 로깅/동시성 한계 등은 [OPERATIONS.md](OPERATIONS.md)의 "알려진 한계"를 보세요.
@@ -502,6 +509,9 @@ http://www.law.go.kr/DRF/lawService.do?OC=test&target=lawjosub&type=XML&ID=00182
 | `false` | `BEFORE_EARLIEST_AVAILABLE_VERSION` | 조회된 연혁 이전: 시행 여부 확인 불가 (동일 명칭 법령ID 존재, 연혁 누락, 조회 실패 등) |
 | `false` | `AFTER_REPEAL` | 폐지(`폐지`/`타법폐지`/`일괄폐지`) 이후. `폐지제정`은 폐지가 아님 |
 | `null` | `NOT_CURRENT_UPSTREAM` | 업스트림에 현행/시행예정 버전이 없고 폐지 표시도 없는 법령(한시법 종료 등)의 마지막 버전 이후: 시행 중이었는지 알 수 없음 |
+| `null` | `ARTICLE_STAGED_DATE_UNRESOLVED` | `article`을 지정했고 부칙이 그 조문의 시행일을 계산할 수 없는 방식(`대통령령으로 정하는 날`, `이 법 시행 후 N개월이 경과한 날`, `공포 후 N개월 이내` 등, 또는 부칙 공포일 없음)으로 정한 경우: 기준일에 그 조문이 시행 중이었는지 알 수 없음. 부칙 원문은 `partial_effect.unresolved`와 `caveats` |
+
+**부칙 상대일(`공포 후 6개월이 경과한 날부터 시행`):** 부칙 단위의 `부칙공포일자`로 계산합니다. 기간은 공포일 다음 날부터 기산(민법 제157조)하고 역(曆)에 따라 계산하며(제160조) 기간이 지난 다음 날이 "경과한 날"입니다(공포 2021-04-20 + 6개월 = 2021-10-21; 말일이 없는 달은 다음 달 1일). 법제처 `eflaw` 시행일자와 대조: 스토킹범죄의 처벌 등에 관한 법률 3건과 가정폭력범죄의 처벌 등에 관한 특례법 13건(공포 후 1~8개월·1년 형태), 총 16건(개정본)에서 계산값이 그 개정본의 `시행일자`와 같았습니다(같은 개정의 다른 시행일 행 1건, MST 115734는 비교 대상이 아니라 제외). 계산된 날짜가 기준일보다 늦으면 `partial_effect.article_scan.matches[].later_dates`와 `computed_from_announcement`에 나옵니다(`in_force`는 그대로 true). 위헌·헌법불합치 단서는 `law_as_of`에 넣지 않고 `law_constitutional_check`로 따로 조회합니다.
 
 오류는 `status: error` + `error_code` (VALIDATION_ERROR, ARTICLE_NOT_FOUND, 업스트림 코드). 업스트림 실패는 "없음"으로 보고하지 않는다.
 동일 명칭의 구법(다른 법령ID)은 법령구분이 같고 (법률/대통령령/헌법이거나 소관부처가 같을 때)에만 대체한다.

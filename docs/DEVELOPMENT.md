@@ -26,7 +26,9 @@ Tests mock the upstream API (fixtures in `tests/fixtures/`). There is no coverag
 | `law_extras.py` | validation and normalization for the history/comparison/appendix/dictionary tools (oldAndNew, thdCmp, lsJoHstInf, lsHstInf, delHst, lsAbrv, licbyl, lstrm) |
 | `linkage.py` | knowledge-base and ordinance-link request logic |
 | `agency_codes.py` | ministry, committee and tribunal code tables and aliases |
-| `as_of.py` | pure helpers for `law_as_of` (version in force on a date) |
+| `as_of.py` | pure helpers for `law_as_of` (version in force on a date, 부칙 article-level and relative-date scan) |
+| `precedent_status.py` | `prec_status`: case-number parsing, 참조판례 `(변경)` marker and sentence evidence, bounded scan of later 전원합의체 decisions |
+| `constitutional.py` | `law_constitutional_check`: 헌재 decisions naming a law article, 주문 outcome classification |
 | `article_text.py` | article text extraction (조문내용, 항/호/목 flattening) |
 | `citation.py` | HTML citation extraction (BeautifulSoup) for `article_citation` |
 | `parser.py`, `ranking.py` | response parsing and relevance ranking |

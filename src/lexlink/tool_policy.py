@@ -111,6 +111,8 @@ TOOL_POLICIES: dict[str, dict] = {
     "trty_service": _p("treaty", "primary", "normal", 1, "측정 5KB~약 970KB(id 7297), 중앙값 약 50KB, 크기 제어 없음"),
     "prec_search": _p("precedent", "primary", "normal", 1),
     "prec_service": _p("precedent", "primary", "normal", 1, "전문 측정 10~30KB, sections=summary 3~7.5KB. 본문 미제공 판례는 NOT_FOUND"),
+    "prec_status": _p("precedent", "heuristic", "normal", 7, "변경 여부 추정. 사건번호 확인 1 + 인용 판결 목록 1~3(100건/쪽) + 후보 전원합의체 본문 max_scan(기본 5, 최대 10)회, 통상 7회 이내(id 지정 시 1+목록+본문), 최대 14회. 근거는 원문 인용, '변경 없음'을 단정하지 않음"),
+    "law_constitutional_check": _p("constitutional", "heuristic", "normal", 7, "법령명+조문이 사건명에 있는 헌재 결정의 주문 분류, 단서일 뿐 효력 판단 아님. 검색 1 + 결정 본문 max_scan(기본 6, 최대 10)회, 통상 7회 이내 최대 11회. law_as_of(5회 상한)와 분리"),
     "detc_search": _p("constitutional", "primary", "normal", 1),
     "detc_service": _p("constitutional", "primary", "normal", 1),
     "expc_search": _p("interpretation", "primary", "normal", 1),

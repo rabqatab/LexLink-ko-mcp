@@ -197,6 +197,60 @@ def _dates_in(text: str) -> set[str]:
     return found
 
 
+# Relative enforcement dates. "공포 후 6개월이 경과한 날" follows 민법 제157조 (초일불산입) and 제160조:
+# the period starts the day after 공포일 and the date it reaches is the day it has "elapsed"
+# (공포 2021-04-20 + 6개월 -> 2021-10-21). Checked against eflaw 시행일자 of real laws.
+_REL_RE = re.compile(
+    r"공포\s*(?:한\s*날\s*)?(?:후|부터)\s*(\d{1,3})\s*(개월|월|년|일)\s*(?:이\s*)?(?:경과한|지난)\s*날"
+)
+# dates this module cannot compute from the 부칙 alone
+_DELEGATED_RE = re.compile(
+    r"(?:대통령령|총리령|[가-힣]{1,12}부령|대법원규칙|헌법재판소규칙|[가-힣]{1,12}규칙)\s*(?:으로|으로서)?\s*정(?:하는|한|하여\s*고시하는)\s*날"
+    r"|(?:이\s*법\s*)?시행\s*(?:후|일부터)\s*\d{1,3}\s*(?:개월|월|년|일)\s*(?:이\s*)?(?:경과한|지난)\s*날"
+    r"|공포\s*(?:한\s*날\s*)?(?:후|부터)\s*\d{1,3}\s*(?:개월|월|년|일)\s*(?:이\s*)?(?:되는|이내)"
+)
+
+
+def _add_months(d: date, n: int) -> date:
+    y, m = divmod(d.month - 1 + n, 12)
+    y, m = d.year + y, m + 1
+    nxt = date(y + (m == 12), m % 12 + 1, 1)
+    last = (nxt - timedelta(days=1)).day
+    if d.day <= last:
+        return date(y, m, d.day)
+    return nxt  # 민법 제160조 제3항: no such day -> the period ends on the month's last day, elapsed the next day
+
+
+def relative_enforcement_date(announced: str, n: int, unit: str) -> Optional[str]:
+    """Date on which "공포 후 N개월/년/일이 경과한 날" falls; ``None`` for an unusable 공포일."""
+    if not re.fullmatch(r"\d{8}", announced or ""):
+        return None
+    try:
+        a = date(int(announced[:4]), int(announced[4:6]), int(announced[6:]))
+    except ValueError:
+        return None
+    if unit == "일":
+        return (a + timedelta(days=n + 1)).strftime("%Y%m%d")
+    months = n * 12 if unit == "년" else n
+    return _add_months(a + timedelta(days=1), months).strftime("%Y%m%d")
+
+
+def _relative_dates(text: str, announced: str) -> tuple[set, list]:
+    """(computed dates, unresolved phrases) for the relative/delegated dates in ``text``."""
+    text = re.sub(r"<[^>]*>", " ", text)
+    dates: set = set()
+    unresolved: list = []
+    for m in _REL_RE.finditer(text):
+        got = relative_enforcement_date(announced, int(m.group(1)), m.group(2))
+        if got:
+            dates.add(got)
+        else:
+            unresolved.append(m.group(0))
+    for m in _DELEGATED_RE.finditer(text):
+        unresolved.append(m.group(0))
+    return dates, unresolved
+
+
 def _names_article(sentence: str, article: int, branch: int, at_chunk_start: bool) -> bool:
     """True when ``sentence`` refers to this law's 제N조[의B] (alone or inside a 부터…까지 range)."""
     def other_law(prefix: str) -> bool:
@@ -229,7 +283,9 @@ def scan_bupchik(units: list[dict], article: int, branch: int, d: str, limit: in
     sentence naming the article (alone or in a "제A조부터 제C조까지" range; not another law's
     article such as 「…법」 제4조, not the 부칙's own 제N조(...)) must contain '시행'. Only dates
     of that sentence count; when it says "각 호" the following item lines belong to it.
-    Relative dates ("공포 후 6개월이 경과한 날") are not evaluated. Returns quoted text only.
+    Relative dates ("공포 후 6개월이 경과한 날") are computed from the 부칙's own 공포일
+    (``relative_enforcement_date``). A date that cannot be computed (대통령령으로 정하는 날, 시행일 기준
+    상대일, unknown 공포일) gives a hit with ``unresolved`` and no ``later_dates``. Returns quoted text only.
     """
     hits: list[dict] = []
     for unit in units:
@@ -251,11 +307,18 @@ def scan_bupchik(units: list[dict], article: int, branch: int, d: str, limit: in
                     if "시행" not in sent or not _names_article(sent, article, branch, at_chunk_start=(li == 0)):
                         continue
                     clause = sent + ("\n" + "\n".join(s.strip() for s in chunk[li + 1:]) if "각 호" in sent else "")
-                    later = sorted(x for x in _dates_in(clause) if x > d)
-                    if later:
-                        hits.append({"bupchik": header or unit.get("부칙공포번호", ""),
-                                     "announced_date": unit.get("부칙공포일자", ""),
-                                     "text": clause[:600], "later_dates": later})
+                    announced = str(unit.get("부칙공포일자", "") or "")
+                    rel_dates, unresolved = _relative_dates(clause, announced)
+                    later = sorted(x for x in _dates_in(clause) | rel_dates if x > d)
+                    if later or unresolved:
+                        hit = {"bupchik": header or unit.get("부칙공포번호", ""),
+                               "announced_date": announced,
+                               "text": clause[:600], "later_dates": later}
+                        if rel_dates:
+                            hit["computed_from_announcement"] = sorted(rel_dates)
+                        if unresolved and not later:
+                            hit["unresolved"] = unresolved  # a date the 부칙 gives but that cannot be computed here
+                        hits.append(hit)
                         if len(hits) >= limit:
                             return hits
     return hits
