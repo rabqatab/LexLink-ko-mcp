@@ -74,6 +74,15 @@ OC=<OC> LEXLINK_AUTH_TOKENS=local:<TOKEN> TRANSPORT=http uv run serve
 - 도구 호출이 동기 `httpx` 클라이언트를 사용하므로 업스트림이 느리면 이벤트 루프가 막혀 속도 제한 429 응답도 지연될 수 있습니다.
 - 이전 형식(요청/응답 병합 로그)을 읽는 `log_processor.py`는 새 형식을 처리하지 않습니다.
 
+### 실제 서버로 확인한 동작
+
+가짜 OC·가짜 토큰·로컬 포트와 로컬 가짜 업스트림(`LEXLINK_BASE_URL`)으로 `uv run serve`를 띄워 확인했습니다(#39). 같은 내용이 `tests/test_http_mode.py`, `tests/test_upstream_failures.py`에 오프라인 테스트로 있습니다.
+
+- `LEXLINK_MAX_SESSIONS=2`: 세 번째 세션 생성 요청은 503 `{"error": "too_many_sessions"}`와 `Retry-After: 30`. 상한은 토큰과 무관하게 전체에 적용되고(다른 토큰도 503), DELETE로 슬롯이 반환되면 다시 생성됩니다.
+- 속도 제한 키는 토큰이며 IP가 아닙니다. 신뢰하지 않는 피어가 요청마다 다른 `X-Forwarded-For`를 보내도 같은 토큰은 같은 버킷으로 계산되어 한도 뒤에 429가 되고, 다른 토큰은 영향이 없습니다. 로그의 `client_ip`는 신뢰하지 않는 피어면 피어 IP, `LEXLINK_TRUSTED_PROXIES`에 있는 피어면 `X-Forwarded-For`의 값입니다(어느 쪽도 속도 제한에는 쓰이지 않음).
+- `LEXLINK_LOG_BODIES=true`: 로그 파일과 서버 출력에 OC, 클라이언트가 보낸 `oc` 인자, 토큰, `Authorization` 값이 없었습니다. 오래된 `YYYY-MM-DD.jsonl`(45일 전)은 시작 시 삭제되고 5일 전 파일은 남았으며, 새 로그 파일은 `0600`, 디렉터리는 `0700`이었습니다(사전에 만들어 둔 파일의 권한은 바꾸지 않음).
+- 업스트림 실패(HTTP 500, 타임아웃, 0바이트 본문, 중간에 끊긴 JSON)는 구조화된 오류(`UPSTREAM_ERROR`, `TIMEOUT`, `EMPTY_RESPONSE`, `UPSTREAM_ERROR`)로 돌아오고 캐시되지 않아 다음 호출이 다시 업스트림으로 갑니다. 정상 응답은 캐시됩니다. 끊긴 JSON은 이전에는 `ok`로 반환·캐시되었습니다(수정됨).
+
 ## 4. TLS 리버스 프록시
 
 앱은 TLS를 처리하지 않으므로 프록시에서 종료합니다. 스트림(SSE)을 위해 버퍼링을 끄고, 앱은 `127.0.0.1`에만 바인드하세요. 프록시를 쓰는 경우 `LEXLINK_TRUSTED_PROXIES=127.0.0.1`을 설정하면 실제 클라이언트 IP가 로그에 남습니다.
@@ -237,7 +246,7 @@ PlayMCP처럼 응답 크기 제한이 있는 곳에 붙일 때는 환경 파일�
 | 421 | 요청 Host가 `LEXLINK_ALLOWED_HOSTS`에 없음 |
 | 429 | 토큰별 속도/동시성 제한 초과 (`Retry-After` 참고) |
 | 404 (세션) | 만료되었거나 다른 토큰의 세션. 새 세션을 시작 |
-| 503 `too_many_sessions` | `LEXLINK_MAX_SESSIONS` 도달 |
+| 503 `too_many_sessions` | `LEXLINK_MAX_SESSIONS` 도달 (`Retry-After: 30`). 기존 세션 DELETE/유휴 만료 후 재시도 |
 | Nginx 502 | LexLink 서비스가 내려가 있음: `sudo systemctl status lexlink`, `sudo journalctl -u lexlink -n 50` |
 | systemd `status=217/USER` | 유닛의 `User=`가 잘못됨 |
 | systemd `status=203/EXEC` | `ExecStart=`의 `uv` 경로 또는 프로젝트 경로가 잘못됨 (`which uv`) |

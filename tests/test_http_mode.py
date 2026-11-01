@@ -1328,3 +1328,40 @@ def test_real_stack_put_requests_cannot_create_unbound_sessions(monkeypatch):
         rb = c.post("/mcp", json=LIST, headers=_hdr(sid, TOKEN2))
         assert rb.status_code == 404
         assert codes  # all answered
+
+
+# ------------------------------------------------- full stack: caps, proxies, logs
+
+def test_max_sessions_503_through_create_app(monkeypatch):
+    monkeypatch.setenv("LEXLINK_AUTH_TOKENS", f"a:{TOKEN},b:{TOKEN2}")
+    monkeypatch.setenv("LEXLINK_ALLOWED_HOSTS", "testserver")
+    monkeypatch.setenv("LEXLINK_MAX_SESSIONS", "1")
+    with TestClient(http_server.create_app()) as c:
+        first = c.post("/mcp", json=INIT, headers=auth_headers())
+        assert first.status_code == 200
+        for token in (TOKEN, TOKEN2):                 # the cap is global, not per token
+            refused = c.post("/mcp", json=INIT, headers=auth_headers(token))
+            assert refused.status_code == 503 and refused.headers["retry-after"] == "30"
+            assert refused.json()["error"] == "too_many_sessions"
+        c.delete("/mcp", headers={**auth_headers(), "mcp-session-id": first.headers["mcp-session-id"]})
+        assert c.post("/mcp", json=INIT, headers=auth_headers()).status_code == 200   # slot freed
+
+
+@pytest.mark.parametrize("trusted", [False, True])
+def test_spoofed_xff_never_changes_the_rate_limit_key(monkeypatch, trusted):
+    monkeypatch.setenv("LEXLINK_AUTH_TOKENS", f"a:{TOKEN},b:{TOKEN2}")
+    monkeypatch.setenv("LEXLINK_ALLOWED_HOSTS", "testserver")
+    monkeypatch.setenv("LEXLINK_RATE_LIMIT_PER_MIN", "2")
+    if trusted:
+        monkeypatch.setenv("LEXLINK_TRUSTED_PROXIES", "testclient")
+    with TestClient(http_server.create_app()) as c:
+        codes = [c.post("/mcp", json=INIT, headers={**auth_headers(), "X-Forwarded-For": f"203.0.113.{i}"}).status_code
+                 for i in range(4)]
+        assert codes == [200, 200, 429, 429]          # the key is the token whatever XFF says
+        assert c.post("/mcp", json=INIT, headers={**auth_headers(TOKEN2), "X-Forwarded-For": "203.0.113.1"}).status_code == 200
+
+
+def test_log_ip_untrusted_peer_ignores_xff_trusted_peer_uses_it():
+    scope = make_scope(headers=[("x-forwarded-for", "198.51.100.7")], client=("10.0.0.3", 1))
+    assert resolve_client_ip(scope, frozenset()) == "10.0.0.3"
+    assert resolve_client_ip(scope, frozenset({"10.0.0.3"})) == "198.51.100.7"

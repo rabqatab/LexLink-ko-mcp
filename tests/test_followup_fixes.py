@@ -513,3 +513,21 @@ def test_query_keyed_target_not_found_hints(target, body):
     text = json.dumps(err, ensure_ascii=False)
     assert "연계 정보가 없거나 검색어를 확인하세요" in text
     assert "ID(일련번호" not in text and "ID가 잘못" not in text
+
+
+@pytest.mark.unit
+def test_redact_oc_short_value_echoed_after_an_oc_label():
+    fake = "g4c"                         # fake value, not a real credential
+    src = f"OC {fake} 는 허용되지 않습니다 (OC={fake}, oc: {fake}) OC '{fake}'였다"
+    out = redact_oc(src, fake)
+    assert fake not in out
+    assert out == "OC *** 는 허용되지 않습니다 (OC=***, oc: ***) OC '***'였다"   # Korean text untouched
+
+
+@pytest.mark.unit
+def test_redact_oc_short_value_without_label_or_inside_words_is_kept():
+    fake = "g4c"
+    for keep in ("legal g4c text", "법 g4c 조항", "DOC g4c", "OC g4cx", "OC xg4c", "the OC of law", "g4c는 별개"):
+        assert redact_oc(keep, fake) == keep
+    assert redact_oc("OC law 는", "law") == "OC *** 는"           # a labelled value is redacted even if a word
+    assert redact_oc("the law of law and OC: x", "law") == "the law of law and OC: x"

@@ -15,7 +15,7 @@ from typing import Any, Optional, Union
 
 from ._helpers import ToolValidationError
 from .parser import parse_xml_response
-from .validation import format_article_number
+from .validation import fold_fullwidth_digits, format_article_number
 
 
 # 용어관계코드 (trmRltCd) accepted by lstrmRlt / dlytrmRlt
@@ -29,7 +29,7 @@ TRM_RLT_CODES = {
 _TRM_RLT_BY_NAME = {name: code for code, name in TRM_RLT_CODES.items()}
 
 # "35", "35의5", "제35조", "제35조의5"
-_JO_TEXT_RE = re.compile(r"^제?\s*(\d{1,4})\s*조?\s*(?:의\s*(\d{1,2}))?$")
+_JO_TEXT_RE = re.compile(r"^제?\s*([0-9]{1,4})\s*조?\s*(?:의\s*([0-9]{1,2}))?$")
 
 
 def normalize_jo_code(jo: Union[str, int, None]) -> str:
@@ -46,9 +46,9 @@ def normalize_jo_code(jo: Union[str, int, None]) -> str:
     if jo is None or str(jo).strip() == "":
         raise ToolValidationError("'jo' (article number) is required", hints=hints)
 
-    text = str(jo).strip()
+    text = fold_fullwidth_digits(jo)
 
-    if text.isdigit():
+    if re.fullmatch(r"[0-9]+", text):
         if len(text) == 6:
             article, branch = int(text[:4]), int(text[4:])
         elif len(text) <= 4:
