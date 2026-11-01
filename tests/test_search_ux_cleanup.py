@@ -210,8 +210,8 @@ def test_simplify_article_never_rewrites_text(monkeypatch):
     out = server_mod.create_server()._tool_manager.get_tool("simplify_article").fn(
         law_name="저작권법", article=35, article_branch=5)
     assert out["simplified_text"] == out["original_text"]
-    assert [g["term"] for g in out["term_glossary"]] == ["공정한이용"]  # no repeated entries
-    assert "법적 의미와 다를 수 있" in out["note"]
+    assert out["term_glossary"] == [] and out["text_simplified"] is False  # no glossary at all
+    assert "보증할 수 없습니다" in out["note"]
 
 
 DRLAW_HTML = """<html><body><div class="lelitop"><div class="num">총<strong>981</strong>건</div></div>

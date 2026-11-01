@@ -20,7 +20,7 @@ from typing import Annotated, Optional, Union
 from urllib.parse import unquote
 
 from mcp.server.fastmcp import FastMCP, Context
-from pydantic import Field
+from pydantic import Field, StrictInt
 
 from . import __version__
 from .client import LawAPIClient, redact_oc
@@ -50,7 +50,9 @@ from ._helpers import (
     slim_response, run_search, run_service, annotate_prec_body_availability,
     extract_order, classify_order, extract_key_factors, extract_legal_terms, compute_text_diff, run_coroutine_sync,
     compact_limit, slim_limited, slim_enabled, mark_slim_cut, low_relevance_warning, SLIM_MAX_BYTES, _json_size,
+    enforce_slim_limit,
     rename_row_ids_to_rank, run_ranked_paging, validate_paging, OVER_FETCH_WINDOW,
+    query_terms, matched_query_terms, distinctive_terms, counts_as_overlap,
     add_no_more_results_hint, add_no_results_guidance, body_is_all_null, NO_MORE_RESULTS_HINT,
     trim_raw_to_ranked,
     NO_RESULTS_MESSAGE, NO_RESULTS_HINTS, NO_RESULTS_BODY_HINT, OUTCOME_NOTE,
@@ -162,7 +164,7 @@ Use `sections="full"` only when the complete judgment text is specifically neede
 
 **Public Legal Assistance:**
 - legal_resolver: Given a situation, find all applicable laws, precedents, and interpretations in one call
-- simplify_article: Get a law article with a glossary of database synonym links for its legal terms (text is not rewritten)
+- simplify_article: Get a law article's text unchanged (the text is NOT simplified or rewritten and there is NO term glossary: the legal-term database links are unreliable; use lstrm_search for terms)
 - check_precedent_odds: Find precedent statistics and key outcome factors for a legal question
 - law_amendment_summary: See all revisions of a law in a date range
 - law_as_of: The law (or one article) as in force on a given date D, with MST/시행일/공포일 (사건일 기준 적용 법령)
@@ -3846,6 +3848,12 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         Searches court precedents, classifies each case's 주문 (disposition, e.g. 파기환송/
         상고기각/항소기각/각하/일부인용; 불명 when unclear) and extracts key factors. This is a
         distribution of dispositions, NOT a win rate: see outcome_note before drawing conclusions.
+        outcome_summary counts only the sampled cases (see sample: the first few search hits,
+        not a random or complete sample). A case is counted only when a distinctive (non-generic)
+        query word appears in its 사건명, 판시사항 or 판결요지; every other case is listed under
+        uncounted_cases with its matched words and no outcome. If nothing is counted the
+        statistics are empty and warnings carries a low_relevance entry; fewer than 3 counted
+        cases is flagged small_sample. The check is literal word overlap and errs both ways.
 
         Args:
             query: Legal question or keywords (e.g., "택배 파손 보상", "임대차 보증금 반환")
@@ -3879,16 +3887,28 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         total_found = found["total"]
         search_mode = found["mode"]
 
-        # Step 2: Analyze top_n precedents
+        # Cases whose 사건명 already shows a distinctive query word come first (no extra request);
+        # the rest keep the upstream order.
+        terms = query_terms(query)
+        if terms:
+            prec_list = sorted(
+                prec_list,
+                key=lambda it: 0 if counts_as_overlap(terms, matched_query_terms(terms, it.get("사건명", ""))) else 1)
+
+        # Step 2: Analyze candidates until top_n are counted. Body fetches stop after top_n + 4
+        # attempts (unavailable bodies included) so one call stays within 2 + top_n + 4 requests.
         outcomes = {}
         all_factors = []
-        cases = []
+        cases = []        # counted: a distinctive query word is in 사건명/판시사항/판결요지
+        uncounted = []    # fetched but not counted
         unavailable = 0
         slim_cut = False
+        max_fetches = max(1, top_n) + 4
+        fetches = 0
 
         seen_case_numbers: set = set()
         for item in prec_list:
-            if len(cases) >= top_n:
+            if len(cases) >= top_n or fetches >= max_fetches:
                 break
             prec_id = item.get("판례일련번호")
             if not prec_id:
@@ -3899,14 +3919,15 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 continue
             seen_case_numbers.add(case_no)
 
-            # Fetch summary
+            # Fetch the body as JSON/XML, never HTML (the HTML page cannot be parsed here)
             svc_params = {
                 "oc": resolved_oc, "target": "prec",
-                "id": str(prec_id), "type": type,
+                "id": str(prec_id), "type": fmt,
             }
+            fetches += 1
             svc_result = run_service(
                 get_client=_get_client, target="prec",
-                snake_params=svc_params, response_type=type,
+                snake_params=svc_params, response_type=fmt,
             )
 
             # Body unavailable (NOT_FOUND etc.): skip, try the next candidate
@@ -3920,7 +3941,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             summary_text = ""
             body_text = ""  # 판례내용: the only place the 주문 lives
 
-            if raw and type == "JSON":
+            if raw and fmt == "JSON":
                 try:
                     import json as _json
                     jd = _json.loads(raw)
@@ -3950,16 +3971,28 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             # Outcome comes from the 주문 only; recitals/판결요지 are never read
             order = extract_order(body_text)
             outcome = classify_order(order)
-            outcomes[outcome] = outcomes.get(outcome, 0) + 1
             factors = [strip_html(f) for f in extract_key_factors(holding)]
-            all_factors.extend(f for f in factors if f)
 
-            cases.append({
+            # Advisory word overlap. The body text is not used: a 본문 (search=2) hit contains the
+            # words by construction, so only 사건명, 판시사항 and 판결요지 can count a case.
+            case_name = strip_html(item.get("사건명", ""))
+            matched = matched_query_terms(terms, case_name, holding, summary_text)
+            case_info = {
                 "id": str(prec_id),
-                "name": strip_html(item.get("사건명", "")),
+                "name": case_name,
                 "date": item.get("선고일자", ""),
                 "case_number": item.get("사건번호", ""),
                 "court": item.get("법원명", ""),
+                "matched_query_terms": matched,
+            }
+            if not counts_as_overlap(terms, matched):
+                uncounted.append({**case_info, "low_relevance": True})
+                continue
+            outcomes[outcome] = outcomes.get(outcome, 0) + 1
+            all_factors.extend(f for f in factors if f)
+            cases.append({
+                **case_info,
+                "low_relevance": False,
                 "outcome": outcome,
                 "order": order[:compact_limit(300)] if order else "",
                 "holding": holding[:compact_limit(500)] if holding else "",
@@ -3978,24 +4011,72 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
 
         if slim_enabled() and (len(unique_factors) > 10 or any(len(f) >= 100 for f in unique_factors)):
             slim_cut = True
+        counted = len(cases)
+        analyzed = counted + len(uncounted)
+        small_sample = 0 < counted < 3
         result = {
             "status": "ok",
             "query": query,
             "total_found": total_found,
-            "analyzed": len(cases),
+            "analyzed": analyzed,
             "unavailable_cases": unavailable,
             "outcome_summary": outcomes,
+            "sample": {
+                "total_found": total_found,
+                "analyzed": analyzed,
+                "counted_in_outcome_summary": counted,
+                "uncounted": len(uncounted),
+                "unavailable": unavailable,
+                "small_sample": small_sample,
+                "selection": (
+                    f"검색 결과({search_mode}) 중 사건명에 질의 단어가 있는 판례를 앞세우고 나머지는 검색 순서대로 "
+                    f"본문을 확인해, 사건명·판시사항·판결요지에 질의 단어가 있는 판례만 최대 {top_n}건 집계했습니다"
+                    f"(본문 조회 최대 {max_fetches}회). 무작위·전수 표본이 아닙니다"
+                ),
+            },
+            "statistics_note": (
+                f"outcome_summary는 검색된 {total_found}건 중 집계한 {counted}건의 주문 분류 건수일 뿐, "
+                "전체 판례의 분포가 아니며 이 사건의 승소 확률도 아닙니다"
+            ),
             "key_factors": unique_factors[:compact_limit(10)],
             "search_mode": search_mode,
             "search_attempts": found["attempts"],
             "representative_cases": cases,
+            "uncounted_cases": uncounted,
+            "relevance_basis": "term_overlap: 질의 단어와의 글자 일치 참고 표시(관련성 판단 아님, 양방향 오류 가능)",
+            "api_calls_made": len(found["attempts"]) + fetches,
             "outcome_note": OUTCOME_NOTE,
             "disclaimer": "이 분석은 참고용이며 법률 자문이 아닙니다. 정확한 판단을 위해 변호사와 상담하세요.",
         }
+        relevance_warnings: list = []
+        if analyzed and not terms:
+            result["low_relevance"] = True
+            relevance_warnings.append(
+                "low_relevance: 질의에서 비교할 수 있는 단어를 찾지 못해 판례가 질의와 관련 있는지 확인할 수 없습니다. "
+                "집계하지 않았고 representative_cases는 비웠습니다. 확인한 판례는 uncounted_cases에 있습니다")
+        elif analyzed and not counted:
+            result["low_relevance"] = True
+            relevance_warnings.append(
+                "low_relevance: 확인한 판례 어디에도 질의의 핵심 단어(" + ", ".join(distinctive_terms(terms)) + ")가 "
+                "사건명·판시사항·판결요지에 없어 집계하지 않았습니다(글자 일치만 보는 참고용 검사이며 오류가 있을 수 있음). "
+                "질의를 바꾸거나 uncounted_cases를 직접 확인하세요")
+        elif uncounted:
+            relevance_warnings.append(
+                f"low_relevance: {len(uncounted)}건은 사건명·판시사항·판결요지에 질의의 핵심 단어가 없어 집계하지 않았습니다"
+                "(uncounted_cases; 글자 일치만 보는 참고용 검사)")
+        if small_sample:
+            relevance_warnings.append(
+                f"small_sample: 집계한 판례가 {counted}건뿐이라 분포로 읽을 수 없습니다. 개별 판례를 직접 확인하세요")
+        if cases and all(c["outcome"] == "불명" for c in cases):
+            relevance_warnings.append(
+                "outcome_unclear: 집계한 판례의 결과가 모두 '불명'입니다(주문을 찾지 못했거나 해석이 애매함). "
+                "분포로 쓸 수 없으니 prec_service로 주문을 직접 확인하세요")
         if found["errors"]:
-            result["warnings"] = _failure_warnings(found["errors"])
-        elif not cases and not total_found:
+            result["warnings"] = _failure_warnings(found["errors"]) + relevance_warnings
+        elif not analyzed and not total_found:
             result.update(_no_results_fields(body_search=True))
+        elif relevance_warnings:
+            result["warnings"] = relevance_warnings
         if slim_cut:
             mark_slim_cut(result, "SLIM_RESPONSE: 판시사항/요지(500자)와 key_factors(100자·10개)가 줄었습니다. 전문은 prec_service(id=사건 id, sections=\"summary\")로 조회하세요.")
         return result
@@ -4022,6 +4103,15 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             display: Results per sub-query (default 5)
             oc: Optional OC override
             type: Response format - "JSON" (default), "XML", or "HTML"
+
+        Each applicable_laws entry has matched_query_terms (the situation's words found in its
+        law name, title or text) and low_relevance (true when none of the situation's distinctive
+        words appears). aiSearch has no relevance score and returns unrelated laws for colloquial
+        questions. The flag is advisory term overlap only: it errs both ways, is not a relevance
+        judgment, and never reorders or drops a result (upstream_rank is the position). Precedents
+        are searched by the situation's distinctive words first (search_basis "situation_terms"),
+        then by law name; a law-name hit whose 사건명 shares no word is relevance_unverified.
+        query_terms_not_found lists the situation's words no returned article contains.
 
         Returns:
             Comprehensive legal analysis with applicable laws, precedents, interpretations, and citations
@@ -4066,54 +4156,117 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         if low:
             resolver_warnings.append(low)
 
-        law_names_seen = set()
-        for art in articles[:display]:
+        # Advisory word overlap between the situation and each article (law name, title, text).
+        # aiSearch gives no score and returns unrelated laws for colloquial questions. The flag
+        # never reorders or drops anything: it only tells the reader which articles show none of
+        # the situation's distinctive words. A literal check, it errs both ways.
+        terms = query_terms(situation)
+        law_names_seen = []
+        low_articles = 0
+        for pos, art in enumerate(articles[:display], 1):
             law_name = art.get("법령명", "")
+            matched = matched_query_terms(
+                terms, law_name, art.get("조문제목", ""), art.get("조문내용", ""))
+            overlap = counts_as_overlap(terms, matched)
             applicable_laws.append({
                 "law_name": law_name,
                 "law_id": art.get("법령ID", ""),
                 "article": art.get("조문번호", ""),
                 "article_title": art.get("조문제목", ""),
                 "article_text": (art.get("조문내용", "") or "")[:compact_limit(500)],
+                "upstream_rank": pos,
+                "matched_query_terms": matched,
+                "low_relevance": not overlap,
             })
             if slim_enabled() and len(art.get("조문내용", "") or "") > 500:
                 slim_cut = True
-            if law_name:
-                law_names_seen.add(law_name)
+            if not overlap:
+                low_articles += 1
+            if law_name and law_name not in law_names_seen:
+                law_names_seen.append(law_name)
+        if low_articles and not _e:
+            resolver_warnings.append(
+                f"low_relevance: 조문 {len(applicable_laws)}건 중 {low_articles}건에서 질의의 핵심 단어"
+                f"({', '.join(distinctive_terms(terms)) if terms else '비교 가능한 단어 없음'})가 법령명·조문제목·본문에 "
+                "보이지 않습니다. 순서는 바꾸지 않았고(upstream_rank) 아무것도 빼지 않았습니다. 글자 일치만 보는 참고용 표시로 "
+                "관련성 판단이 아니며, 맞는 조문이 표시되거나 무관한 조문이 통과할 수 있으니 직접 확인하세요")
 
-        # Step 2: Search precedents for each unique law (max 3 laws)
+        # Step 2: Precedents. First search the case names with the situation's distinctive words
+        # (search_basis "situation_terms"); only when that finds fewer than 3, search by law name
+        # ("law_name"): such a hit says nothing about the situation, so it is marked
+        # relevance_unverified unless its 사건명 shares a word.
         related_precedents = []
-        for law_name in list(law_names_seen)[:3]:
+        seen_prec_ids: set = set()
+        seen_prec_cases: set = set()
+
+        def _collect_precedents(prec_result, basis, law_name=""):
+            for key, val in prec_result.get("ranked_data", {}).items():
+                if not isinstance(val, list):
+                    continue
+                for p in val[:3]:
+                    prec_id = p.get("판례일련번호", "")
+                    case_no = p.get("사건번호", "")
+                    if (prec_id and prec_id in seen_prec_ids) or (case_no and case_no in seen_prec_cases):
+                        continue  # the same judgment is listed under several ids
+                    seen_prec_ids.add(prec_id)
+                    seen_prec_cases.add(case_no)
+                    matched = matched_query_terms(terms, p.get("사건명", ""))
+                    entry = {
+                        "id": prec_id,
+                        "name": p.get("사건명", ""),
+                        "case_number": case_no,
+                        "date": p.get("선고일자", ""),
+                        "court": p.get("법원명", ""),
+                        "search_basis": basis,
+                        "matched_query_terms": matched,
+                    }
+                    if law_name:
+                        entry["found_via_law"] = law_name
+                    if basis == "law_name" and not counts_as_overlap(terms, matched):
+                        entry["relevance_unverified"] = True
+                    related_precedents.append(entry)
+                break
+
+        def _search_precedents(query_text, basis, law_name=""):
+            nonlocal api_calls, attempted
             prec_params = {
                 "oc": resolved_oc, "target": "prec", "type": type,
-                "query": law_name, "display": 3, "page": 1,
+                "query": query_text, "display": 3, "page": 1,
             }
             prec_result = run_search(
-                get_client=_get_client, target="prec", query=law_name,
+                get_client=_get_client, target="prec", query=query_text,
                 snake_params=prec_params, response_type=type, display=3,
                 ranking_field="판례명", list_type="items", item_category="prec",
                 over_fetch_key="display",
             )
             api_calls += 1
             attempted += 1
-            _e = _result_error(prec_result, f"prec({law_name})")
-            if _e:
-                failures.append(_e)
+            err = _result_error(prec_result, f"prec({query_text})")
+            if err:
+                failures.append(err)
+            _collect_precedents(prec_result, basis, law_name)
 
-            prec_ranked = prec_result.get("ranked_data", {})
-            for key, val in prec_ranked.items():
-                if isinstance(val, list):
-                    for p in val[:3]:
-                        related_precedents.append({
-                            "id": p.get("판례일련번호", ""),
-                            "name": p.get("사건명", ""),
-                            "case_number": p.get("사건번호", ""),
-                            "date": p.get("선고일자", ""),
-                            "court": p.get("법원명", ""),
-                        })
+        core_terms = distinctive_terms(terms)
+        if terms and not _e:
+            _search_precedents(" ".join(core_terms[:3]), "situation_terms")
+            if not related_precedents and len(core_terms) > 1:
+                # all words together found no case name: retry with the longest one (last on ties);
+                # a 3-character word is cut by its last character (양육권 -> 양육: 양육비, 양육자지정)
+                longest = max(reversed(core_terms), key=len)
+                _search_precedents(longest[:-1] if len(longest) == 3 else longest, "situation_terms")
+        if len(related_precedents) < 3:
+            # law-name fallback: 3 laws, one more while nothing was found at all
+            for n_searched, law_name in enumerate(law_names_seen[:4]):
+                if n_searched >= 3 and related_precedents:
                     break
+                _search_precedents(law_name, "law_name", law_name)
+        unverified = sum(1 for p in related_precedents if p.get("relevance_unverified"))
+        if unverified:
+            resolver_warnings.append(
+                f"relevance_unverified: 판례 {len(related_precedents)}건 중 {unverified}건은 법령명으로만 찾았고 "
+                "사건명에 질의 단어가 없습니다(relevance_unverified: true). 사안과 무관할 수 있습니다")
 
-        # Step 3: Citation network for top article
+        # Step 3: Citation network for the top article (upstream order; the overlap flag does not skip it)
         citations = []
         if applicable_laws:
             top = applicable_laws[0]
@@ -4221,6 +4374,12 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         }
         if failures and len(failures) >= attempted:
             return _all_failed_response(failures)
+        if applicable_laws and all(a["low_relevance"] for a in applicable_laws):
+            result["low_relevance"] = True  # no article shows a distinctive word of the situation
+        result["relevance_basis"] = "term_overlap: 질의 단어와의 글자 일치 참고 표시(관련성 판단 아님, 양방향 오류 가능)"
+        missing = [w for w in terms if not any(w in a["matched_query_terms"] for a in applicable_laws)]
+        if applicable_laws and missing:
+            result["query_terms_not_found"] = missing  # words of the situation no returned article contains
         if failures:
             resolver_warnings = _failure_warnings(failures) + resolver_warnings
         if resolver_warnings:
@@ -4243,12 +4402,15 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         ctx: Context = None,
     ) -> dict:
         """
-        Get a law article plus a glossary of its legal terms (쉬운 법률 읽기).
+        Get a law article; the text is NOT simplified and there is NO term glossary (조문 조회).
 
-        Fetches a law article (heading + 항 + 호 + 목, from the 현행 version of the
-        law) and lists, in term_glossary, exact 동의어 links from the 법제처 legal
-        terminology database. The article text is never rewritten: simplified_text
-        equals original_text, and the links may differ from the legal meaning.
+        Fetches a law article (heading + 항 + 호 + 목, from the 현행 version of the law).
+        The text is never rewritten: simplified_text equals original_text and text_simplified
+        is false. term_glossary is always empty (glossary_status "withheld"): the 법제처
+        legal-term database marks as 동의어 pairs that differ in law (배우자 -> 반려자,
+        위법행위 -> 불법행위, 재산관리인 -> 관재인, 피한정후견인 -> 한정치산자) and its
+        relation labels do not separate these from sound pairs, so no link is safe to show.
+        For a term use lstrm_search / lstrm_service (legal dictionary) or lstrm_rlt_search.
 
         Args:
             law_name: Law name (e.g., "민법", "근로기준법")
@@ -4259,15 +4421,13 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             type: Response format - "JSON" (default), "XML", or "HTML"
 
         Returns:
-            Original text (unchanged), and a term glossary of database synonym links
+            The article text (unchanged, not simplified) and an empty, withheld term_glossary
 
         Examples:
             >>> simplify_article(law_name="민법", article=750)
             >>> simplify_article(law_name="저작권법", article=35, article_branch=5)
         """
         law_name = require_text(law_name, "law_name")
-        from .linkage import pick_linked_term
-
         resolved_oc = resolve_oc(override_oc=oc)
         fmt = _internal_format(type)
         article, article_branch = normalize_article(article, article_branch)
@@ -4286,75 +4446,6 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         # (full text: heading + 항내용 + 호내용 + 목내용)
         article_info = _fetch_article(mst, article, article_branch, resolved_oc, fmt)
         original_text = article_info["text"]
-        client = _get_client()
-
-        # Step 3: Extract legal terms
-        terms = list(dict.fromkeys(extract_legal_terms(original_text)))
-
-        # Step 4: Look up each term in knowledge base
-        glossary = []
-        terms_mapped = 0
-
-        for term in terms:
-            plain_korean = ""
-            relation = ""
-            ambiguous = False
-            source = "not_found"
-
-            # Try 법령용어→일상용어
-            try:
-                # 지식베이스 연계 API는 lawService.do 전용 (lawSearch.do는 빈 응답)
-                term_params = {
-                    "oc": resolved_oc, "target": "lstrmRlt", "type": "JSON",
-                    "query": term,
-                }
-                upstream = map_params_to_upstream(term_params)
-                term_result = client.get("/DRF/lawService.do", upstream, "JSON")
-                term_raw = term_result.get("raw_content", "")
-                if term_raw:
-                    import json as _json
-                    td = _json.loads(term_raw)
-                    root = list(td.values())[0] if td else {}
-                    plain_korean, relation, ambiguous = pick_linked_term(root, "일상용어명", term)
-                    if plain_korean:
-                        source = "법령용어DB"
-            except:
-                pass
-
-            # Try 일상용어→법령용어 (reverse)
-            if not plain_korean:
-                try:
-                    term_params2 = {
-                        "oc": resolved_oc, "target": "dlytrmRlt", "type": "JSON",
-                        "query": term,
-                    }
-                    upstream2 = map_params_to_upstream(term_params2)
-                    term_result2 = client.get("/DRF/lawService.do", upstream2, "JSON")
-                    term_raw2 = term_result2.get("raw_content", "")
-                    if term_raw2:
-                        import json as _json
-                        td2 = _json.loads(term_raw2)
-                        root2 = list(td2.values())[0] if td2 else {}
-                        plain_korean, relation, amb2 = pick_linked_term(root2, "법령용어명", term)
-                        ambiguous = ambiguous or amb2
-                        if plain_korean:
-                            source = "일상용어DB"
-                except:
-                    pass
-
-            entry = {
-                "term": term,
-                "plain_korean": plain_korean,
-                "relation": relation,
-                "source": source,
-            }
-            if ambiguous and not plain_korean:
-                entry["source"] = "ambiguous"
-                entry["note"] = "동음이의어가 여러 개라 뜻을 특정할 수 없어 연결하지 않았습니다"
-            glossary.append(entry)
-
-            if plain_korean:
-                terms_mapped += 1
 
         article_display = f"제{article}조" if article_branch == 0 else f"제{article}조의{article_branch}"
 
@@ -4374,15 +4465,17 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             },
             "original_text": original_text,
             "simplified_text": original_text,
-            "term_glossary": glossary,
-            "terms_found": len(terms),
-            "terms_mapped": terms_mapped,
-            "disclaimer": "용어 해설은 법제처 법령용어 데이터베이스 기준이며, 맥락에 따라 의미가 다를 수 있습니다.",
+            "text_simplified": False,
+            "term_glossary": [],
+            "glossary_status": "withheld",
+            "terms_mapped": 0,
+            "disclaimer": "이 도구는 조문 원문을 그대로 돌려줍니다. 법률 자문이 아닙니다.",
         }
         result["note"] = (
-            "simplified_text는 법률 원문과 같으며 본문을 바꾸지 않았습니다. term_glossary의 항목은 "
-            "법령용어DB의 동의어 연결일 뿐 법적 의미와 다를 수 있으므로 원문 해석에 쓰지 마세요."
-            + ("" if terms_mapped else " 이번 조문에서는 연결된 용어가 없었습니다.")
+            "조문을 쉬운 말로 바꾸지 않았습니다(text_simplified: false): simplified_text는 original_text와 같은 법률 원문입니다. "
+            "용어 해설(term_glossary)은 제공하지 않습니다(glossary_status: withheld): 법령용어DB의 '동의어' 연결에 법적 의미가 다른 "
+            "쌍(배우자-반려자, 위법행위-불법행위, 재산관리인-관재인)이 있고 관계 표시만으로 가려낼 수 없어 어떤 연결도 안전하다고 "
+            "보증할 수 없습니다. 용어는 lstrm_search / lstrm_service로 직접 확인하세요."
         )
         return result
 
@@ -4683,6 +4776,9 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             "status": "ok",
             "query": query,
             "applicable_laws": base.get("applicable_laws", []),
+            # legal_resolver's precedents (searched by law name): precedent_analysis below
+            # searches by the query text and is empty for a colloquial question
+            "related_precedents": base.get("related_precedents", []),
             "precedent_analysis": {
                 "total_found": odds.get("total_found", 0),
                 "outcome_summary": odds.get("outcome_summary", {}),
@@ -4690,10 +4786,16 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 "key_factors": odds.get("key_factors", []),
                 "representative_cases": odds.get("representative_cases", [])[:compact_limit(3)],
                 "search_mode": odds.get("search_mode", ""),
+                "sample": odds.get("sample", {}),
+                "uncounted_cases": len(odds.get("uncounted_cases", [])),
+                "statistics_note": odds.get("statistics_note", ""),
+                **({"low_relevance": True} if odds.get("low_relevance") else {}),
             },
+            **({"low_relevance": True} if base.get("low_relevance") else {}),
+            **({"query_terms_not_found": base["query_terms_not_found"]} if base.get("query_terms_not_found") else {}),
             "legal_interpretations": base.get("legal_interpretations", []),
             "citations": base.get("citations", []),
-            "api_calls_made": base.get("api_calls_made", 0) + odds.get("analyzed", 0) + 1,
+            "api_calls_made": base.get("api_calls_made", 0) + odds.get("api_calls_made", 0),
             "disclaimer": "이 분석은 참고용이며 법률 자문이 아닙니다.",
         }
         if slim_enabled() and len(odds.get("representative_cases", [])) > 3:
@@ -4870,6 +4972,22 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             result["article_diff"]["warning"] = diff["warning"]
         return result
 
+    def _dedupe_decisions(rows: list) -> tuple:
+        """(rows without repeats, number removed). Upstream lists one judgment under several ids;
+        the key is 사건번호/청구번호 + court/agency + date, so the same number from another court stays."""
+        seen: set = set()
+        kept: list = []
+        for row in rows:
+            number = row.get("사건번호") or row.get("청구번호") or ""
+            if number:
+                key = (number, row.get("법원명") or row.get("재결청") or "",
+                       row.get("선고일자") or row.get("의결일자") or row.get("종국일자") or "")
+                if key in seen:
+                    continue
+                seen.add(key)
+            kept.append(row)
+        return kept, len(rows) - len(kept)
+
     # ==================== TOOL 52: chain_dispute_prep ====================
     @server.tool(annotations=TOOL_ANNOTATIONS)
     @handle_tool_error
@@ -4881,10 +4999,16 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         ctx: Context = None,
     ) -> dict:
         """
-        Prepare for a legal dispute by gathering all case law (분쟁 준비 자료).
+        List decisions on a dispute topic from four sources (분쟁 관련 결정 목록).
 
         Chains: precedent search + admin appeals + constitutional decisions + special tribunal.
-        Gathers all decision-type legal sources in one call.
+        Returns search-result metadata only (사건명, 사건번호, 일자, 법원/기관, 일련번호, 링크):
+        no holdings, no text, no outcomes. Read a decision with prec_service / decc_service /
+        detc_service / special_decc_service using the 일련번호 in each row. Rows for the same
+        judgment (same 사건번호, court and date, listed under several ids) are returned once.
+        search_modes shows whether a source matched on 사건명 or only on the body text; body-text
+        hits can be unrelated, so title_matches_query on each row says whether its 사건명 contains
+        a distinctive (non-generic) query word (a literal check, not a relevance score).
 
         Args:
             query: Dispute topic (e.g., "부당해고", "개인정보 유출", "조세 부과 취소")
@@ -4915,14 +5039,21 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         ]
         failures: list = []
         n_failed_sources = 0
+        terms = query_terms(query)
         for key, target, ranking_field, category in sources:
             found = _search_with_fallback(
                 target=target, query=query, display=display, response_type=fmt,
                 resolved_oc=resolved_oc, ranking_field=ranking_field,
                 item_category=category, min_results=display,
             )
-            results[key] = found["items"][:display]
+            rows, duplicates = _dedupe_decisions(found["items"])
+            results[key] = [
+                {**row, "title_matches_query": counts_as_overlap(terms, matched_query_terms(terms, row.get("사건명", "")))}
+                for row in rows[:display]
+            ]
             search_modes[key] = {"mode": found["mode"], "total_found": found["total"]}
+            if duplicates:
+                search_modes[key]["duplicates_removed"] = duplicates
             failures.extend(found["errors"])
             n_failed_sources += 1 if found["all_failed"] else 0
             if found["all_failed"]:
@@ -4941,10 +5072,21 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             "admin_appeals": results["admin_appeals"],
             "constitutional_decisions": results["constitutional_decisions"],
             "special_tribunal": results["special_tribunal"],
+            "content_note": (
+                "각 항목은 검색 결과의 메타데이터(사건명·사건번호·일자·일련번호·링크)뿐이며 판시사항·본문·결과는 "
+                "들어 있지 않습니다. 내용은 prec_service / decc_service / detc_service / special_decc_service로 "
+                "일련번호를 조회해 확인하세요"
+            ),
             "disclaimer": "이 자료는 참고용이며 법률 자문이 아닙니다.",
         }
+        unmatched = sum(1 for k in results for row in results[k] if not row["title_matches_query"])
+        if terms and unmatched:
+            response["warnings"] = [
+                f"low_relevance: {unmatched}건은 사건명에 질의어가 없습니다(title_matches_query: false). "
+                "본문 검색 결과는 질의와 무관할 수 있으니 prec_service 등으로 확인하세요"
+            ]
         if failures:
-            response["warnings"] = _failure_warnings(failures)
+            response["warnings"] = _failure_warnings(failures) + response.get("warnings", [])
         elif total == 0:
             response.update(_no_results_fields(body_search=True))
         return response
@@ -5079,6 +5221,32 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         result["admin_rules"] = admin_rules
         if warnings:
             result["warnings"] = warnings
+
+        if slim_enabled():
+            # The 20KB guard can cut the entries below the 80 the note above promised; apply it
+            # here so the delegation_tree note and truncated_notes state the number really shown.
+            capped = len(result.get("delegation_tree", {}).get("entries", []))
+            guarded = enforce_slim_limit(result)
+            tree = guarded.get("delegation_tree")
+            if guarded is not result and isinstance(tree, dict) and tree.get("entry_count"):
+                shown, total = len(tree.get("entries", [])), tree["entry_count"]
+                if shown < capped:
+                    tree["truncated"] = True
+                    tree["note"] = f"{total}건 중 {shown}건만 표시 (SLIM_RESPONSE 20KB 한도)"
+                    notes = [n for n in guarded.get("truncated_notes", []) if "위임 조문 목록" not in n]
+                    notes.append(
+                        f"SLIM_RESPONSE: 위임 조문 {total}건 중 {shown}건만 표시했습니다. "
+                        "전체는 lsDelegated_service 또는 jo 지정 조회를 쓰세요.")
+                    guarded["truncated_notes"] = notes
+                    guarded["truncated_note"] = (
+                        f"SLIM_RESPONSE 크기 한도(20KB)로 위임 조문 {total}건 중 {shown}건만 표시했습니다. "
+                        "전체는 lsDelegated_service(id=법령ID) 또는 jo 지정 조회로 받으세요.")
+                    guarded["truncated_fields"] = [
+                        f"delegation_tree.entries: {total}건 중 {shown}건만 표시"
+                        if f.startswith("delegation_tree.entries:") else f
+                        for f in guarded.get("truncated_fields", [])
+                    ]
+                return guarded
 
         return result
 
@@ -6656,30 +6824,47 @@ If the law is found, offer to retrieve specific articles if needed."""
             }
         ]
 
+    def _prompt_jo(value) -> str:
+        """6-digit jo code for a prompt's article number: int or jo-style text.
+
+        Rejects a bool (True is an int in Python, not an article) and an explicit branch 0
+        ("35의0", "제35조의0", "35-0"): there is no 조의0, so it is a typo, not 제35조.
+        """
+        if isinstance(value, bool):
+            raise ValueError("article_number가 숫자나 '35의5' 같은 조문 번호가 아닙니다.")
+        if re.search(r"(?:의|-)\s*0+\s*조?\s*$", str(value).strip()):
+            raise ValueError(f"'{value}': 가지번호 0은 없습니다. 제35조는 '35', 제35조의5는 '35의5'로 쓰세요.")
+        jo = normalize_jo(value)
+        if jo is None:
+            raise ValueError("article_number가 비어 있습니다. 예: 20, '35의5'")
+        return jo
+
     @server.prompt(
         name="get-law-article",
         description="Retrieve and explain a specific article from a Korean law"
     )
-    def get_law_article(law_id: str, article_number: int) -> list:
+    def get_law_article(law_id: str, article_number: Union[StrictInt, str]) -> list:
         """
         Prompt to help users retrieve a specific article from a law.
 
         Args:
             law_id: Law ID (e.g., '000001' for 민법)
-            article_number: Article number (e.g., 20 for 제20조)
+            article_number: Article number: 20 or "20" for 제20조; "35의5", "제35조의5" or
+                "35-5" for 제35조의5
 
         Returns:
             List of messages to guide the AI assistant
         """
-        # Format article number to 6-digit format (XXXXXX)
-        formatted_jo = f"{article_number:04d}00"
+        # Same jo forms as the tools: "35의5" -> 003505 (raises on an unrecognizable value)
+        formatted_jo = _prompt_jo(article_number)
+        article_label_ko = describe_jo(formatted_jo)  # 제35조의5
 
         return [
             {
                 "role": "user",
                 "content": {
                     "type": "text",
-                    "text": f"""Please retrieve Article {article_number} (제{article_number}조) from law ID '{law_id}' using the eflaw_service tool with jo parameter '{formatted_jo}'.
+                    "text": f"""Please retrieve {article_label_ko} from law ID '{law_id}' using the eflaw_service tool with jo parameter '{formatted_jo}'.
 
 After retrieving the article:
 1. Display the full text of the article in Korean
@@ -6687,7 +6872,7 @@ After retrieving the article:
 3. Highlight any important conditions, requirements, or exceptions
 4. If relevant, explain how this article relates to other parts of the law
 
-Note: The jo parameter format is XXXXXX where first 4 digits are the article number (zero-padded) and last 2 digits are for branch articles (00 for main article)."""
+Note: The jo parameter format is XXXXXX where first 4 digits are the article number (zero-padded) and last 2 digits are the 조의N branch number (00 for a main article, 05 for 제N조의5)."""
                 }
             }
         ]
@@ -6696,7 +6881,7 @@ Note: The jo parameter format is XXXXXX where first 4 digits are the article num
         name="get-article-with-citations",
         description="Retrieve a law article AND all its citations (referenced laws)"
     )
-    def get_article_with_citations(law_name: str, article_number: int) -> list:
+    def get_article_with_citations(law_name: str, article_number: Union[StrictInt, str]) -> list:
         """
         Prompt to retrieve article content AND extract all citations.
 
@@ -6707,17 +6892,21 @@ Note: The jo parameter format is XXXXXX where first 4 digits are the article num
 
         Args:
             law_name: Law name (e.g., '건축법', '자본시장법')
-            article_number: Article number (e.g., 3 for 제3조)
+            article_number: Article number: 3 or "3" for 제3조; "35의5", "제35조의5" or
+                "35-5" for 제35조의5
 
         Returns:
             List of messages guiding the AI to use all three tools
         """
+        jo = _prompt_jo(article_number)
+        article_label_ko = describe_jo(jo)  # 제35조의5
+        main_no, branch_no = int(jo[:4]), int(jo[4:])
         return [
             {
                 "role": "user",
                 "content": {
                     "type": "text",
-                    "text": f"""Please analyze '{law_name}' Article {article_number} (제{article_number}조) with full citation information.
+                    "text": f"""Please analyze '{law_name}' {article_label_ko} with full citation information.
 
 **REQUIRED STEPS** (must complete all 3):
 
@@ -6727,13 +6916,13 @@ Note: The jo parameter format is XXXXXX where first 4 digits are the article num
 
 2. **Get article content** using eflaw_service:
    - Use the MST from step 1
-   - jo parameter: "{article_number:04d}00" (e.g., "000300" for 제3조)
+   - jo parameter: "{jo}" (e.g., "000300" for 제3조, "003505" for 제35조의5)
    - Display the full article text
 
 3. **Extract all citations** using article_citation:
    - mst: (from step 1)
    - law_name: (from step 1)
-   - article: {article_number}
+   - article: {main_no}, article_branch: {branch_no}
    - List ALL external and internal citations
 
 **OUTPUT FORMAT**:
@@ -6755,12 +6944,22 @@ Note: The jo parameter format is XXXXXX where first 4 digits are the article num
 
         Args:
             law_name: Law name to search
-            articles: Comma-separated article numbers (e.g., "1,2,3" or "11")
+            articles: Comma-separated article numbers (e.g., "1,2,3" or "11"); 조의N forms
+                such as "35의5" or "제35조의5" are accepted
 
         Returns:
             List of messages guiding comprehensive citation analysis
         """
-        article_list = [a.strip() for a in articles.split(",")]
+        article_list = []
+        for raw_article in articles.split(","):
+            raw_article = raw_article.strip()
+            if not raw_article:
+                continue
+            try:
+                jo = _prompt_jo(raw_article)
+                article_list.append(f"{describe_jo(jo)} (article={int(jo[:4])}, article_branch={int(jo[4:])})")
+            except (JoFormatError, ValueError):
+                article_list.append(raw_article)
         return [
             {
                 "role": "user",
@@ -6774,11 +6973,12 @@ Note: The jo parameter format is XXXXXX where first 4 digits are the article num
    - 법령일련번호 (MST)
    - 법령명한글 (official name)
 
-2. **Then**, for EACH of these articles: {', '.join(f'제{a}조' for a in article_list)}
+2. **Then**, for EACH of these articles: {', '.join(article_list)}
    Call article_citation with:
    - mst: (from search result)
    - law_name: (official name from search)
    - article: (each article number)
+   - article_branch: (the 조의N number, 0 for a main article)
 
 3. **Compile a citation report**:
    - Total citations per article

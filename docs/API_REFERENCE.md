@@ -142,7 +142,7 @@
 | `chain_law_system` | law_name | type=JSON |
 | `cache_stats` | - | - |
 
-프롬프트: `search-korean-law`, `get-law-article`, `get-article-with-citations`, `analyze-law-citations`, `search-admin-rules`, `tool-selection-guide`, `analyze-legal-situation`, `explain-legal-document`, `check-legal-precedent`.
+프롬프트(`get-law-article`, `get-article-with-citations`의 `article_number`는 int 또는 `"35의5"` 같은 jo 형식 문자열): `search-korean-law`, `get-law-article`, `get-article-with-citations`, `analyze-law-citations`, `search-admin-rules`, `tool-selection-guide`, `analyze-legal-situation`, `explain-legal-document`, `check-legal-precedent`.
 
 리소스: `lexlink://laws/frequently-used`(정적), `lexlink://law/{name}`(템플릿; 예: `lexlink://law/자통법`).
 
@@ -212,19 +212,19 @@ for t in asyncio.run(create_server().list_tools()):
 | `law_as_of` | 기준일 D에 시행 중이던 개정본을 골라 조문을 반환 (1.2.3절) |
 | `law_amendment_summary` | 법령의 개정 이력. `date_from`/`date_to`는 기본으로 공포일 기준, `date_basis="effective"`면 시행일 기준(`date_from` 당시 시행 중이던 개정본 포함) |
 | `article_amendment_diff` | 두 MST의 한 조문(항/호/목 포함)을 줄 단위로 비교 |
-| `check_precedent_odds` | 판례의 주문만으로 결과를 분류한 분포. 라벨: 파기환송, 파기자판, 파기, 상고기각, 항소기각, 항고기각, 원판결변경, 일부인용, 인용, 기각, 각하, 취소, 무죄, 유죄, 공소기각, 불명. 승소율이 아님(`outcome_note`). 본문이 없는 판례는 건너뛰고 `unavailable_cases`로 보고 |
-| `legal_resolver` | 상황 설명에서 법령, 판례, 해석례, 인용을 한 번에 조회. 인용 실패는 `warnings` |
-| `simplify_article` | 조문(항/호/목 포함)과 법제처 용어 DB의 동의어 연결(`term_glossary`). 본문은 바꾸지 않음(`simplified_text`는 `original_text`와 같음). 용어 조회는 최대 20개 |
+| `check_precedent_odds` | 판례의 주문만으로 결과를 분류한 분포. 라벨: 파기환송, 파기자판, 파기, 상고기각, 항소기각, 항고기각, 원판결변경, 일부인용, 인용, 기각, 각하, 취소, 무죄, 유죄, 공소기각, 불명. 승소율이 아님(`outcome_note`). 본문이 없는 판례는 건너뛰고 `unavailable_cases`로 보고. 질의의 핵심 단어(흔한 단어 제외)가 사건명·판시사항·판결요지에 있는 판례만 `representative_cases`와 통계에 집계하고 나머지는 결과 없이 `uncounted_cases`에 둠. 집계가 없거나 비교할 단어가 없으면 통계를 비우고 `low_relevance:` 경고, 3건 미만은 `small_sample`, 모두 불명이면 `outcome_unclear:`. `sample`/`statistics_note`가 표본을 밝히며 승소 확률이 아님. 본문 조회는 `type`과 무관하게 JSON/XML로 함 |
+| `legal_resolver` | 상황 설명에서 법령, 판례, 해석례, 인용을 한 번에 조회. 인용 실패는 `warnings`. 각 조문에 `matched_query_terms`/`low_relevance`/`upstream_rank`: 질의의 핵심 단어가 법령명·조문제목·본문에 하나도 없다는 참고 표시(`relevance_basis: term_overlap`, 양방향 오류 가능, 관련성 판단 아님). 순서를 바꾸거나 조회를 건너뛰지 않으며 인용은 항상 1순위 조문에 실행. 판례는 질의 단어로 먼저 검색(`search_basis: situation_terms`)하고 3건 미만이면 법령명으로 검색(`law_name`); 법령명으로만 찾고 사건명에 질의 단어가 없으면 `relevance_unverified: true`. 사건번호 중복 제거. 어디에도 없는 질의 단어는 `query_terms_not_found` |
+| `simplify_article` | 조문(항/호/목 포함) 원문만 반환. 본문은 쉽게 바꾸지 않고(`text_simplified: false`, `simplified_text`는 `original_text`와 같음) 용어 해설도 주지 않음(`term_glossary`는 항상 빈 목록, `glossary_status: withheld`). 용어 조회를 하지 않음 |
 | `article_citation` | 15장 |
-| `chain_full_research` | AI 검색, 법령, 판례 결과 분석, 해석례, 인용을 한 번에 |
+| `chain_full_research` | AI 검색, 법령, 판례 결과 분석, 해석례, 인용을 한 번에. `legal_resolver`의 `related_precedents`와 관련성 표시(`low_relevance`), `precedent_analysis.sample`을 그대로 전달 |
 | `chain_amendment_track` | 개정 이력과 조문 비교 |
-| `chain_dispute_prep` | 판례, 헌재결정례, 법령해석례, 행정심판례를 한 번에 |
-| `chain_law_system` | 법령 체계: 위임 트리, `admin_rules`(`{name, id, article}`, 위임행정규칙 항목에서 추출), `linked_ordinances`(`lnkLsOrd` 기준)와 `linked_ordinances_total`. 실패는 빈 목록 대신 `warnings` |
+| `chain_dispute_prep` | 판례, 행정심판례, 헌재결정례, 특별행정심판례의 검색 결과 메타데이터(사건명·사건번호·일자·일련번호·링크)만 한 번에. 판시사항·본문은 없음(`content_note`; `*_service`로 조회). 같은 판결의 중복 id는 한 번만(`duplicates_removed`), 각 행의 `title_matches_query`와 `low_relevance:` 경고로 본문 검색 결과의 무관 여부를 가늠 |
+| `chain_law_system` | 법령 체계: 위임 트리, `admin_rules`(`{name, id, article}`, 위임행정규칙 항목에서 추출), `linked_ordinances`(`lnkLsOrd` 기준)와 `linked_ordinances_total`. 실패는 빈 목록 대신 `warnings`. `SLIM_RESPONSE`에서 표시 건수가 줄면 `delegation_tree.note`/`truncated_notes`가 실제 표시 건수를 말함 |
 | `cache_stats` | 캐시와 resolver 통계 |
 
 입력 검증(호출 전 `VALIDATION_ERROR`): 필수 질의/법령명 인자(`law_search`, `eflaw_search`, `aiSearch`, `legal_resolver`, `check_precedent_odds`, `chain_*`, `law_as_of`, `article_citation` 등)가 빈 문자열·공백이면 거부하고, 기본값이 `*`인 목록 도구는 명시적으로 빈 `query`를 주면 거부합니다(`*`/생략은 그대로 전체 목록). `*_service`의 `id`/`mst`는 숫자만 허용하고(업스트림은 HTTP 500으로 응답), `type`은 JSON/XML/HTML만 허용합니다. `admrul_search`의 `date`는 실제 날짜(YYYYMMDD, 정수·문자열)여야 합니다. `lnkLsOrdJo_search`의 `jo`는 `20`, `"0020"`, `"제20조"`, `"20의2"`, `"002002"`를 받고 가지번호는 `jobr`로 보냅니다. `nw`: `eflaw_search`는 1=연혁 2=시행예정 3=현행, `admrul_search`/`ordin_search`는 1=현행 2=연혁(실측; 3은 업스트림이 1과 같은 결과를 줍니다).
 
-검색 결과가 0건이면 `status: ok`에 `warning: "no_results"`와 한국어 `hints`가 붙습니다. `aiSearch`, `legal_resolver`, `chain_full_research`는 질의와 겹치는 글자가 없으면 `relevance_unverified` 경고를 붙입니다(결과는 지우지 않음).
+검색 결과가 0건이면 `status: ok`에 `warning: "no_results"`와 한국어 `hints`가 붙습니다. `aiSearch`, `legal_resolver`, `chain_full_research`는 질의와 겹치는 글자가 없으면 `relevance_unverified` 경고를 붙입니다(결과는 지우지 않음). `legal_resolver`, `chain_full_research`, `check_precedent_odds`, `chain_dispute_prep`는 항목별 `low_relevance`/`matched_query_terms`(또는 `title_matches_query`)와 `low_relevance:` 경고도 붙입니다: 질의의 핵심 단어가 결과에 있는지만 보는 참고용 검사로, 순서나 조회를 바꾸지 않으며 맞는 결과임을 보증하지도 틀렸음을 판정하지도 않습니다.
 
 ### 응답 크기
 
@@ -244,8 +244,8 @@ for t in asyncio.run(create_server().list_tools()):
 - **`article_citation`**: "제33조부터 제37조까지" 같은 범위는 법제처가 한 개의 링크로 걸어 두며, LexLink가 시작~끝의 모든 조문을 나열하고 각 항목에 `range_text`/`range_note`를 붙입니다(범위 사이의 가지조문 `제N조의M`이나 시작·끝에 가지조문이 있는 범위는 나열하지 않으며 `range_note`에 표시). `mst`는 숫자여야 합니다(`VALIDATION_ERROR`). 삭제되었거나 개정으로 사라진 조문을 가리키는 인용도 그대로 추출됩니다. 외부 법령은 이름 텍스트만 주므로 MST가 필요하면 `eflaw_search`를 따로 호출해야 합니다. "같은 법"과 조문 나열은 휴리스틱으로 해석합니다.
 - **계정 단위 API 신청**: OC마다 신청한 API 범위가 다릅니다. 신청하지 않은 API는 `API_NOT_SUBSCRIBED` 오류가 됩니다(예: 현행법령 시행일 본문 `eflaw`는 `law_service`/`eflaw_josub`으로 대신할 수 있음). 같은 페이지가 잘못된 인자(없는 id, 해당 MST에 없는 `ef_yd`)와 본문 API만 미신청인 계정에도 나옵니다(바이트 단위로 동일). 그래서 본문(lawService) 호출에서 이 페이지가 오면 같은 target의 목록 조회를 **추가로 1회** 호출합니다(오류 경로에서만, 10초 제한): 목록도 미신청이면 `API_NOT_SUBSCRIBED`, 목록이 정상이면 원인을 알 수 없으므로(인자 거부 또는 본문 API만 미신청) `UPSTREAM_HTML_ERROR` + `may_be_not_subscribed: true`(대안 도구 안내 유지), 확인 불가면 '확인하지 못함' 힌트가 붙은 `API_NOT_SUBSCRIBED`입니다. 잘못된 `type`은 호출 전 `VALIDATION_ERROR`입니다.
 - **서버 IP 등록**: law.go.kr은 OC와 호출 IP를 함께 검증합니다. 등록되지 않은 IP에서는 "사용자 정보 검증에 실패하였습니다" 오류가 납니다([OPERATIONS.md](OPERATIONS.md)).
-- **`simplify_article`**: 본문을 쉬운 말로 바꾸지 않습니다. 법제처 용어 DB에 연결이 있는 용어만 `term_glossary`에 나오며, 연결이 법적 의미와 다를 수 있습니다.
-- **`check_precedent_odds`**: 판례 주문의 분포이며 승소율이나 결과 예측이 아닙니다.
+- **`simplify_article`**: 본문을 쉬운 말로 바꾸지 않고(`text_simplified: false`) 용어 해설도 제공하지 않습니다(`glossary_status: withheld`). 법령용어DB는 배우자-반려자, 위법행위-불법행위, 재산관리인-관재인, 피한정후견인-한정치산자처럼 법적 의미가 다른 쌍을 '동의어'로 표시하고, 관계 종류(동의어/연관어 등)로는 이를 정상 쌍과 가려낼 수 없으며 DB에 `채급자` 같은 항목도 있습니다. 용어는 `lstrm_search`/`lstrm_service`로 직접 확인하세요.
+- **`check_precedent_odds`**: 판례 주문의 분포이며 승소율이나 결과 예측이 아닙니다. 집계는 `sample`에 적힌 표본(검색 결과 중 사건명·판시사항·판결요지에 질의의 핵심 단어가 있고 본문 조회가 된 앞쪽 몇 건)에 대한 것이고 무작위·전수 표본이 아닙니다. 관련성 표시(`low_relevance`, `uncounted_cases`)는 질의 단어와의 글자 일치 검사라 약어·바꿔 말한 표현은 맞아도 빠질 수 있고(상간녀 위자료: 찾은 1건이 미집계) 흔한 단어는 무관한 판례도 통과시킵니다.
 - **프롬프트/지침 준수는 모델마다 다릅니다.** 서버 지침(`SERVER_INSTRUCTIONS`)을 모든 LLM이 따르는 것은 아닙니다. 모델별 준수율 수치(과거 시험)는 [archive/ISSUES.md](archive/ISSUES.md)에 있으며 현재 버전에서 다시 측정하지 않았습니다.
 - **HTTP 서버**: 단일 프로세스 전제, SSE 전송의 로깅/동시성 한계 등은 [OPERATIONS.md](OPERATIONS.md)의 "알려진 한계"를 보세요.
 
