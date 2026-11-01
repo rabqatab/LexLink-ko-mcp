@@ -135,7 +135,7 @@ def test_table_matches_documented_cases():
     assert TOOL_POLICIES["law_as_of"]["upstream_calls"] == 5
     assert TOOL_POLICIES["oldAndNew_service"]["evidence"] == "derived"
     assert TOOL_POLICIES["check_precedent_odds"]["evidence"] == "heuristic"
-    assert TOOL_POLICIES["simplify_article"]["evidence"] == "heuristic"
+    assert TOOL_POLICIES["simplify_article"]["evidence"] == "primary"
     assert TOOL_POLICIES["cache_stats"]["evidence"] == "none"
     # evidence: primary = upstream text fields unchanged (lists, sorted/filtered/repaged rows and
     # LexLink-computed side fields included); derived = wording edited or reconstructed
@@ -145,10 +145,10 @@ def test_table_matches_documented_cases():
     assert TOOL_POLICIES["article_citation"]["evidence"] == "derived"
     assert TOOL_POLICIES["elaw_search"]["evidence"] == "derived"
     # size: large = representative size ~100KB or more and no control brings it below
-    assert TOOL_POLICIES["lsDelegated_service"]["size"] == "large"
     assert TOOL_POLICIES["elaw_service"]["size"] == "large"
     assert TOOL_POLICIES["lstrm_rlt_jo_search"]["size"] == "large"
-    for name in ("eflaw_service", "law_service", "thdCmp_service", "ordin_service", "lsJoHstInf_search"):
+    for name in ("eflaw_service", "law_service", "thdCmp_service", "ordin_service", "lsJoHstInf_search",
+                 "lsDelegated_service"):  # lsDelegated: `jo` filters client-side (median 2.3KB per article)
         assert TOOL_POLICIES[name]["size"] == "normal"
 
 

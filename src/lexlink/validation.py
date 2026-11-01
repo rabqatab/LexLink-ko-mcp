@@ -10,7 +10,18 @@ import re
 from typing import Optional, Union
 
 
-def validate_date_range(date_range: str, param_name: str) -> None:
+_FULLWIDTH_DIGITS = {ord("０") + i: str(i) for i in range(10)}
+
+
+def fold_fullwidth_digits(value) -> str:
+    """Trimmed text with the full-width digits ０-９ folded to ASCII (nothing else is folded).
+
+    Shared by normalize_jo, normalize_jo_code and validate_date_range; Arabic-Indic and other
+    Unicode digits stay as they are and fail the [0-9] checks."""
+    return ("" if value is None else str(value)).translate(_FULLWIDTH_DIGITS).strip()
+
+
+def validate_date_range(date_range: str, param_name: str) -> str:
     """
     Validate date range format (YYYYMMDD~YYYYMMDD).
 
@@ -29,12 +40,14 @@ def validate_date_range(date_range: str, param_name: str) -> None:
         >>> validate_date_range("2024-01-01~2024-12-31", "ef_yd")  # Invalid
         ValueError: ef_yd must be in format YYYYMMDD~YYYYMMDD, got: 2024-01-01~2024-12-31
     """
-    pattern = r"^\d{8}~\d{8}$"
+    pattern = r"^[0-9]{8}~[0-9]{8}$"
+    original = date_range
+    date_range = fold_fullwidth_digits(date_range)
 
     if not re.match(pattern, date_range):
         raise ValueError(
             f"{param_name} must be in format YYYYMMDD~YYYYMMDD "
-            f"(e.g., '20240101~20241231'), got: {date_range}"
+            f"(e.g., '20240101~20241231'), got: {original}"
         )
 
     # Additional validation: check start <= end
@@ -47,6 +60,33 @@ def validate_date_range(date_range: str, param_name: str) -> None:
             f"{param_name} start date must be <= end date, "
             f"got: {start_str} > {end_str}"
         )
+    return date_range
+
+
+def require_text(value, param_name: str) -> str:
+    """Return ``value`` stripped; raise ValueError when it is None, not text or blank.
+
+    The upstream answers an empty query with an arbitrary default hit (or a huge
+    unfiltered result), which a caller would read as a real answer, so tools whose
+    query is required refuse it before any upstream call.
+    """
+    if value is None or not isinstance(value, str) or not value.strip():
+        raise ValueError(
+            f"{param_name} must be a non-empty string (got {value!r}). "
+            f"{param_name}은(는) 비어 있지 않은 문자열이어야 합니다."
+        )
+    return value.strip()
+
+
+def reject_blank(value, param_name: str):
+    """Pass ``value`` through; raise ValueError when it is a blank string (None stays None).
+
+    For list tools whose query defaults to "*": an explicitly empty query is not "list
+    everything", it is a missing search term.
+    """
+    if value is not None:
+        return require_text(value, param_name)
+    return value
 
 
 def format_article_number(article: int, branch: int = 0) -> str:
@@ -114,11 +154,11 @@ class JoFormatError(ValueError):
 
 # 제35조의5 / 35조의5 / 35의5 / 35조 / 35 (optional whitespace, full-width-free)
 _JO_KOREAN_RE = re.compile(
-    r"^제?\s*(\d{1,4})\s*조?\s*(?:의\s*(\d{1,2}))?$"
+    r"^제?\s*([0-9]{1,4})\s*조?\s*(?:의\s*([0-9]{1,2}))?$"
 )
 # 35-5, 35_5, 35.5, 35/5, 35:5, 35,5, (35,5), [35, 5]
 _JO_SEPARATED_RE = re.compile(
-    r"^[\(\[]?\s*(\d{1,4})\s*[-_./:,]\s*(\d{1,2})\s*[\)\]]?$"
+    r"^[\(\[]?\s*([0-9]{1,4})\s*[-_./:,]\s*([0-9]{1,2})\s*[\)\]]?$"
 )
 
 
@@ -144,16 +184,16 @@ def normalize_jo(value: Union[str, int, None]) -> Optional[str]:
     if value is None:
         return None
 
-    text = str(value).strip()
+    text = fold_fullwidth_digits(value)
     if text == "":
         return None
 
-    # Normalize full-width digits / punctuation that LLMs or copy-paste may produce
-    text = text.translate(str.maketrans("０１２３４５６７８９（）～－", "0123456789()~-"))
+    # Normalize full-width digits (above) and punctuation that LLMs or copy-paste may produce
+    text = text.translate(str.maketrans("（）～－", "()~-"))
     text = re.sub(r"\s+", " ", text)
 
     # Exactly 6 digits: already the upstream code
-    if re.fullmatch(r"\d{6}", text):
+    if re.fullmatch(r"[0-9]{6}", text):
         article, branch = int(text[:4]), int(text[4:])
         if article < 1:
             raise JoFormatError(
@@ -162,7 +202,7 @@ def normalize_jo(value: Union[str, int, None]) -> Optional[str]:
         return text
 
     # 5 digits is ambiguous (e.g. "35505" could be 355의5 or 35의50) — reject
-    if re.fullmatch(r"\d{5}", text):
+    if re.fullmatch(r"[0-9]{5}", text):
         raise JoFormatError(
             f"jo 값 '{text}'은(는) 5자리여서 해석이 모호합니다. 6자리 코드(예: 003505) 또는 '35의5' 형식으로 전달하세요."
         )
@@ -185,7 +225,7 @@ def normalize_jo(value: Union[str, int, None]) -> Optional[str]:
 
 def describe_jo(code: str) -> str:
     """Render a 6-digit JO code as human-readable Korean (003505 → 제35조의5)."""
-    if not code or not re.fullmatch(r"\d{6}", code):
+    if not code or not re.fullmatch(r"[0-9]{6}", code):
         return str(code)
     article, branch = int(code[:4]), int(code[4:])
     return f"제{article}조의{branch}" if branch else f"제{article}조"

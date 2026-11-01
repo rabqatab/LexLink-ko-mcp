@@ -151,3 +151,48 @@ def test_legal_resolver_citations_in_running_loop_and_in_process(monkeypatch, to
     loop_out = asyncio.run(run())
     assert [c["to_law"] for c in loop_out["citations"]] == ["민법"]
     assert "warnings" not in loop_out
+
+
+# ---- word-start matching and odds counting (integration review M1/M2, real strings) ----
+
+def test_term_must_start_a_word_not_sit_inside_one():
+    from lexlink._helpers import matched_query_terms, query_terms
+    terms = query_terms("남편 외도")
+    assert matched_query_terms(terms, "특정경제범죄가중처벌등에관한법률위반 재산국외도피") == []
+    assert "외도" in matched_query_terms(terms, "배우자의 외도로 인한 위자료")
+    # the forms that must keep matching
+    assert matched_query_terms(["양육권"], "양육비 청구") == ["양육권"]
+    assert matched_query_terms(["이혼"], "이혼하고 싶다") == ["이혼"]
+    assert matched_query_terms(["퇴직금"], "퇴직급여 지급") == ["퇴직금"]
+    assert matched_query_terms(["공정이용"], "공정한 이용") == ["공정이용"]
+
+
+def test_criminal_case_numbers():
+    from lexlink._helpers import is_criminal_case_number
+    assert is_criminal_case_number("2012도14788") and is_criminal_case_number("2024고합143")
+    assert not is_criminal_case_number("2024므15467") and not is_criminal_case_number("2018스5")
+
+
+def test_odds_needs_strong_term_in_name_or_holding_for_multi_term_query():
+    from lexlink._helpers import counts_for_odds, query_terms, matched_query_terms
+    terms = query_terms("아이 양육권")
+    # 미성년자입양허가: 양육권 only in the 판결요지
+    head = matched_query_terms(terms, "미성년자입양허가", "입양 허가 요건")
+    full = matched_query_terms(terms, "미성년자입양허가", "입양 허가 요건", "양육권 포기")
+    assert head == [] and not counts_for_odds(terms, full, head)
+    head = matched_query_terms(terms, "이혼 및 친권자·양육자 지정", "양육권 귀속")
+    assert counts_for_odds(terms, head, head)
+    # a single-term query keeps the old rule (any of the three fields)
+    one = query_terms("위자료")
+    assert counts_for_odds(one, ["위자료"], [])
+
+
+def test_nb_four_digit_pre_2000_year_gets_the_two_digit_hint():
+    from lexlink import guards
+    empty = {"status": "ok", "ranked_data": {"키워드": "", "totalCnt": "0", "target": "prec"}}
+    hint = guards.nb_year_form_hint("1994므1713", empty)
+    assert hint and "nb_year_form" in hint and "'94므1713'" in hint
+    found = {"status": "ok", "ranked_data": {"prec": [{"사건번호": "94므1713"}], "totalCnt": "1"}}
+    assert guards.nb_year_form_hint("1994므1713", found) is None
+    assert guards.nb_year_form_hint("2013므3963", empty) is None
+    assert guards.nb_year_form_hint("94므1713", empty) is None

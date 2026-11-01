@@ -240,15 +240,16 @@ class MissingMstFake(AmendmentFakeClient):
 
 
 @pytest.mark.unit
-def test_article_amendment_diff_still_tries_next_mst(monkeypatch):
+def test_article_amendment_diff_unknown_mst_is_an_error_not_a_verdict(monkeypatch):
+    """An unknown MST must not be reported as "article added/deleted" (it says nothing about the article)."""
     monkeypatch.setattr(server_mod, "LawAPIClient", MissingMstFake)
     monkeypatch.setenv("OC", FAKE_OC)
     server = server_mod.create_server()
     out = server._tool_manager.get_tool("article_amendment_diff").fn(
         mst_old="999", mst_new="283335", article=35, article_branch=5)
-    assert out["status"] == "ok", out
-    assert out["old_version"]["note"]
-    assert out["new_version"]["text"]
+    assert out["status"] == "error" and out["error_code"] == ErrorCode.NOT_FOUND, out
+    assert "999" in out["message"]
+    assert "has_changes" not in out and "summary" not in out
 
 
 # --- item 4: id -> rank ---------------------------------------------------------
@@ -513,3 +514,21 @@ def test_query_keyed_target_not_found_hints(target, body):
     text = json.dumps(err, ensure_ascii=False)
     assert "연계 정보가 없거나 검색어를 확인하세요" in text
     assert "ID(일련번호" not in text and "ID가 잘못" not in text
+
+
+@pytest.mark.unit
+def test_redact_oc_short_value_echoed_after_an_oc_label():
+    fake = "g4c"                         # fake value, not a real credential
+    src = f"OC {fake} 는 허용되지 않습니다 (OC={fake}, oc: {fake}) OC '{fake}'였다"
+    out = redact_oc(src, fake)
+    assert fake not in out
+    assert out == "OC *** 는 허용되지 않습니다 (OC=***, oc: ***) OC '***'였다"   # Korean text untouched
+
+
+@pytest.mark.unit
+def test_redact_oc_short_value_without_label_or_inside_words_is_kept():
+    fake = "g4c"
+    for keep in ("legal g4c text", "법 g4c 조항", "DOC g4c", "OC g4cx", "OC xg4c", "the OC of law", "g4c는 별개"):
+        assert redact_oc(keep, fake) == keep
+    assert redact_oc("OC law 는", "law") == "OC *** 는"           # a labelled value is redacted even if a word
+    assert redact_oc("the law of law and OC: x", "law") == "the law of law and OC: x"

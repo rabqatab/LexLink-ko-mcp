@@ -23,14 +23,17 @@ Tests mock the upstream API (fixtures in `tests/fixtures/`). There is no coverag
 | `client.py` | HTTP client for law.go.kr: anti-bot redirect following, structured upstream error detection |
 | `params.py` | snake_case to upstream camelCase mapping, OC resolution (`oc` argument, then `OC` env; the argument is ignored in HTTP mode) |
 | `validation.py` | date and `jo` validation/normalization |
+| `guards.py` | argument guards for the case-law/interpretation tools (`date` translation, `nb`, `inq`, enums, `display` cap, `lm`/`sections`), `lsDelegated` `jo` filter, ordinance id/serial collision check |
 | `law_extras.py` | validation and normalization for the history/comparison/appendix/dictionary tools (oldAndNew, thdCmp, lsJoHstInf, lsHstInf, delHst, lsAbrv, licbyl, lstrm) |
 | `linkage.py` | knowledge-base and ordinance-link request logic |
 | `agency_codes.py` | ministry, committee and tribunal code tables and aliases |
-| `as_of.py` | pure helpers for `law_as_of` (version in force on a date) |
+| `as_of.py` | pure helpers for `law_as_of` (version in force on a date, 부칙 article-level and relative-date scan) |
+| `precedent_status.py` | `prec_status`: case-number parsing, 참조판례 `(변경)` marker and sentence evidence, bounded scan of later 전원합의체 decisions |
+| `constitutional.py` | `law_constitutional_check`: 헌재 decisions naming a law article, 주문 outcome classification |
 | `article_text.py` | article text extraction (조문내용, 항/호/목 flattening) |
 | `citation.py` | HTML citation extraction (BeautifulSoup) for `article_citation` |
 | `parser.py`, `ranking.py` | response parsing and relevance ranking |
-| `cache.py`, `resolver.py` | per-tool TTL cache; law-name abbreviation resolution |
+| `cache.py`, `resolver.py` | per-tool TTL cache (locked: tool functions run in worker threads); law-name abbreviation resolution |
 | `errors.py` | `ErrorCode` and structured error responses |
 | `stdio_server.py`, `http_server.py` | transport entry points (`uv run stdio`, `uv run serve`) |
 | `http_security.py` | bearer auth, rate limit, session binding, Host/Origin validation (pure ASGI) |
@@ -44,7 +47,7 @@ Where each runtime variable is read: `grep -rn "getenv\|environ" src/`. The docu
 - Tool arguments are snake_case; `params.py` maps them to the upstream names. Unknown arguments are accepted and ignored (verified with `cache_stats(bogus_param=1)`).
 - Default response type is `JSON`. The cache key includes the response type.
 - Errors use `{status, error_code, message, hints, request_id}`. Codes are in `errors.py`.
-- Article numbers are 6 digits (`000300` = 제3조, `001502` = 제15조의2). `validation.py` also accepts `3`, `"3의2"`, `"제3조의2"`, `"3-2"`.
+- Article numbers are 6 digits (4-digit article + 2-digit branch: `000300` = 제3조, not 제300조 which is `030000`; `001502` = 제15조의2). `validation.py` also accepts `3`, `"3의2"`, `"제3조의2"`, `"3-2"`.
 - Dates are `YYYYMMDD`, ranges `YYYYMMDD~YYYYMMDD`.
 - `ctx: Context = None` on tools for MCP logging.
 

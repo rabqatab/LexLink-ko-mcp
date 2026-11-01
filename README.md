@@ -16,7 +16,7 @@ LexLink is an MCP (Model Context Protocol) server that wraps the Korean National
 
 ## What it provides
 
-- **66 tools**, **9 prompts** and **2 resources** (v2.2.0, plus the Unreleased changes listed in [CHANGELOG.md](CHANGELOG.md)).
+- **68 tools**, **9 prompts** and **2 resources** (v2.2.0, plus the Unreleased changes listed in [CHANGELOG.md](CHANGELOG.md)).
 - Laws by effective date or announcement date, single articles (`jo`), English translations, administrative rules, local ordinances, treaties.
 - Court precedents, Constitutional Court decisions, legal interpretations, administrative appeals, committee decisions, ministry interpretations, special tribunals.
 - `law_as_of`: the version of a law (or one article) in force on a given date.

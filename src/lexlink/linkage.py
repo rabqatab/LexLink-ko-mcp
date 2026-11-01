@@ -15,7 +15,7 @@ from typing import Any, Optional, Union
 
 from ._helpers import ToolValidationError
 from .parser import parse_xml_response
-from .validation import format_article_number
+from .validation import fold_fullwidth_digits, format_article_number
 
 
 # 용어관계코드 (trmRltCd) accepted by lstrmRlt / dlytrmRlt
@@ -29,7 +29,7 @@ TRM_RLT_CODES = {
 _TRM_RLT_BY_NAME = {name: code for code, name in TRM_RLT_CODES.items()}
 
 # "35", "35의5", "제35조", "제35조의5"
-_JO_TEXT_RE = re.compile(r"^제?\s*(\d{1,4})\s*조?\s*(?:의\s*(\d{1,2}))?$")
+_JO_TEXT_RE = re.compile(r"^제?\s*([0-9]{1,4})\s*조?\s*(?:의\s*([0-9]{1,2}))?$")
 
 
 def normalize_jo_code(jo: Union[str, int, None]) -> str:
@@ -46,9 +46,9 @@ def normalize_jo_code(jo: Union[str, int, None]) -> str:
     if jo is None or str(jo).strip() == "":
         raise ToolValidationError("'jo' (article number) is required", hints=hints)
 
-    text = str(jo).strip()
+    text = fold_fullwidth_digits(jo)
 
-    if text.isdigit():
+    if re.fullmatch(r"[0-9]+", text):
         if len(text) == 6:
             article, branch = int(text[:4]), int(text[4:])
         elif len(text) <= 4:
@@ -250,17 +250,28 @@ def parse_drlaw_html(html: str) -> Optional[dict]:
     header_rows = table.find("thead").find_all("tr") if table.find("thead") else []
     columns = [th.get_text(strip=True) for th in header_rows[-1].find_all("th")] if header_rows else []
     rows = []
+    ministry = law = ""
     for tr in body.find_all("tr"):
-        cells = tr.find_all("td")
-        if len(cells) < 3:
+        # 소관부처/법령명 cells use rowspan: the 2nd..nth article row of a law has no such cells,
+        # so they carry down from the previous row (reading cells[0..1] there mislabels the row).
+        lead = []
+        article_td = None
+        for cell in tr.find_all("td", recursive=False):
+            if cell.get("id") == "unOrdinStatsTd":
+                article_td = cell
+                break
+            lead.append(cell)
+        if article_td is None:
             continue
+        if len(lead) >= 2:
+            ministry, law = lead[0].get_text(strip=True), lead[1].get_text(strip=True)
         # The article <td> is never closed upstream, so the count cells nest inside it:
         # read only its own text and take the counts by class.
-        article = "".join(cells[2].find_all(string=True, recursive=False)).strip()
+        article = "".join(article_td.find_all(string=True, recursive=False)).strip()
         counts = [c.get_text(strip=True) for c in tr.find_all("td", class_="unordTd")]
         rows.append({
-            "소관부처": cells[0].get_text(strip=True),
-            "법령명": cells[1].get_text(strip=True),
+            "소관부처": ministry,
+            "법령명": law,
             "조문": article,
             "자치법규수": dict(zip(columns, counts)) if len(columns) == len(counts) else counts,
         })

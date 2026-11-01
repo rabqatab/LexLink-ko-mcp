@@ -94,7 +94,10 @@ def redact_oc(text: str, oc: str | None = None) -> str:
       * shorter values are replaced only directly after ``=``, ``&``, or
         ``="`` / ``='`` (left context) and before a quote, ``&``, ``<``, ``>``
         or whitespace. A short value elsewhere (``"law" means``) is left alone
-        on purpose, so oc="law" never alters English statute text.
+        on purpose, so oc="law" never alters English statute text;
+      * a short value directly after an ``OC`` label (``OC g4c는``, ``oc: g4c``,
+        ``(OC=g4c,``) is also replaced; the match is ASCII-delimited, so Korean
+        text next to it is kept and ``DOC g4c`` / ``OC g4cx`` are untouched.
     """
     if not text:
         return text
@@ -118,6 +121,13 @@ def redact_oc(text: str, oc: str | None = None) -> str:
                 rf"""(?:(?<=[=&])|(?<==")|(?<=='))"""
                 rf"""{re.escape(oc)}(?=["'&<>\s])""",
                 "***", text,
+            )
+            # Free-text echoes ("OC g4c 는", "oc: g4c", "(OC=g4c,"): the value is redacted when an
+            # ASCII-delimited "OC" label directly precedes it, whatever follows (Korean particles,
+            # punctuation). Without the label a short value is left alone (see docstring).
+            text = re.sub(
+                rf"""(?<![A-Za-z0-9_-])(OC\s*[:=]?\s*["']?){re.escape(oc)}(?![A-Za-z0-9_])""",
+                r"\1***", text, flags=re.I,
             )
     return text
 
@@ -147,10 +157,15 @@ for _name in ("httpx", "httpcore"):
 
 AUTH_FAILURE_MARKER = "사용자 정보 검증에 실패하였습니다"
 NOT_SUBSCRIBED_MARKER = "미신청된 목록/본문에 대한 접근입니다"
+VALID_RESPONSE_TYPES = ("HTML", "XML", "JSON")
 ERROR_PAGE_MARKER_RE = re.compile(r'id\s*=\s*["\']error\d{3}["\']', re.I)
 _HTML_START_RE = re.compile(r"^\s*(?:<!doctype\s+html|<html)", re.I)
 _TAG_RE = re.compile(r"<[^>]+>")
-NO_MATCH_RE = re.compile(r"일치하는 \S+ 없습니다")
+# "일치하는 법령이 없습니다", "일치하는 고용노동부 법령해석이 없습니다" (the subject may hold spaces)
+NO_MATCH_RE = re.compile(r'일치하는 [^\n<>"{}]{1,60}? 없습니다')
+# Query-keyed targets keep the narrow one-word form: their longer "no linkage" texts are
+# an empty result (ok + no_results), not a missing record.
+NO_MATCH_NARROW_RE = re.compile(r"일치하는 \S+ 없습니다")
 _XML_SINGLE_TEXT_RE = re.compile(
     r"^\s*(?:<\?xml[^>]*\?>\s*)?(?P<open>(?:<[\w:-]+(?:\s[^<>]*)?>\s*)+)"
     r"(?P<text>[^<]*)(?P<close>(?:</[\w:-]+>\s*)+)$"
@@ -161,13 +176,22 @@ QUERY_KEYED_TARGETS = frozenset(
 )
 
 
-def _is_no_match_message(s: str) -> bool:
+def _is_no_match_message(s: str, narrow: bool = False) -> bool:
     s = s.strip()
-    m = NO_MATCH_RE.search(s)
+    m = (NO_MATCH_NARROW_RE if narrow else NO_MATCH_RE).search(s)
     return bool(m) and len(s) <= 200 and m.start() <= 20
 
 
-def _is_bare_no_match(text: str) -> bool:
+_HTML_HIDDEN_RE = re.compile(r"<(script|style)\b.*?</\1\s*>|<!--.*?-->", re.I | re.S)
+_HTML_TAG_RE = re.compile(r"<[^>]*>")
+
+
+def _html_visible_text(text: str) -> str:
+    """Text a browser would show: scripts, styles, comments and tags dropped, whitespace collapsed."""
+    return re.sub(r"\s+", " ", _HTML_TAG_RE.sub(" ", _HTML_HIDDEN_RE.sub(" ", text))).strip()
+
+
+def _is_bare_no_match(text: str, narrow: bool = False) -> bool:
     """True when the whole body is just a "일치하는 … 없습니다" message."""
     t = text.strip()
     if not t:
@@ -181,16 +205,16 @@ def _is_bare_no_match(text: str) -> bool:
             isinstance(data, dict)
             and len(data) == 1
             and isinstance(next(iter(data.values())), str)
-            and _is_no_match_message(next(iter(data.values())))
+            and _is_no_match_message(next(iter(data.values())), narrow)
         )
     if t[0] == "<":
         m = _XML_SINGLE_TEXT_RE.match(t)
         return (
             bool(m)
             and m.group("open").count("<") == m.group("close").count("<")
-            and _is_no_match_message(m.group("text"))
+            and _is_no_match_message(m.group("text"), narrow)
         )
-    return _is_no_match_message(t)
+    return _is_no_match_message(t, narrow)
 
 
 def _html_headline(body: str) -> str | None:
@@ -223,6 +247,13 @@ def _not_subscribed_hints(target: str | None) -> list[str]:
     elif target:
         hints.append(f"신청 상태를 확인할 target: {target}")
     return hints
+
+
+def _with_unverified_hint(error: dict) -> dict:
+    """Say that the 미신청 verdict is unconfirmed (the same page also answers bad parameters)."""
+    note = ("확인하지 못함: 같은 '미신청' 페이지는 잘못된 id/mst/ef_yd/type에도 표시됩니다. "
+            "인자를 먼저 확인하고, 맞다면 open.law.go.kr의 신청 상태를 확인하세요.")
+    return {**error, "hints": [*(error.get("hints") or []), note]}
 
 
 def _service_not_found(request_id: str | None, target: str | None, message: str) -> dict:
@@ -280,6 +311,7 @@ def detect_upstream_body_error(
       - 미신청된 목록/본문      → API not applied for by the OC account (API_NOT_SUBSCRIBED)
       - <div id="error500">    → generic upstream error page            (UPSTREAM_HTML_ERROR)
       - any HTML page when XML/JSON was requested                       (UPSTREAM_HTML_ERROR)
+      - JSON requested, body starts with { or [ but does not parse      (UPSTREAM_ERROR)
 
     Returns a structured error dict (status="error") or None when the body looks
     like a normal payload. Anti-bot JS redirect pages are handled before this
@@ -373,7 +405,12 @@ def detect_upstream_body_error(
 
     # 6) "일치하는 …가 없습니다" on a service (본문) call: id missing or body not provided.
     # Length bound keeps real judgments that quote the phrase from tripping this.
-    if endpoint == "/DRF/lawService.do" and _is_bare_no_match(text):
+    # (in HTML the same message arrives inside a page, e.g. oldAndNew: "일치하는 신구법 없습니다.")
+    narrow_no_match = target in QUERY_KEYED_TARGETS
+    if endpoint == "/DRF/lawService.do" and (
+        _is_bare_no_match(text, narrow=narrow_no_match)
+        or (is_html and _is_bare_no_match(_html_visible_text(text), narrow=narrow_no_match))
+    ):
         if "일치하는 법령이 없습니다" in text:
             message = (
                 "일치하는 법령이 없습니다. MST(법령일련번호)가 최신인지 확인하세요. "
@@ -421,6 +458,24 @@ def detect_upstream_body_error(
             "법제처 API가 본문 조회에 빈 JSON 객체를 반환했습니다. ID가 잘못되었거나 "
             "해당 target을 알 수 없습니다. law.go.kr returned an empty JSON object.",
         )
+
+    # 8) JSON requested, body looks like JSON but does not parse. Often a cut-off transfer; an
+    # error is never cached, so such a body is not served again. A leading BOM is ignored.
+    jtext = text.lstrip("\ufeff \t\r\n")
+    if fmt == "JSON" and jtext[:1] in ("{", "["):
+        try:
+            json.loads(jtext, strict=False)
+        except (ValueError, RecursionError):
+            return create_error_response(
+                error_code=ErrorCode.UPSTREAM_ERROR,
+                message="법제처 API가 해석할 수 없는 JSON 본문을 반환했습니다 (invalid JSON body).",
+                hints=[
+                    "잠시 후 다시 시도하세요. 해석되지 않는 응답은 캐시하지 않습니다",
+                    "Retry in a few seconds; unparsable bodies are not cached",
+                ],
+                request_id=request_id,
+                upstream_target=target,
+            )
 
     return None
 
@@ -497,6 +552,18 @@ class LawAPIClient:
         """
         request_id = str(uuid.uuid4())
         start_time = time.time()
+
+        # law.go.kr answers an unknown `type` with the "미신청" page (measured on every
+        # target, lawSearch and lawService alike), so reject it here instead.
+        if str(response_type).upper() not in VALID_RESPONSE_TYPES:
+            return create_error_response(
+                error_code=ErrorCode.VALIDATION_ERROR,
+                message=f"type must be one of JSON, XML, HTML (got {response_type!r}).",
+                hints=["type은 JSON(기본), XML, HTML 중 하나여야 합니다. "
+                       "업스트림은 잘못된 type에 '미신청' 페이지를 돌려주므로 호출하지 않았습니다."],
+                request_id=request_id,
+            )
+        response_type = str(response_type).upper()
 
         # Ensure type parameter is set
         params["type"] = response_type
@@ -653,6 +720,54 @@ class LawAPIClient:
 
         return None
 
+    def _verify_not_subscribed(self, error: dict, target: str, oc: str, request_id: str) -> dict:
+        """Narrow down a 미신청 page with one list request on the same target.
+
+        law.go.kr shows the identical "미신청된 목록/본문에 대한 접근입니다" page for a
+        wrong ef_yd, an unknown id, an invalid type and a genuinely unapplied API, so the
+        page alone proves nothing. If the list request shows the same page too, the
+        account lacks the target (API_NOT_SUBSCRIBED). If the list works, the cause stays
+        unknowable (bad parameters or only the 본문 API unapplied): UPSTREAM_HTML_ERROR with
+        ``may_be_not_subscribed``. If the probe fails, the original error gets an
+        "unconfirmed" hint.
+        """
+        try:
+            probe_params = {"OC": oc, "target": target, "type": "JSON", "display": 1, "query": "법"}
+            probe = self.client.get(self.build_url("/DRF/lawSearch.do", probe_params),
+                                    timeout=min(self.timeout, 10))
+            probe.raise_for_status()
+            probe = self._follow_antibot(probe)
+            text = redact_oc(probe.text, oc)
+        except Exception as e:  # network trouble: keep the original classification
+            logger.info(f"미신청 probe failed for target {target}: {e.__class__.__name__}")
+            return _with_unverified_hint(error)
+        if (
+            NOT_SUBSCRIBED_MARKER not in text
+            and detect_upstream_body_error(text, "JSON", request_id=request_id, target=target,
+                                           endpoint="/DRF/lawSearch.do") is None
+            and "totalCnt" in text
+        ):
+            # The page is byte-identical for bad parameters and for a missing 본문 subscription,
+            # so the cause cannot be known here: say both and keep the alternatives.
+            return create_error_response(
+                error_code=ErrorCode.UPSTREAM_HTML_ERROR,
+                message="법제처 API가 '미신청' 오류 페이지를 반환했습니다. 같은 OC로 같은 target의 목록 조회는 "
+                        "정상이므로 원인은 (a) 요청 인자(id/mst/ef_yd 등)가 거부됨 또는 (b) 이 target의 '본문' API만 "
+                        "미신청 중 하나이며, 업스트림은 둘을 구분하지 않아 어느 쪽인지 알 수 없습니다. "
+                        "law.go.kr showed the 미신청 page while the same OC can list target "
+                        f"'{target}': either the parameters were rejected or only the 본문 API is not applied for; "
+                        "the upstream does not say which.",
+                hints=[
+                    "먼저 id/mst/ef_yd 값을 검색 도구 결과에서 다시 확인하세요 (ef_yd는 그 MST 자신의 시행일자여야 함)",
+                    "인자가 맞는데도 반복되면 open.law.go.kr에서 이 target의 '본문' API 신청 여부를 확인하세요",
+                    *_not_subscribed_hints(target)[2:],
+                ],
+                request_id=request_id,
+                upstream_target=target,
+                may_be_not_subscribed=True,
+            )
+        return _with_unverified_hint(error)
+
     def _passthrough_response(
         self,
         response: httpx.Response,
@@ -684,6 +799,11 @@ class LawAPIClient:
             body, format_type, request_id=request_id, target=target, endpoint=endpoint
         )
         if error is not None:
+            if (
+                error.get("error_code") == ErrorCode.API_NOT_SUBSCRIBED
+                and endpoint == "/DRF/lawService.do" and target and oc
+            ):
+                error = self._verify_not_subscribed(error, target, oc, request_id)
             logger.warning(
                 f"Upstream body error detected: {error['error_code']}",
                 extra={"request_id": request_id, "target": target},

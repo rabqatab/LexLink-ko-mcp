@@ -10,7 +10,7 @@
 
 ## LexLink 도구 목록
 
-도구 66개, 프롬프트 9개, 리소스 2개. 아래 표는 서버의 `list_tools()`에서 생성했습니다(필수 인자, 선택 인자와 기본값). 모든 도구는 선택 인자 `oc`를 받지만 HTTP 모드에서는 무시됩니다. 같은 모양으로 직접 확인하려면 [DEVELOPMENT.md](DEVELOPMENT.md#adding-a-tool)의 스니펫을 쓰세요.
+도구 68개, 프롬프트 9개, 리소스 2개. 아래 표는 서버의 `list_tools()`에서 생성했습니다(필수 인자, 선택 인자와 기본값). 모든 도구는 선택 인자 `oc`를 받지만 HTTP 모드에서는 무시됩니다. 같은 모양으로 직접 확인하려면 [DEVELOPMENT.md](DEVELOPMENT.md#adding-a-tool)의 스니펫을 쓰세요.
 
 ### 법령 (Laws)
 
@@ -33,13 +33,13 @@
 | `admrul_search` | - | query=*, display=20, page=1, type=JSON, nw=1, search=1, org, knd, date, prml_yd, mod_yd, sort |
 | `admrul_service` | - | id, lid, lm, type=JSON |
 | `ordin_search` | - | query=*, display=20, page=1, type=JSON, nw=1, search=1, sort, date, ef_yd, anc_yd, anc_no, org, sborg, knd, rr_cls_cd, ordin_fd, gana |
-| `ordin_service` | - | id, mst, type=JSON |
+| `ordin_service` | - | id, mst, type=JSON, verify_id=false (true면 mst=id도 조회해 `id_collision` 경고, 요청 2회) |
 | `ordinLsCon_search` | - | query, law_id, org, display=20, page=1, sort, type=JSON |
 | `lnkLs_search` | - | query=*, display=20, page=1, type=JSON, sort |
 | `lnkLsOrdJo_search` | - | query=*, display=20, page=1, type=JSON, knd, jo, jobr, sort |
 | `lnkDep_search` | org | display=20, page=1, type=JSON, sort |
-| `drlaw_search` | - | - |
-| `lsDelegated_service` | - | id, mst, type=JSON |
+| `drlaw_search` | - | display=20 (최대 100), page=1 |
+| `lsDelegated_service` | - | id, mst, type=JSON, jo |
 
 ### 판례 · 결정례 · 해석례 (Case law)
 
@@ -47,7 +47,9 @@
 |---|---|---|
 | `prec_search` | - | query=*, display=20, page=1, type=JSON, search, sort, org, curt, jo, gana, date, prnc_yd, nb, dat_src_nm, pop_yn |
 | `prec_service` | id | lm, sections, type=JSON |
-| `detc_search` | - | query=*, display=20, page=1, type=JSON, search, gana, sort, date, ed_yd, nb, pop_yn |
+| `prec_status` | - (case_number 또는 id 중 하나) | case_number, id, max_scan=5 |
+| `law_constitutional_check` | law_name, article | article_branch=0, max_scan=6 |
+| `detc_search` | - | query=*, display=20, page=1, type=JSON, search, gana, sort, date, ed_yd, nb (문자열), pop_yn |
 | `detc_service` | id | lm, sections, type=JSON |
 | `expc_search` | - | query=*, display=20, page=1, type=JSON, search=1, inq, rpl, gana, itmno, reg_yd, expl_yd, sort, pop_yn |
 | `expc_service` | id | lm, sections, type=JSON |
@@ -71,7 +73,7 @@
 
 | Tool | 필수 인자 | 선택 인자 (기본값) |
 |---|---|---|
-| `aiSearch` | query | search=0, display=7, page=1, type=JSON |
+| `aiSearch` | query | search=0, display=7, page=1 (업스트림이 무시, `page_ignored` 경고), type=JSON |
 | `aiRltLs_search` | query | search=0, type=JSON |
 | `lstrm_ai_search` | - | query=*, display=20, page=1, type=JSON |
 | `dlytrm_search` | - | query=*, display=20, page=1, type=JSON |
@@ -79,7 +81,7 @@
 | `dlytrm_rlt_search` | - | query, mst, trm_rlt_cd, type=JSON |
 | `lstrm_rlt_jo_search` | - | query, mst, type=JSON |
 | `jo_rlt_lstrm_search` | jo | query, law_id, type=JSON |
-| `ls_rlt_search` | - | query=*, display=20, page=1, type=JSON |
+| `ls_rlt_search` | - | query=* (정확한 법령명만 일치), display=20, page=1, type=JSON |
 
 ### 이력 · 비교 · 별표 · 용어사전 (History, comparison, appendix, dictionary)
 
@@ -113,7 +115,7 @@
 | 도구 | 메모 |
 |---|---|
 | `oldAndNew_*` | `query`는 법령명 부분 일치(`민법`은 `난민법`도 반환). 목록 행의 `신구법일련번호` = 본문의 `mst`, `신구법ID` = 법령ID. 본문은 조문 선택 인자가 없지만 작습니다(측정: 민법 10.8KB, 가사소송법 12.2KB, 가족관계법 3.4KB). `versions`에 구·신 개정본의 MST/시행일/공포일을 정리. `id`만 주면 업스트림이 개정본을 고름(관측: 현행). id와 mst가 서로 다른 법령이면 `warning`. **주의(`caution`):** 신구법 대비표는 법제처가 편집한 자료라 실제 법령 조문과 다를 수 있음. 측정: 민법 제379조, mst 284415의 구조문(원본 DRF 응답)이 "연 5분"인데 구 개정본(MST 265307) 조문은 "연 5푼"이고, 구 개정본의 시행일이 `law_as_of`와 다를 수 있음(도구가 만든 차이가 아니라 원본 응답에 있음). 인용 전에 `eflaw_service`/`law_as_of`로 확인. `SLIM_RESPONSE`에서 크기를 넘으면 구조문·신조문 목록을 같은 건수로 잘라 `truncated_notes`에 표시 |
-| `thdCmp_*` | 본문 `knd` 필수(1 인용조문, 2 위임조문; 없으면 업스트림이 빈 응답). **`jo` 없이는 매우 큼** (측정, 도구 응답 JSON, knd 1/2): 가사소송법 89/167KB, 가족관계의 등록 등에 관한 법률 204/251KB, 민법 610/592KB; `jo` 지정 시 1~9KB. 업스트림에 조문 인자가 없어 `jo`는 서버가 JSON 본문에서 해당 조문 행만 남깁니다(장·절 제목 행 제외, 한 조문이 여러 행일 수 있음, `selection`에 행 수). 없으면 `ARTICLE_NOT_FOUND`. 시행령·시행규칙 id/mst를 주면 모법을 기준으로 응답하므로 `anchor`/`warning`을 확인. 가사소송법의 `시행령명`처럼 요약 필드가 엉뚱한 값일 수 있어 조문 행을 기준으로 삼을 것. `jo`가 빈 문자열이면 `VALIDATION_ERROR`(전체 반환 아님). 소득세법처럼 `knd=2`의 법률조문 `조내용`이 조문이 아닌 장·절 제목으로 채워진 법령은 시행령·시행규칙 하위 조문이 붙은 행을 그대로 돌려주되 `selection.own_text_is_heading`과 `warning`으로 표시합니다(제목을 조문 본문으로 인용하지 말고 `knd=1` 또는 `eflaw_service`로 확인). 장·절 제목 행은 조내용(`제N편/장/절/관`)으로 가려내며, 조제목이 없는 실제 조문(예: "제5조 삭제")은 일치함 |
+| `thdCmp_*` | 본문 `knd` 필수(1 인용조문, 2 위임조문; 없으면 업스트림이 빈 응답). **`jo` 없이는 매우 큼** (측정, 도구 응답 JSON, knd 1/2): 가사소송법 89/167KB, 가족관계의 등록 등에 관한 법률 204/251KB, 민법 610/592KB; `jo` 지정 시 1~9KB. 업스트림에 조문 인자가 없어 `jo`는 서버가 JSON 본문에서 해당 조문 행만 남깁니다(장·절 제목 행 제외, 한 조문이 여러 행일 수 있음, `selection`에 행 수). 없으면 `ARTICLE_NOT_FOUND`. 시행령·시행규칙 id/mst를 주면 모법을 기준으로 응답하므로 `anchor`/`warning`을 확인. 가사소송법의 `시행령명`처럼 요약 필드가 엉뚱한 값일 수 있어 조문 행을 기준으로 삼을 것. `jo`가 빈 문자열이면 `VALIDATION_ERROR`(전체 반환 아님). 소득세법·법인세법·조세특례제한법처럼 `knd=2`의 법률조문 `조내용`이 조문이 아닌 장·절 제목으로 채워진 법령은 시행령·시행규칙 하위 조문이 붙은 행을 그대로 돌려주되 `selection.own_text_is_heading`과 `warning`으로 표시합니다(제목을 조문 본문으로 인용하지 말고 `knd=1` 또는 `eflaw_service`로 확인). 그런 행이 실제 조문 행과 섞여 있으면 행마다 `own_text_is_heading: true`가 붙고 `selection.heading_rows`가 개수를 셉니다. 장·절 제목 행은 조제목이 없고 조내용이 `제N편/장/절/관`(+ 선택적 `의N`) 뒤에 공백이나 끝이 오는 짧은 제목일 때만 가려냅니다("제3장에 따른 ..." 문장은 제목이 아님). 조제목이 없는 실제 조문(예: "제5조 삭제")은 일치함 |
 | `lsJoHstInf_search` | `totalCnt`는 조문이 아닌 법령(개정본) 수. `jo`는 `조문정보`만 거르므로 그 조문이 안 바뀐 개정본도 `조문정보.jo: []`로 나옴(`note`). 한 조문의 전 개정본 이력은 `chain_amendment_track`/`article_amendment_diff`가 쓰는 본문 쪽(`lawService`, ID+JO)이며 공개 도구는 없음. 20개 법령이 한 페이지(최대 약 50KB) |
 | `lsHstInf_search` | `regDt`는 법령 변경(등록)일로 공포일·시행일과 다를 수 있음 |
 | `delHst_search` | 삭제된 일련번호만 있고 이름·본문은 없음. 필터 없이 약 14,000건. 범위는 `frm_dt`+`to_dt`(문서의 `delDt`는 단일 일자) |
@@ -142,7 +144,7 @@
 | `chain_law_system` | law_name | type=JSON |
 | `cache_stats` | - | - |
 
-프롬프트: `search-korean-law`, `get-law-article`, `get-article-with-citations`, `analyze-law-citations`, `search-admin-rules`, `tool-selection-guide`, `analyze-legal-situation`, `explain-legal-document`, `check-legal-precedent`.
+프롬프트(`get-law-article`, `get-article-with-citations`의 `article_number`는 int 또는 `"35의5"` 같은 jo 형식 문자열): `search-korean-law`, `get-law-article`, `get-article-with-citations`, `analyze-law-citations`, `search-admin-rules`, `tool-selection-guide`, `analyze-legal-situation`, `explain-legal-document`, `check-legal-precedent`.
 
 리소스: `lexlink://laws/frequently-used`(정적), `lexlink://law/{name}`(템플릿; 예: `lexlink://law/자통법`).
 
@@ -151,7 +153,7 @@
 | 구분 | 도구 수 | 비고 |
 |---|---|---|
 | 업스트림 API를 그대로 감싼 도구 | 54 | 신규 11개(`oldAndNew_*`, `thdCmp_*`, `lsJoHstInf_search`, `lsHstInf_search`, `delHst_search`, `lsAbrv_search`, `licbyl_search`, `lstrm_*`) 포함. `committee_*`(위원회 12개), `cgm_expc_*`(부처 39개), `special_decc_*`(심판원 4개)는 인자로 대상을 고르는 도구 |
-| LexLink 파생 도구 | 12 | `law_as_of`, `article_citation`, `check_precedent_odds`, `legal_resolver`, `simplify_article`, `law_amendment_summary`, `article_amendment_diff`, `chain_*` 4개, `cache_stats` |
+| LexLink 파생 도구 | 14 | `prec_status`, `law_constitutional_check`, `law_as_of`, `article_citation`, `check_precedent_odds`, `legal_resolver`, `simplify_article`, `law_amendment_summary`, `article_amendment_diff`, `chain_*` 4개, `cache_stats` |
 
 업스트림 카탈로그 195종 중 이 도구들이 다루지 않는 API는 각 절에 `NOT IMPLEMENTED`로 표시했습니다.
 
@@ -210,19 +212,23 @@ for t in asyncio.run(create_server().list_tools()):
 | 도구 | 동작 |
 |---|---|
 | `law_as_of` | 기준일 D에 시행 중이던 개정본을 골라 조문을 반환 (1.2.3절) |
+| `prec_status` | 판례 변경(overruling) 확인. 업스트림에 판례 인용·변경 API가 없어, 사건번호를 본문 검색(`prec_search query="사건번호" search=2`, 따옴표 구문 검색)해 **이후의 대법원 전원합의체 판결**만 후보로 삼고(판례 변경은 전원합의체만 가능, 방향이 중요: 옛 판결은 자신을 변경한 판결을 인용하지 않음) 각 후보를 `prec_service`로 읽어 ① `참조판례`의 `대법원 … 선고 94므1713, 1720 판결(공1995하, 2265)(변경)` 표지(`explicit_marker`, high) ② 사건번호를 지목하고 같은 문장에서 변경/폐기하는 문장(`explicit_sentence`, medium)을 근거로 반환한다(출처 판결 + 원문 그대로의 인용). 사건번호는 지목하지 않고 일반적인 "견해에 배치되는 범위 내에서 변경한다" 문장만 있으면 `leads`(`possible_overruling_needs_review`)이며 확정이 아니다. 결과(`overruling_status`)는 `overruled_found` / `possible_overruling_needs_review` / `case_not_found`(사건번호가 판례 색인에 없음: 결합사건의 뒤 번호 `94므1720`, 존재하지 않는 번호, `2013므3963` 같은 색인 공백 — 아무것도 말할 수 없으며 첫 번호로 다시 조회) / `incomplete_search`(인용 판결 목록이 잘렸거나, `max_scan`을 넘어 읽지 못한 후보 전원합의체, 본문이 제공되지 않거나 200이지만 해석 못한 후보가 있음: 후보 사건번호를 `statement`와 `searched_scope`에 적음) / `no_overruling_found_in_searched_set`이다. 마지막 값은 "변경되지 않았다"가 아니라 `searched_scope`(검색 행 수, 읽은/못 읽은 후보, 읽지 않은 비전원합의체 인용 판결 수)에 한정된, 목록이 완전하고 후보를 모두 읽은 경우에만 나온다. 증거가 있으면 `incomplete_search`여도 `overruled_found`가 우선하되 부분 확인임을 `statement`에 적는다. 입력은 `94므1713`, `1994므1713`, `대법원 1995. 5. 23. 선고 94므1713 판결`, `94므1713, 1720` 모두 되며(색인과 인용문은 1999년까지 두 자리 연도) 두 연도 표기를 모두 시도한다. `id`는 숫자만 허용(아니면 `VALIDATION_ERROR`). 증거 문장은 다수의견만 인정하고(`[대법관 X의 반대의견]`, `대법관 X의 별개의견`, 보충의견 구간은 제외), 한 문장에 두 사건이 있으면 변경 서술이 가까운 사건에만 연결한다(`A는 유지하되 B는 변경한다`, 나열 `A, B 판결 등은 변경한다`). `변경함이 상당하다`·`변경하는 것이 타당하다`·`폐기된다`는 180건 전원합의체에서 한 번도 나오지 않아 정밀도를 측정할 수 없으므로 증거가 아니라 `leads`(`wording: soft_change_wording`)로만 낸다. 사건번호 없이 `더 이상 유지하기 어렵다`·`변경한다`만 있어도 `leads`다(2018다248909가 88다카16867을 이렇게만 다룸). 업스트림 호출: 사건번호 확인 1~2 + 목록 1~3(+연도 표기가 다르면 1) + 후보 본문 `max_scan`(기본 5, 최대 10). 하급심의 파기, 헌재 결정, 법령 개정은 다루지 않는다 |
+| `law_constitutional_check` | 헌법재판소 위헌·헌법불합치 **단서**. `law_as_of`는 시행일 데이터만 보므로 위헌결정으로 효력을 잃은 조문(형법 제241조 2015-02-26)을 감지하지 못한다. 법령명을 공식 명칭으로 확인하고(`law_search`: 정확한 이름 → 법령약칭명, 약칭 `가족관계등록법`도 됨; 확인 못 하면 `VALIDATION_ERROR`이며 깨끗한 결과로 처리하지 않음; `민법`과 `민법 시행령`은 구분), `detc_search query='"법령명 제N조"' search=2`(따옴표 구문, 1쪽 100건, 최신순)에서 후보를 모은다: ① **사건명에 법령명과 해당 조문이 있는** 결정(`관세법 제241조`, `군형법`, `제241조의2`, `민법 시행령`은 제외) ② 사건명에 법령명만 있는 결정(`민법 제1112조 등 위헌제청`이 제1118조를 판단할 수 있음) 중 **주문이나 심판대상조문에 그 조문이 있는** 것. `detc_service`로 `전문`의 `주문`을 읽고 위헌 / 헌법불합치 / 한정위헌 / 합헌 / 각하 / 기각으로 분류한다. 주문은 조문 앞 문맥으로 문장 안에서 나눈다(`제1조는 합헌이나 제2조는 위헌`, `제269조 제1항, 제270조 제1항 … 헌법에 합치되지 아니한다`). 조문을 지목하지 못한 위헌·헌법불합치 주문은 `adverse`가 아니라 `needs_review`다. `decision_status`: `adverse_decision_found` / `needs_review` / `incomplete_search`(목록이 잘렸거나 `max_scan`을 넘어 읽지 못했거나 본문이 없는 후보) / `no_adverse_decision_in_searched_set`(완전하게 읽은 경우만). 사건명만으로 찾던 이전 방식은 형법 제270조(2017헌바127, 사건명 `형법 제269조 제1항 등`), 민법 제1118조(2020헌가4, `민법 제1112조 등`), 민법 제815조(2018헌바115, `민법 제809조 제1항 등`), `가족관계등록법`(약칭이라 0건; 2015헌마924)을 모두 놓쳤고, 지금은 이 4개와 형법 제241조, 민법 제847조·제809조·제844조(총 8개)에서 모두 해당 위헌·헌법불합치 결정을 찾는다(재현율 8/8, 읽은 결정 1~8건). 따옴표 구문 목록과 따옴표 없는 목록은 7개 조문에서 사건명 일치가 같아 따옴표 없는 목록은 쓰지 않는다. 확인한 조문: 형법 제241조(2009헌바17 위헌 2015-02-26, 2007헌가17 합헌 2008-10-30, 나머지 각하), 민법 제847조 제1항(95헌가14 헌법불합치 1997-03-27, 2012헌바357 합헌 2015-03-26), 민법 제809조(95헌가6 헌법불합치 1997-07-16, 2018헌바115 합헌 2022-10-27이며 같은 주문의 제815조 제2호는 헌법불합치로 제809조와 구분됨), 민법 제844조(2013헌마623 헌법불합치 2015-04-30). `in_force`는 바꾸지 않으며 효력 시점(형벌조항 소급효), 헌법불합치의 잠정적용·개선입법 시한, 이후 개정은 계산하지 않는다. 현행 조문은 결정 이후 개정되었을 수 있다(헌법불합치에 따른 개선입법, 위헌 조문의 삭제 등)는 `caveats`에 적고 `law_as_of`/`law_amendment_summary` 확인을 안내한다. 사건명에 법령명이 없는 결정, 구법 명칭으로만 쓰인 결정은 놓칠 수 있고, 결과 없음은 위헌 판단이 없었다는 뜻이 아니다. 업스트림 호출: 법령명 확인 1 + 검색 1 + 결정 본문 `max_scan`(기본 8, 최대 12) |
 | `law_amendment_summary` | 법령의 개정 이력. `date_from`/`date_to`는 기본으로 공포일 기준, `date_basis="effective"`면 시행일 기준(`date_from` 당시 시행 중이던 개정본 포함) |
 | `article_amendment_diff` | 두 MST의 한 조문(항/호/목 포함)을 줄 단위로 비교 |
-| `check_precedent_odds` | 판례의 주문만으로 결과를 분류한 분포. 라벨: 파기환송, 파기자판, 파기, 상고기각, 항소기각, 항고기각, 원판결변경, 일부인용, 인용, 기각, 각하, 취소, 무죄, 유죄, 공소기각, 불명. 승소율이 아님(`outcome_note`). 본문이 없는 판례는 건너뛰고 `unavailable_cases`로 보고 |
-| `legal_resolver` | 상황 설명에서 법령, 판례, 해석례, 인용을 한 번에 조회. 인용 실패는 `warnings` |
-| `simplify_article` | 조문(항/호/목 포함)과 법제처 용어 DB의 동의어 연결(`term_glossary`). 본문은 바꾸지 않음(`simplified_text`는 `original_text`와 같음). 용어 조회는 최대 20개 |
+| `check_precedent_odds` | 판례의 주문만으로 결과를 분류한 분포. 라벨: 파기환송, 파기자판, 파기, 상고기각, 항소기각, 항고기각, 원판결변경, 일부인용, 인용, 기각, 각하, 취소, 무죄, 유죄, 공소기각, 불명. 승소율이 아님(`outcome_note`). 본문이 없는 판례는 건너뛰고 `unavailable_cases`로 보고. 질의의 핵심 단어(흔한 단어 제외)가 사건명·판시사항·판결요지에 있는 판례만 `representative_cases`와 통계에 집계하고 나머지는 결과 없이 `uncounted_cases`에 둠. 집계가 없거나 비교할 단어가 없으면 통계를 비우고 `low_relevance:` 경고, 3건 미만은 `small_sample`, 모두 불명이면 `outcome_unclear:`. `sample`/`statistics_note`가 표본을 밝히며 승소 확률이 아님. 본문 조회는 `type`과 무관하게 JSON/XML로 함 |
+| `legal_resolver` | 상황 설명에서 법령, 판례, 해석례, 인용을 한 번에 조회. 인용 실패는 `warnings`. 각 조문에 `matched_query_terms`/`low_relevance`/`upstream_rank`: 질의의 핵심 단어가 법령명·조문제목·본문에 하나도 없다는 참고 표시(`relevance_basis: term_overlap`, 양방향 오류 가능, 관련성 판단 아님). 순서를 바꾸거나 조회를 건너뛰지 않으며 인용은 항상 1순위 조문에 실행. 판례는 질의 단어로 먼저 검색(`search_basis: situation_terms`)하고 3건 미만이면 법령명으로 검색(`law_name`); 법령명으로만 찾고 사건명에 질의 단어가 없으면 `relevance_unverified: true`. 사건번호 중복 제거. 어디에도 없는 질의 단어는 `query_terms_not_found` |
+| `simplify_article` | 조문(항/호/목 포함) 원문만 반환. 본문은 쉽게 바꾸지 않고(`text_simplified: false`, `simplified_text`는 `original_text`와 같음) 용어 해설도 주지 않음(`term_glossary`는 항상 빈 목록, `glossary_status: withheld`). 용어 조회를 하지 않음 |
 | `article_citation` | 15장 |
-| `chain_full_research` | AI 검색, 법령, 판례 결과 분석, 해석례, 인용을 한 번에 |
+| `chain_full_research` | AI 검색, 법령, 판례 결과 분석, 해석례, 인용을 한 번에. `legal_resolver`의 `related_precedents`와 관련성 표시(`low_relevance`), `precedent_analysis.sample`을 그대로 전달 |
 | `chain_amendment_track` | 개정 이력과 조문 비교 |
-| `chain_dispute_prep` | 판례, 헌재결정례, 법령해석례, 행정심판례를 한 번에 |
-| `chain_law_system` | 법령 체계: 위임 트리, `admin_rules`(`{name, id, article}`, 위임행정규칙 항목에서 추출), `linked_ordinances`(`lnkLsOrd` 기준)와 `linked_ordinances_total`. 실패는 빈 목록 대신 `warnings` |
+| `chain_dispute_prep` | 판례, 행정심판례, 헌재결정례, 특별행정심판례의 검색 결과 메타데이터(사건명·사건번호·일자·일련번호·링크)만 한 번에. 판시사항·본문은 없음(`content_note`; `*_service`로 조회). 같은 판결의 중복 id는 한 번만(`duplicates_removed`), 각 행의 `title_matches_query`와 `low_relevance:` 경고로 본문 검색 결과의 무관 여부를 가늠 |
+| `chain_law_system` | 법령 체계: 위임 트리, `admin_rules`(`{name, id, article}`, 위임행정규칙 항목에서 추출), `linked_ordinances`(`lnkLsOrd` 기준)와 `linked_ordinances_total`. 실패는 빈 목록 대신 `warnings`. `SLIM_RESPONSE`에서 표시 건수가 줄면 `delegation_tree.note`/`truncated_notes`가 실제 표시 건수를 말함 |
 | `cache_stats` | 캐시와 resolver 통계 |
 
-검색 결과가 0건이면 `status: ok`에 `warning: "no_results"`와 한국어 `hints`가 붙습니다. `aiSearch`, `legal_resolver`, `chain_full_research`는 질의와 겹치는 글자가 없으면 `relevance_unverified` 경고를 붙입니다(결과는 지우지 않음).
+입력 검증(호출 전 `VALIDATION_ERROR`): 필수 질의/법령명 인자(`law_search`, `eflaw_search`, `aiSearch`, `legal_resolver`, `check_precedent_odds`, `chain_*`, `law_as_of`, `article_citation` 등)가 빈 문자열·공백이면 거부하고, 기본값이 `*`인 목록 도구는 명시적으로 빈 `query`를 주면 거부합니다(`*`/생략은 그대로 전체 목록). `*_service`의 `id`/`mst`는 숫자만 허용하고(업스트림은 HTTP 500으로 응답), `type`은 JSON/XML/HTML만 허용합니다. `admrul_search`의 `date`는 실제 날짜(YYYYMMDD, 정수·문자열)여야 합니다. `lnkLsOrdJo_search`의 `jo`는 `20`, `"0020"`, `"제20조"`, `"20의2"`, `"002002"`를 받고 가지번호는 `jobr`로 보냅니다. `nw`: `eflaw_search`는 1=연혁 2=시행예정 3=현행, `admrul_search`/`ordin_search`는 1=현행 2=연혁(실측; 3은 업스트림이 1과 같은 결과를 줍니다).
+
+검색 결과가 0건이면 `status: ok`에 `warning: "no_results"`와 한국어 `hints`가 붙습니다. `aiSearch`, `legal_resolver`, `chain_full_research`는 질의와 겹치는 글자가 없으면 `relevance_unverified` 경고를 붙입니다(결과는 지우지 않음). `legal_resolver`, `chain_full_research`, `check_precedent_odds`, `chain_dispute_prep`는 항목별 `low_relevance`/`matched_query_terms`(또는 `title_matches_query`)와 `low_relevance:` 경고도 붙입니다: 질의의 핵심 단어가 결과에 있는지만 보는 참고용 검사로, 순서나 조회를 바꾸지 않으며 맞는 결과임을 보증하지도 틀렸음을 판정하지도 않습니다.
 
 ### 응답 크기
 
@@ -237,12 +243,17 @@ for t in asyncio.run(create_server().list_tools()):
 2026-10-31 기준 코드에서 확인한 것만 적었습니다.
 
 - **알 수 없는 인자는 무시됩니다.** 존재하지 않는 인자(`bogus_param`)를 넘겨도 오류가 없고 기본값으로 실행됩니다(`cache_stats(bogus_param=1)`로 확인). 인자 이름을 틀리면 조용히 다른 결과가 나올 수 있습니다.
-- **일부 `*_service`에는 크기 제어 옵션이 없습니다**: `elaw_service`, `admrul_service`, `lsDelegated_service`, `ordin_service`, `trty_service`, `committee_service`, `cgm_expc_service`, `special_decc_service` (도구 설명에 같은 경고가 있음). 실제 크기는 법령마다 다릅니다. `eflaw_service`/`law_service`는 `jo` 없이 호출하면 법령 전체를 받습니다.
-- **`article_citation`**: "제88조 내지 제93조" 같은 범위는 한 개의 HTML 링크라 첫 조문만 추출될 수 있습니다. 삭제되었거나 개정으로 사라진 조문을 가리키는 인용도 그대로 추출됩니다. 외부 법령은 이름 텍스트만 주므로 MST가 필요하면 `eflaw_search`를 따로 호출해야 합니다. "같은 법"과 조문 나열은 휴리스틱으로 해석합니다.
-- **계정 단위 API 신청**: OC마다 신청한 API 범위가 다릅니다. 신청하지 않은 API는 `API_NOT_SUBSCRIBED` 오류가 됩니다(예: 현행법령 시행일 본문 `eflaw`는 `law_service`/`eflaw_josub`으로 대신할 수 있음).
+- **조용히 무시되던 필터 (#45)**: 업스트림은 `prec`/`detc`/`decc`/`special_decc`의 `date`를 무시하므로 도구가 `prnc_yd`/`ed_yd`/`rsl_yd`의 `D~D`로 바꿔 보내고 응답에 `filters_applied`를 표시합니다. `nb`는 사건번호 하나만 받습니다(쉼표 목록은 항상 0건, 표시형 `대법원-2025-두-34754`는 `2025두34754`로 변환, `detc`는 `query`가 있으면 `nb`를 무시하므로 함께 쓰면 오류). expc `inq`는 질의기관코드(숫자)만 받습니다(이름은 오필터). `dpa_yd`(처분일자)는 업스트림 필드가 거의 비어 있어 0건이어도 결정이 없다는 뜻이 아닙니다. 100 초과 `display`는 100으로 제한하고 `display_capped`로 알립니다. 알 수 없는 `sort`/`search`/`gana`/`cls`/`sections`는 `VALIDATION_ERROR`입니다. `*_service`는 `id`가 있으면 `lm`을 보내지 않습니다(응답 `notes`의 `lm_not_sent`). `nb`는 접두 일치라 `2010헌바1`이 `2010헌바125`도 돌려주며, 정확히 일치하지 않는 행이 있으면 `nb_prefix_match`로 알립니다(정확한 1건이 있으면 `ranked_data`는 그 1건만). 키워드 질의에서 `sort`가 없으면 prec/expc 결과는 제목 관련도로 재정렬됩니다(이전 버전은 필드명 오류로 업스트림 순서였음). `ordin_service`의 `id`/`일련번호` 충돌은 모든 ok 응답의 `resolved` 블록으로 확인하고, `verify_id=true`일 때만 `mst=id`를 추가 조회합니다. `aiSearch`의 `page`는 업스트림이 무시합니다(`page_ignored`).
+- **일부 `*_service`에는 크기 제어 옵션이 없습니다**: `elaw_service`, `admrul_service`, `ordin_service`, `trty_service`, `committee_service`, `cgm_expc_service`, `special_decc_service` (도구 설명에 같은 경고가 있음). 실제 크기는 법령마다 다릅니다. `eflaw_service`/`law_service`는 `jo` 없이 호출하면 법령 전체를 받고, `lsDelegated_service`는 `jo` 없이 건축법 3.7MB(조문별 중앙값 2.3KB)이며 `jo`는 클라이언트 측 필터입니다(업스트림 파라미터 아님).
+- **`article_citation`**: "제33조부터 제37조까지" 같은 범위는 법제처가 한 개의 링크로 걸어 두며, LexLink가 시작~끝의 모든 조문을 나열하고 각 항목에 `range_text`/`range_note`를 붙입니다(범위 사이의 가지조문 `제N조의M`이나 시작·끝에 가지조문이 있는 범위는 나열하지 않으며 `range_note`에 표시). `mst`는 숫자여야 합니다(`VALIDATION_ERROR`). 삭제되었거나 개정으로 사라진 조문을 가리키는 인용도 그대로 추출됩니다. 외부 법령은 이름 텍스트만 주므로 MST가 필요하면 `eflaw_search`를 따로 호출해야 합니다. "같은 법"과 조문 나열은 휴리스틱으로 해석합니다.
+- **계정 단위 API 신청**: OC마다 신청한 API 범위가 다릅니다. 신청하지 않은 API는 `API_NOT_SUBSCRIBED` 오류가 됩니다(예: 현행법령 시행일 본문 `eflaw`는 `law_service`/`eflaw_josub`으로 대신할 수 있음). 같은 페이지가 잘못된 인자(없는 id, 해당 MST에 없는 `ef_yd`)와 본문 API만 미신청인 계정에도 나옵니다(바이트 단위로 동일). 그래서 본문(lawService) 호출에서 이 페이지가 오면 같은 target의 목록 조회를 **추가로 1회** 호출합니다(오류 경로에서만, 10초 제한): 목록도 미신청이면 `API_NOT_SUBSCRIBED`, 목록이 정상이면 원인을 알 수 없으므로(인자 거부 또는 본문 API만 미신청) `UPSTREAM_HTML_ERROR` + `may_be_not_subscribed: true`(대안 도구 안내 유지), 확인 불가면 '확인하지 못함' 힌트가 붙은 `API_NOT_SUBSCRIBED`입니다. 잘못된 `type`은 호출 전 `VALIDATION_ERROR`입니다.
 - **서버 IP 등록**: law.go.kr은 OC와 호출 IP를 함께 검증합니다. 등록되지 않은 IP에서는 "사용자 정보 검증에 실패하였습니다" 오류가 납니다([OPERATIONS.md](OPERATIONS.md)).
-- **`simplify_article`**: 본문을 쉬운 말로 바꾸지 않습니다. 법제처 용어 DB에 연결이 있는 용어만 `term_glossary`에 나오며, 연결이 법적 의미와 다를 수 있습니다.
-- **`check_precedent_odds`**: 판례 주문의 분포이며 승소율이나 결과 예측이 아닙니다.
+- **`simplify_article`**: 본문을 쉬운 말로 바꾸지 않고(`text_simplified: false`) 용어 해설도 제공하지 않습니다(`glossary_status: withheld`). 법령용어DB는 배우자-반려자, 위법행위-불법행위, 재산관리인-관재인, 피한정후견인-한정치산자처럼 법적 의미가 다른 쌍을 '동의어'로 표시하고, 관계 종류(동의어/연관어 등)로는 이를 정상 쌍과 가려낼 수 없으며 DB에 `채급자` 같은 항목도 있습니다. 용어는 `lstrm_search`/`lstrm_service`로 직접 확인하세요.
+- **`prec_search`의 `nb`는 접두 일치이고 결합사건은 첫 번호로만 색인됩니다.** `nb=2013므`는 2013년 므 사건 전체(11건)를, `nb=2013므3`은 `2013므3383`만 돌려줍니다. 결합사건 "94므1713, 1720"은 `nb=94므1713`으로만 찾아지고 `nb=94므1720`은 0건이며, `nb="94므1713, 1720"`처럼 쉼표로 묶으면 LexLink가 `VALIDATION_ERROR`로 거부합니다(번호마다 따로 호출). `query`는 사건명 검색(`search=1`)이고 사건번호를 본문에서 찾으려면 `search=2`와 따옴표 구문(`query='"94므1713"'`)을 쓰세요(따옴표가 없으면 `70도29`가 6,403건과 맞고 따옴표를 쓰면 3건).
+- **대법원 2015.6.24. 선고 2013므3963, 3970 판결은 법제처 판례 DB에 없습니다(검색 버그가 아니라 업스트림 공백).** 2026-11-01 직접 확인: `nb`를 `2013므3963` / `2013므3970` / `2013므3963, 3970` / `2013므3963,2013므3970` / `2013므3963ㆍ3970` / `2013므 3963`으로 호출하면 모두 0건, `nb=2013므`(접두)는 11건(2013므4133, 568, 2397, 2441, 4591, 4201, 2250, 1196, 5495, 3383, 1455)에 3963·3970이 없고, 선고일 2015-06-24 전체 57건에도 므 사건이 없으며, LexLink의 검색 계층(`run_search`)을 거치지 않고 HTTP 클라이언트로 `lawSearch.do`를 직접 호출해도 같은 결과입니다. 이런 판결은 `prec_search`/`prec_service`로 찾을 수 없으니 "확인 필요"로 다루세요. 다만 이 번호는 다른 판결 안에서 인용으로는 나옵니다: 대법원 2026.1.29. 선고 2025므10716 판결(판례일련번호 616571)의 본문이 "대법원 2015. 6. 24. 선고 2013므3963, 3970 판결 참조"(민법 제766조 제1항 단기소멸시효 설시에 붙은 인용)라고 적고 있어 `prec_search query='"2013므3963"' search=2`로 인용한 판결은 찾을 수 있습니다(원 판결의 본문은 아님). `prec_status`는 이런 사건번호에 `case_not_found`를 돌려줍니다.
+- **`prec_status`**: 변경 표시를 찾은 경우에만 `overruled_found`입니다. `no_overruling_found_in_searched_set`은 변경되지 않았다는 뜻이 아니며, 법제처가 본문을 제공하지 않는 판결, 인용 표기가 다른 판결, 목록 상한(3쪽 300건)·`max_scan`을 넘는 후보는 확인하지 못합니다. 방식과 측정은 CHANGELOG 참조.
+- **`check_precedent_odds`**: 판례 주문의 분포이며 승소율이나 결과 예측이 아닙니다. 집계는 `sample`에 적힌 표본(검색 결과 중 사건명·판시사항·판결요지에 질의의 핵심 단어가 있고 본문 조회가 된 앞쪽 몇 건)에 대한 것이고 무작위·전수 표본이 아닙니다. 관련성 표시(`low_relevance`, `uncounted_cases`)는 질의 단어와의 글자 일치 검사라 약어·바꿔 말한 표현은 맞아도 빠질 수 있고(상간녀 위자료: 찾은 1건이 미집계) 흔한 단어는 무관한 판례도 통과시킵니다.
+
 - **프롬프트/지침 준수는 모델마다 다릅니다.** 서버 지침(`SERVER_INSTRUCTIONS`)을 모든 LLM이 따르는 것은 아닙니다. 모델별 준수율 수치(과거 시험)는 [archive/ISSUES.md](archive/ISSUES.md)에 있으며 현재 버전에서 다시 측정하지 않았습니다.
 - **HTTP 서버**: 단일 프로세스 전제, SSE 전송의 로깅/동시성 한계 등은 [OPERATIONS.md](OPERATIONS.md)의 "알려진 한계"를 보세요.
 
@@ -262,7 +273,7 @@ for t in asyncio.run(create_server().list_tools()):
 | type | char(필수) | 출력 형태 HTML/XML/JSON (생략시 기본값: XML) |
 | search | int | 검색범위 (기본: 1 법령명) 2: 본문검색 |
 | query | string | 법령명에서 검색을 원하는 질의 |
-| nw | int | 1: 연혁, 2: 시행예정, 3: 현행 (LID 지정 시 실측: nw=1은 연혁 행만, nw=2는 시행예정만, nw=3은 현행만; 도구에서 생략하면 현행만). 복수: nw=1,2,3. 주의: 현재 도구 설명(코드)은 2=현행, 3=시행예정으로 적혀 있어 실측과 다름 |
+| nw | int | 1: 연혁, 2: 시행예정, 3: 현행 (실측: nw=1은 연혁 행만, nw=2는 시행예정만, nw=3은 현행만; 도구에서 생략하면 현행만). 복수: nw=1,2,3 |
 | LID | string | 법령ID (LID=830) |
 | display | int | 검색된 결과 개수 (default=20, max=100) |
 | page | int | 검색 결과 페이지 (default=1) |
@@ -325,7 +336,7 @@ http://www.law.go.kr/DRF/lawSearch.do?OC=test&target=eflaw&query=자동차관리
 
 > **LexLink `jo` 정규화 (v2.2.0):** `eflaw_service`, `law_service`, `eflaw_josub`, `law_josub`은 `35`, `35의5`, `제35조의5`, `35-5`, `003505`를 모두 받아 업스트림용 6자리 코드(`003505`)로 변환한다. 형식이 잘못되면 `VALIDATION_ERROR`, 해당 조문이 응답에 없으면 `ARTICLE_NOT_FOUND`.
 > **`ef_yd` 규칙 (LexLink 도구, Unreleased):** `ef_yd`는 해당 MST 자신의 시행일을 고르는 개정본 선택자다. `mst` 없이 `id` + `ef_yd`만 주면 `VALIDATION_ERROR`(업스트림이 무시하거나 `{}`를 돌려줌), `mst` + `ef_yd`면 `id`는 보내지 않는다(`id`를 같이 보내면 업스트림이 현재본을 반환). `mst`를 쓸 때는 `ef_yd` 또는 `id`가 필요하다. 특정 날짜에 시행 중이던 본문은 `law_as_of`를 쓴다(1.2.3절). `ef_yd`는 정수/문자열 모두 허용. `lm`은 업스트림에 대문자 `LM`으로 전송되며 `lm`만으로 조회할 수 있다.
-> **계정 신청 주의:** `eflaw` **본문**(`lawService.do?target=eflaw`)은 OC에 해당 API가 신청돼 있지 않으면 "미신청된 목록/본문에 대한 접근입니다" HTML을 반환한다 → LexLink는 `API_NOT_SUBSCRIBED` 오류로 변환하고 `law_service`/`eflaw_josub`을 대안으로 안내한다 (Appendix C).
+> **계정 신청 주의:** `eflaw` **본문**(`lawService.do?target=eflaw`)은 OC에 해당 API가 신청돼 있지 않으면 "미신청된 목록/본문에 대한 접근입니다" HTML을 반환한다 → LexLink는 `API_NOT_SUBSCRIBED` 오류로 변환하고 `law_service`/`eflaw_josub`을 대안으로 안내한다 (Appendix C). 같은 페이지가 잘못된 인자(없는 id, 해당 MST에 없는 `ef_yd`)와 본문 API만 미신청인 계정에도 나옵니다(바이트 단위로 동일). 그래서 본문(lawService) 호출에서 이 페이지가 오면 같은 target의 목록 조회를 **추가로 1회** 호출합니다(오류 경로에서만, 10초 제한): 목록도 미신청이면 `API_NOT_SUBSCRIBED`, 목록이 정상이면 원인을 알 수 없으므로(인자 거부 또는 본문 API만 미신청) `UPSTREAM_HTML_ERROR` + `may_be_not_subscribed: true`(대안 도구 안내 유지), 확인 불가면 '확인하지 못함' 힌트가 붙은 `API_NOT_SUBSCRIBED`입니다. 잘못된 `type`은 호출 전 `VALIDATION_ERROR`입니다.
 
 **Sample URLs:**
 ```
@@ -502,6 +513,9 @@ http://www.law.go.kr/DRF/lawService.do?OC=test&target=lawjosub&type=XML&ID=00182
 | `false` | `BEFORE_EARLIEST_AVAILABLE_VERSION` | 조회된 연혁 이전: 시행 여부 확인 불가 (동일 명칭 법령ID 존재, 연혁 누락, 조회 실패 등) |
 | `false` | `AFTER_REPEAL` | 폐지(`폐지`/`타법폐지`/`일괄폐지`) 이후. `폐지제정`은 폐지가 아님 |
 | `null` | `NOT_CURRENT_UPSTREAM` | 업스트림에 현행/시행예정 버전이 없고 폐지 표시도 없는 법령(한시법 종료 등)의 마지막 버전 이후: 시행 중이었는지 알 수 없음 |
+| `null` | `ARTICLE_STAGED_DATE_UNRESOLVED` | `article`을 지정했고 부칙이 그 조문의 시행일을 계산할 수 없는 방식(`대통령령으로 정하는 날`, `이 법 시행 후 N개월이 경과한 날`, `공포 후 N개월 이내` 등, 또는 부칙 공포일 없음)으로 정한 경우: 기준일에 그 조문이 시행 중이었는지 알 수 없음. 부칙 원문은 `partial_effect.unresolved`와 `caveats` |
+
+**부칙 상대일(`공포 후 6개월이 경과한 날부터 시행`):** 부칙 단위의 `부칙공포일자`로 계산합니다. 기간은 공포일 다음 날부터 기산(민법 제157조)하고 역(曆)에 따라 계산하며(제160조) 기간이 지난 다음 날이 "경과한 날"입니다(공포 2021-04-20 + 6개월 = 2021-10-21; 말일이 없는 달은 다음 달 1일). 법제처 `eflaw` 시행일자와 대조: 스토킹범죄의 처벌 등에 관한 법률 3건과 가정폭력범죄의 처벌 등에 관한 특례법 13건(공포 후 1~8개월·1년 형태), 총 16건(개정본)에서 계산값이 그 개정본의 `시행일자`와 같았습니다(같은 개정의 다른 시행일 행 1건, MST 115734는 비교 대상이 아니라 제외). `공포 후 1년 6개월이 경과한 날`(연+월)은 합산하고, `경과한 날이 속하는 달의 1일`·`경과한 날의 다음 날`은 그대로 계산하며, 그 밖의 이어지는 말(`…속하는 달의 다음 달 1일`, `…의 전날`), 일과 월·년의 혼합, `공포 6개월 후`, `공포한 날부터 N개월이 경과한 날`(기산일이 하루 다른지 실제 법령으로 확인하지 못함), `공포 후 N개월 이내`는 계산하지 않고 unresolved로 둡니다(평범한 경과일로 잘못 계산하지 않음). `각 호`로 나열한 항목(`1. 제5조: 2024년 1월 1일`)이 조문을 지목하면 그 항목 줄을 따로 평가합니다. **적용 범위:** 계산 불가(`unresolved`) 판정은 **선택된 버전 자신의 개정 부칙**(공포일자·공포번호가 같은 부칙 단위)에만 적용합니다. 더 이전 개정의 부칙에 `대법원규칙으로 정하는 날` 같은 규정이 있어도 그 뒤 개정이 이미 시행되었으므로 `in_force`는 바꾸지 않고 `partial_effect.earlier_amendment_unresolved_dates`와 `caveats`에만 적습니다(가족관계의 등록 등에 관한 법률 제14조·제15조의 2016 부칙이 2018-01-01과 2026-01-01에서 `in_force`를 영구히 null로 만들던 회귀를 막음; 13개 질의에서 null 0건). 절대일·계산된 상대일이 기준일보다 늦은 경우는 이전 개정의 부칙이어도 그대로 보고합니다. 계산된 날짜가 기준일보다 늦으면 `partial_effect.article_scan.matches[].later_dates`와 `computed_from_announcement`에 나옵니다(`in_force`는 그대로 true). 위헌·헌법불합치 단서는 `law_as_of`에 넣지 않고 `law_constitutional_check`로 따로 조회합니다.
 
 오류는 `status: error` + `error_code` (VALIDATION_ERROR, ARTICLE_NOT_FOUND, 업스트림 코드). 업스트림 실패는 "없음"으로 보고하지 않는다.
 동일 명칭의 구법(다른 법령ID)은 법령구분이 같고 (법률/대통령령/헌법이거나 소관부처가 같을 때)에만 대체한다.
@@ -697,10 +711,13 @@ http://www.law.go.kr/DRF/lawSearch.do?OC=test&target=lnkDep&org=1400000&type=XML
 | OC | string(필수) | 사용자 이메일의 ID |
 | target | string: drlaw(필수) | 서비스 대상 |
 | type | char(필수) | 출력 형태: **HTML만 지원** |
+| display | int | 페이지당 행 수 (측정: 지원, 최대 100으로 제한) |
+| page | int | 페이지 (측정: 지원, 전체 981행) |
 
 **Sample URLs:**
 ```
 http://www.law.go.kr/DRF/lawSearch.do?OC=test&target=drlaw&type=HTML
+http://www.law.go.kr/DRF/lawSearch.do?OC=test&target=drlaw&type=HTML&display=100&page=2
 ```
 
 ---
@@ -1651,8 +1668,10 @@ article_citation(
 | `ARTICLE_NOT_FOUND` | 요청한 조문(`jo`)이 응답에 없음 | 조문 번호·법령 버전 확인 |
 | `NOT_FOUND` | 업스트림이 "일치하는 … 없습니다"로 답했거나 본문이 비어 있음 (`prec_service`/`detc_service`/`expc_service`의 없는 ID, `lawService.do`의 빈 본문 등). 오류는 캐시되지 않음 | ID·검색어 확인 |
 | `EMPTY_RESPONSE` | HTTP 200이지만 0-byte 본문. 대개 잘못된 target/엔드포인트 | target·엔드포인트 점검 (코드 버그 신호) |
-| `API_NOT_SUBSCRIBED` | "미신청된 목록/본문에 대한 접근입니다" — OC 계정이 해당 API 종류를 open.law.go.kr에서 신청하지 않음. `eflaw` 본문이면 `law_service`/`eflaw_josub` 대안 안내 | open.law.go.kr에서 API 신청 추가 |
+| `API_NOT_SUBSCRIBED` | "미신청된 목록/본문에 대한 접근입니다" — OC 계정이 해당 API 종류를 open.law.go.kr에서 신청하지 않음. 같은 페이지가 잘못된 인자에도 나오므로 본문 호출에서는 목록 조회 1회로 확인합니다: 목록도 미신청이면 이 코드, 목록이 정상이면 `UPSTREAM_HTML_ERROR` + `may_be_not_subscribed: true`(인자 거부와 본문만 미신청을 구분 불가), 확인 불가면 '확인하지 못함' 힌트. 잘못된 `type`은 호출 전 `VALIDATION_ERROR`. `eflaw` 본문이면 `law_service`/`eflaw_josub` 대안 안내 | open.law.go.kr에서 API 신청 추가 |
 | `UPSTREAM_HTML_ERROR` | JSON/XML을 요청했는데 HTML 또는 `error500` 페이지가 반환됨 | 재시도, 지속되면 `type=HTML` 가능 여부 확인 |
+
+`status: ok`이지만 본문이 비어 있으면 `warning: "empty_body"`와 `empty_fields`(`prec`/`detc`/`expc`/`decc`/`trty`/`cgm_expc`/`special_decc` `*_service`)가 붙습니다. 업스트림 데이터가 비어 있는 경우이므로(예: `detc_service` id 150756, 150770) 본문이 없다고 단정하지 말고 원 출처로 확인하세요. 본문 필드가 있는데 모두 빈 경우에만 붙으며("일치하는 … 없습니다"류 응답은 `NOT_FOUND`), `type=HTML`에는 적용하지 않습니다(JSON/XML만 검사).
 
 앞의 세 종류(EMPTY_RESPONSE, API_NOT_SUBSCRIBED, UPSTREAM_HTML_ERROR)는 `client.py`에서 감지하며, 이전에는 `status: ok`로 통과했다.
 

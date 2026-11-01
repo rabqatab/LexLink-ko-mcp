@@ -71,8 +71,17 @@ OC=<OC> LEXLINK_AUTH_TOKENS=local:<TOKEN> TRANSPORT=http uv run serve
 - `mcp`는 `>=1.26.0,<1.27`로 고정되어 있습니다. 세션 해제가 비공개 속성 `_server_instances`와 내부 DELETE 동작에 의존하므로, 상한을 올릴 때는 이 두 동작을 다시 확인하세요.
 - 인증 없음 모드(`LEXLINK_ALLOW_NO_AUTH=true`)에서는 모든 요청의 token_id가 `noauth`로 같으므로 세션 바인딩은 아무 효과가 없습니다(세션 ID를 아는 누구나 사용 가능).
 - 401 응답은 로그에 남지 않고(인증이 가장 바깥 미들웨어) 속도 제한도 받지 않습니다. uvicorn 액세스 로그에서만 확인할 수 있습니다.
-- 도구 호출이 동기 `httpx` 클라이언트를 사용하므로 업스트림이 느리면 이벤트 루프가 막혀 속도 제한 429 응답도 지연될 수 있습니다.
+- 동기 도구 함수는 워커 스레드(`anyio.to_thread`, 기본 최대 40개)에서 실행되어 느린 업스트림 호출이 이벤트 루프를 막지 않습니다(측정: `lsDelegated_service` 건축법 4.4~5.1초 동안 `cache_stats` 지연 1.56~4.07초 -> 0.00~0.02초). 업스트림 부하는 여전히 토큰별 `LEXLINK_MAX_CONCURRENCY`가 제한합니다. 한계: 워커는 최대 40개라, 40개 이상의 호출이 업스트림에서 멈춰 있으면 대기 중인 동기 도구(`cache_stats` 포함)가 그 뒤에 줄을 섭니다(측정: 12초짜리 호출 45개를 동시에 보내자 `cache_stats`가 10.56초 대기). 클라이언트가 호출을 취소해도 워커 스레드의 업스트림 요청은 응답이 돌아오거나 타임아웃(`LEXLINK_TIMEOUT`, 기본 60초)이 될 때까지 계속 실행됩니다. 타임아웃을 짧게 두면 멈춘 호출이 워커를 점유하는 시간이 줄어듭니다.
 - 이전 형식(요청/응답 병합 로그)을 읽는 `log_processor.py`는 새 형식을 처리하지 않습니다.
+
+### 실제 서버로 확인한 동작
+
+가짜 OC·가짜 토큰·로컬 포트와 로컬 가짜 업스트림(`LEXLINK_BASE_URL`)으로 `uv run serve`를 띄워 확인했습니다(#39). 같은 내용이 `tests/test_http_mode.py`, `tests/test_upstream_failures.py`에 오프라인 테스트로 있습니다.
+
+- `LEXLINK_MAX_SESSIONS=2`: 세 번째 세션 생성 요청은 503 `{"error": "too_many_sessions"}`와 `Retry-After: 30`. 상한은 토큰과 무관하게 전체에 적용되고(다른 토큰도 503), DELETE로 슬롯이 반환되면 다시 생성됩니다.
+- 속도 제한 키는 토큰이며 IP가 아닙니다. 신뢰하지 않는 피어가 요청마다 다른 `X-Forwarded-For`를 보내도 같은 토큰은 같은 버킷으로 계산되어 한도 뒤에 429가 되고, 다른 토큰은 영향이 없습니다. 로그의 `client_ip`는 신뢰하지 않는 피어면 피어 IP, `LEXLINK_TRUSTED_PROXIES`에 있는 피어면 `X-Forwarded-For`의 값입니다(어느 쪽도 속도 제한에는 쓰이지 않음).
+- `LEXLINK_LOG_BODIES=true`: 로그 파일과 서버 출력에 OC, 클라이언트가 보낸 `oc` 인자, 토큰, `Authorization` 값이 없었습니다. 오래된 `YYYY-MM-DD.jsonl`(45일 전)은 시작 시 삭제되고 5일 전 파일은 남았으며, 새 로그 파일은 `0600`, 디렉터리는 `0700`이었습니다(사전에 만들어 둔 파일의 권한은 바꾸지 않음).
+- 업스트림 실패(HTTP 500, 타임아웃, 0바이트 본문, 중간에 끊긴 JSON)는 구조화된 오류(`UPSTREAM_ERROR`, `TIMEOUT`, `EMPTY_RESPONSE`, `UPSTREAM_ERROR`)로 돌아오고 캐시되지 않아 다음 호출이 다시 업스트림으로 갑니다. 정상 응답은 캐시됩니다. 끊긴 JSON은 이전에는 `ok`로 반환·캐시되었습니다(수정됨).
 
 ## 4. TLS 리버스 프록시
 
@@ -166,7 +175,7 @@ PlayMCP를 "인증 없음"으로 등록하려면 `LEXLINK_ALLOW_NO_AUTH=true`가
 | 항목 | 값 |
 |---|---|
 | MCP 이름 / 식별자 | LexLink - 한국 법령정보 / lexlink |
-| MCP 설명 | 대한민국 법률, 판례, 행정규칙 검색 및 조회를 위한 MCP 서버. law.go.kr 국가법령정보 API 연동. 66개 도구 지원. |
+| MCP 설명 | 대한민국 법률, 판례, 행정규칙 검색 및 조회를 위한 MCP 서버. law.go.kr 국가법령정보 API 연동. 68개 도구 지원. |
 | 대화 예시 | 민법 제20조 내용 알려줘 / 건축법과 관련된 대법원 판례 검색해줘 / 자동차관리법 시행령 검색 |
 | 인증 방식 | 인증 없음 (`LEXLINK_ALLOW_NO_AUTH=true` 필요) |
 | MCP Endpoint | `https://<도메인>/mcp` |
@@ -237,7 +246,7 @@ PlayMCP처럼 응답 크기 제한이 있는 곳에 붙일 때는 환경 파일�
 | 421 | 요청 Host가 `LEXLINK_ALLOWED_HOSTS`에 없음 |
 | 429 | 토큰별 속도/동시성 제한 초과 (`Retry-After` 참고) |
 | 404 (세션) | 만료되었거나 다른 토큰의 세션. 새 세션을 시작 |
-| 503 `too_many_sessions` | `LEXLINK_MAX_SESSIONS` 도달 |
+| 503 `too_many_sessions` | `LEXLINK_MAX_SESSIONS` 도달 (`Retry-After: 30`). 기존 세션 DELETE/유휴 만료 후 재시도 |
 | Nginx 502 | LexLink 서비스가 내려가 있음: `sudo systemctl status lexlink`, `sudo journalctl -u lexlink -n 50` |
 | systemd `status=217/USER` | 유닛의 `User=`가 잘못됨 |
 | systemd `status=203/EXEC` | `ExecStart=`의 `uv` 경로 또는 프로젝트 경로가 잘못됨 (`which uv`) |

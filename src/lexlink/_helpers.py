@@ -341,7 +341,45 @@ def slim_limited(func):
     @functools.wraps(func)
     def sync_wrapper(*args, **kwargs):
         return enforce_slim_limit(func(*args, **kwargs), note=note)
+    # FastMCP calls a sync tool function on the event loop; install_threaded_tool_calls() moves it to a worker thread
+    sync_wrapper._lexlink_threaded = True
     return sync_wrapper
+
+
+_THREADED_CALLS_INSTALLED = False
+
+
+def install_threaded_tool_calls() -> None:
+    """Run LexLink's synchronous tool functions in worker threads instead of on the event loop.
+
+    The tools use blocking HTTP (``requests``-style client), and FastMCP calls a sync tool
+    function directly on the event loop, so one slow upstream call (건축법 lsDelegated: 3.7 MB, several
+    seconds) froze every other session, even a cache_stats ping, until it returned (measured over
+    Streamable HTTP). Only functions marked by ``slim_limited`` are moved; ``tool.fn`` itself stays
+    a plain sync function. Idempotent.
+    """
+    global _THREADED_CALLS_INSTALLED
+    if _THREADED_CALLS_INSTALLED:
+        return
+    import anyio.to_thread
+    from mcp.server.fastmcp.utilities.func_metadata import FuncMetadata
+
+    original = FuncMetadata.call_fn_with_arg_validation
+
+    async def call_fn_with_arg_validation(self, fn, fn_is_async, arguments_to_validate, arguments_to_pass_directly):
+        if fn_is_async or not getattr(fn, "_lexlink_threaded", False):
+            return await original(self, fn, fn_is_async, arguments_to_validate, arguments_to_pass_directly)
+
+        async def in_worker(**kwargs):
+            return await anyio.to_thread.run_sync(functools.partial(fn, **kwargs))
+
+        return await original(self, in_worker, True, arguments_to_validate, arguments_to_pass_directly)
+
+    FuncMetadata.call_fn_with_arg_validation = call_fn_with_arg_validation
+    _THREADED_CALLS_INSTALLED = True
+
+
+install_threaded_tool_calls()
 
 
 from .params import map_params_to_upstream
@@ -869,6 +907,44 @@ def annotate_prec_body_availability(response: dict) -> dict:
     return response
 
 
+def _body_fields_blank(raw: str, response_type: str, fields: list[str]) -> bool:
+    """True when at least one of ``fields`` is present in the body and every present one is blank.
+
+    A body without any of the fields (an error text, another schema) is not "a record with
+    an empty body", so it does not count.
+    """
+    if not raw or not _fields_empty(raw, response_type, fields):
+        return False
+    if response_type == "JSON":
+        try:
+            data = json.loads(raw)
+            root = list(data.values())[0] if isinstance(data, dict) and data else {}
+        except Exception:
+            return False
+        return isinstance(root, dict) and any(f in root for f in fields)
+    if response_type == "XML":
+        return any(re.search(rf"<{re.escape(f)}[ >/]", raw) for f in fields)
+    return False
+
+
+def _annotate_empty_body(response: dict, full: dict, body_fields, response_type: str) -> dict:
+    """Add the machine-readable ``empty_body`` warning (see run_service ``body_fields``)."""
+    if body_fields and response.get("status") == "ok" \
+            and _body_fields_blank(full.get("raw_content", ""), response_type, body_fields):
+        response["warning"] = "empty_body"
+        response["empty_fields"] = list(body_fields)
+        response["message"] = (
+            "업스트림이 이 문서의 본문 필드(" + ", ".join(body_fields) + ")를 모두 비워서 반환했습니다. "
+            "기록은 존재하지만 내용이 제공되지 않았으므로 본문이 없다고 단정하지 말고 다른 출처로 확인하세요. "
+            "The upstream returned this record with every body field empty."
+        )
+        response["hints"] = [
+            "법제처 데이터 자체가 비어 있는 경우입니다(LexLink가 내용을 지우지 않음)",
+            "같은 사건의 다른 일련번호나 원 출처(법원·헌법재판소·부처 사이트)에서 본문을 확인하세요",
+        ]
+    return response
+
+
 def run_service(
     *,
     get_client,
@@ -878,6 +954,7 @@ def run_service(
     sections: Optional[str] = None,
     full_text_fields: Optional[list[str]] = None,
     summary_required_fields: Optional[list[str]] = None,
+    body_fields: Optional[list[str]] = None,
 ) -> dict:
     """Common service tool logic. Handles: param mapping, API call, section filtering.
 
@@ -889,7 +966,20 @@ def run_service(
         summary_required_fields: Fields that make a summary useful (e.g. 판시사항,
                          판결요지). If all are empty, full_text_fields are kept and
                          sections="summary_fallback" is reported.
+        body_fields: The fields that carry the document itself. When the upstream
+                         answers ok but every one of them is empty (a record exists, its
+                         text was not supplied), the result gets ``warning: "empty_body"``
+                         with ``empty_fields`` so the caller does not read it as a decision
+                         with no content. Applies in every ``sections`` mode.
     """
+    # A non-numeric id/mst makes law.go.kr answer HTTP 500, which would read as an upstream
+    # fault ("not your fault"); it is the caller's input, so refuse it before the call.
+    from .law_extras import validate_digits
+    for key in ("id", "mst"):
+        if snake_params.get(key) is not None:
+            snake_params[key] = validate_digits(snake_params[key], key, allow_empty=True) or snake_params[key]
+
+    response_type = str(response_type).upper()  # "xml"/"json" must behave like "XML"/"JSON"
     upstream_params = map_params_to_upstream(snake_params)
 
     # Check cache (only for full responses — summary mode always fetches fresh then strips)
@@ -897,7 +987,7 @@ def run_service(
     if sections != "summary":
         cached = cache.get(target, upstream_params)
         if cached is not None:
-            return cached
+            return _annotate_empty_body(dict(cached), cached, body_fields, response_type)
 
     client = get_client()
     response = client.get("/DRF/lawService.do", upstream_params, response_type)
@@ -906,6 +996,7 @@ def run_service(
     cache.put(target, upstream_params, response)
 
     # Section filtering must not mutate the cached full response
+    cached_full = response
     response = dict(response)
 
     # Section filtering: strip full-text fields when sections="summary"
@@ -953,7 +1044,7 @@ def run_service(
             except:
                 pass  # If JSON parsing fails, return unmodified
 
-    return response
+    return _annotate_empty_body(response, cached_full, body_fields, response_type)
 
 
 # ============================================================
@@ -987,6 +1078,12 @@ RELEVANCE_UNCHECKABLE_WARNING = (
 _RELEVANCE_FIELDS = ("법령명", "조문제목", "조문내용")
 
 
+# Colloquial words that never appear in statute text but whose usual legal term does, e.g.
+# 뺑소니 -> 도주차량 운전자의 가중처벌 (특정범죄 가중처벌법 제5조의3). Their legal terms count as lexical
+# evidence so a correct aiSearch result is not flagged; the list is deliberately short.
+COLLOQUIAL_LEGAL_TERMS = {"뺑소니": ("도주",)}
+
+
 def _query_grams(query: str) -> set:
     """Character bigrams of each word. Single-character words and digit-only
     words yield nothing: they match dates, article numbers and particles by accident."""
@@ -1012,11 +1109,130 @@ def low_relevance_warning(query: str, rows: list) -> Optional[str]:
     grams = _query_grams(query or "")
     if not grams:
         return RELEVANCE_UNCHECKABLE_WARNING
+    for colloquial, terms in COLLOQUIAL_LEGAL_TERMS.items():
+        if colloquial in (query or ""):
+            for term in terms:
+                grams |= _query_grams(term)
     for row in rows:
         text = " ".join(str(row.get(k, "")) for k in _RELEVANCE_FIELDS).lower()
         if any(g in text for g in grams):
             return None
     return LOW_RELEVANCE_WARNING
+
+
+# Verb endings and particles cut from the end of a query word (longest first), so that
+# 이혼하고 -> 이혼, 외도를 -> 외도, 퇴직금은 -> 퇴직금.
+_TERM_ENDINGS = tuple(sorted({
+    "싶어요", "싶습니다", "싶은데", "싶어서", "싶어", "싶다", "돌려줘요", "돌려주세요", "돌려받고", "돌려받을", "돌려받아",
+    "해주세요", "해줘요", "하려고", "하려면", "했는데", "했어요", "했습니다", "합니다", "하는데", "하나요", "하고", "해서",
+    "하는", "하면", "하여", "해요", "하다", "한다", "했다", "되나요", "됩니다", "되는", "돼요", "되고", "있나요", "있어요",
+    "없어요", "않아요", "줘요", "주세요", "받고", "받을", "받는", "받아", "에서는", "에서", "으로", "에게", "한테", "이라",
+    "라고", "까지", "부터", "보다", "처럼", "이", "가", "을", "를", "은", "는", "의", "에", "도", "로", "와", "과", "만",
+}, key=len, reverse=True))
+# Whole words that are only an ending or filler and carry no meaning of their own.
+_TERM_FILLER = frozenset({
+    "해서", "하고", "하는", "하면", "싶어요", "싶어", "싶다", "돌려줘요", "돌려주세요", "해요", "해주세요", "줘요", "주세요",
+    "하나요", "되나요", "있나요", "인가요", "합니다", "됩니다", "돼요", "있어요", "없어요", "않아요", "받고", "받을", "받아",
+    "관련", "경우", "사항", "규정", "대한", "대하여", "대해", "따라", "따른", "위한", "위하여", "있는", "없는", "해당", "방법",
+    "문제", "가능", "여부", "어떻게", "어떤", "알려줘", "알려주세요", "법률", "법령", "조항", "조문", "해야", "그리고", "그런데",
+    "하지만", "때문", "정도", "이상", "이하", "또는",
+})
+# Words in so many cases and statutes that matching one proves nothing on its own.
+GENERIC_TERMS = frozenset({"재산", "청구", "보증금", "손해배상", "합의금"})
+# Colloquial words and the statute word they usually stand for (matched as an alternative form).
+_TERM_ALIASES = {"집주인": "임대인", "세입자": "임차인", "남편": "배우자", "아내": "배우자", "부인": "배우자"}
+
+
+def _strip_ending(word: str) -> str:
+    """``word`` without trailing particles/verb endings, never shorter than 2 characters."""
+    changed = True
+    while changed:
+        changed = False
+        for ending in _TERM_ENDINGS:
+            if word.endswith(ending) and len(word) - len(ending) >= 2:
+                word = word[: -len(ending)]
+                changed = True
+                break
+    return word
+
+
+def query_terms(query: str) -> list:
+    """Meaningful words of ``query`` for a lexical overlap check, in order.
+
+    Hangul/Latin/digit words with particles and verb endings cut (이혼하고 -> 이혼), minus
+    digit-only words, fillers and endings standing alone (해서, 싶어요). Jamo-only strings
+    (ㅋㅋㅋ) and single characters give nothing: the caller must then treat the overlap
+    as unverifiable, not as a match.
+    """
+    terms: list = []
+    for word in re.findall(r"[0-9A-Za-z\uAC00-\uD7A3]+", (query or "").lower()):
+        if word.isdigit() or word in _TERM_FILLER:
+            continue
+        stem = _strip_ending(word)
+        if len(stem) >= 2 and stem not in _TERM_FILLER and stem not in terms:
+            terms.append(stem)
+    return terms
+
+
+def distinctive_terms(terms: list) -> list:
+    """The terms that can show overlap on their own: ``terms`` minus GENERIC_TERMS. When
+    every term is generic they all count (nothing better to compare)."""
+    return [t for t in terms if t not in GENERIC_TERMS] or list(terms)
+
+
+def matched_query_terms(terms: list, *texts) -> list:
+    """The ``terms`` that occur in any of ``texts`` (case-insensitive) at the START of a word
+    (a mid-word hit such as 외도 in 국외도피 does not count).
+
+    A literal check only: it shows word overlap, not meaning, and can err both ways. A term
+    also matches when (3+ characters) its stem without the last character occurs (양육권 in
+    "양육", 퇴직금 in "퇴직급여"), when (4+ characters) both halves occur (공정이용 in
+    "공정한 이용"), or through a colloquial alias (집주인 -> 임대인).
+    """
+    words = re.findall(r"[0-9a-z\uAC00-\uD7A3]+", " ".join(str(t) for t in texts if t).lower())
+
+    def has(form: str) -> bool:
+        # a word must START with the form (국외도피 does not contain 외도; 양육비 starts with 양육), or
+        # for a 3+ character form END with it (임대차보호법 in 주택임대차보호법)
+        return any(w.startswith(form) or (len(form) >= 3 and w.endswith(form)) for w in words)
+
+    found = []
+    for term in terms:
+        forms = [term]
+        if len(term) >= 3:
+            forms.append(term[:-1])
+        if term in _TERM_ALIASES:
+            forms.append(_TERM_ALIASES[term])
+        half = len(term) // 2
+        if any(has(f) for f in forms) or (len(term) >= 4 and has(term[:half]) and has(term[half:])):
+            found.append(term)
+    return found
+
+
+def counts_for_odds(terms: list, matched: list, matched_head: list) -> bool:
+    """Whether a fetched case is counted by check_precedent_odds.
+
+    One distinctive term: any match (사건명/판시사항/판결요지) counts. Two or more: a distinctive term
+    of 3+ characters must match in the 사건명 or 판시사항 (``matched_head``), so a short common word
+    (아이) matched only in a 판결요지 cannot count an unrelated case.
+    """
+    distinct = distinctive_terms(terms)
+    if len(distinct) < 2:
+        return counts_as_overlap(terms, matched)
+    return any(t in distinct and len(t) >= 3 for t in matched_head)
+
+
+_CRIMINAL_CASE_RE = re.compile(r"\d{2,4}\s*(?:도|노|고합|고단|고정|고약|감도|감고|감노|전도|전노|보도|재도|재노|치도|치고)\s*\d")
+
+
+def is_criminal_case_number(case_no) -> bool:
+    """True for a 사건번호 of a criminal kind (2012도14788, 2019노1234, 2020고합12)."""
+    return bool(_CRIMINAL_CASE_RE.search(str(case_no or "")))
+
+
+def counts_as_overlap(terms: list, matched: list) -> bool:
+    """True when a distinctive (non-generic) query term is among ``matched``."""
+    return bool(set(distinctive_terms(terms)) & set(matched))
 
 
 # The 주문 ends at ANY following 【...】 heading (이유, 청구취지 및 항소취지, ...)
@@ -1124,16 +1340,25 @@ def extract_key_factors(text: str) -> list[str]:
 
 
 def extract_legal_terms(text: str) -> list[str]:
-    """Extract candidate legal terms from Korean legal text for simplification."""
+    """Candidate legal terms of Korean legal text, taken on word boundaries.
+
+    Each Hangul word has its particles/endings cut and is kept only when the whole word has a
+    legal-term shape (ends in 자/인/권/의무/...). Fragments of longer words (지방자 from
+    지방자치단체) are not produced. A word ending in 인 is kept only up to 5 characters:
+    longer ones (지방자치단체인) are a noun plus the copula.
+    """
     if not text:
         return []
-    matches = LEGAL_TERM_SUFFIXES.findall(text)
     seen = set()
     terms = []
-    for m in matches:
-        if m not in seen and len(m) >= 2:
-            seen.add(m)
-            terms.append(m)
+    for word in re.findall(r"[\uAC00-\uD7A3]+", text):
+        word = _strip_ending(word)
+        if len(word) < 2 or word in seen or not LEGAL_TERM_SUFFIXES.fullmatch(word):
+            continue
+        if word.endswith("인") and len(word) > 5:
+            continue
+        seen.add(word)
+        terms.append(word)
     return terms[:20]
 
 

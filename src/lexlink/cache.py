@@ -10,6 +10,7 @@ Features:
 
 import hashlib
 import logging
+import threading
 import time
 from collections import OrderedDict
 from typing import Optional
@@ -99,9 +100,15 @@ class ResponseCache:
         self._max_entries = max_entries
         self._hits = 0
         self._misses = 0
+        # tool functions run in worker threads (see _helpers.install_threaded_tool_calls)
+        self._lock = threading.RLock()
 
     def get(self, target: str, params: dict) -> Optional[dict]:
         """Look up cached response. Returns None on miss or expiry."""
+        with self._lock:
+            return self._get(target, params)
+
+    def _get(self, target: str, params: dict) -> Optional[dict]:
         key = _make_cache_key(target, params)
 
         if key not in self._cache:
@@ -127,6 +134,10 @@ class ResponseCache:
 
     def put(self, target: str, params: dict, response: dict) -> None:
         """Store a response in cache. Only caches successful responses."""
+        with self._lock:
+            self._put(target, params, response)
+
+    def _put(self, target: str, params: dict, response: dict) -> None:
         if response.get("status") != "ok":
             return  # Don't cache errors
 
@@ -141,6 +152,10 @@ class ResponseCache:
 
     def invalidate(self, target: str = None) -> int:
         """Clear cache entries. If target given, only clear that target's entries."""
+        with self._lock:
+            return self._invalidate(target)
+
+    def _invalidate(self, target: str = None) -> int:
         if target is None:
             count = len(self._cache)
             self._cache.clear()
@@ -154,6 +169,10 @@ class ResponseCache:
 
     def stats(self) -> dict:
         """Return cache statistics."""
+        with self._lock:
+            return self._stats()
+
+    def _stats(self) -> dict:
         total = self._hits + self._misses
         return {
             "entries": len(self._cache),
