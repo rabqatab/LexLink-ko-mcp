@@ -87,7 +87,17 @@ def test_failure_is_structured_and_not_cached(monkeypatch, bad, code):
 @pytest.mark.parametrize("body", [GOOD, "{}", "[]", '{"a": "line\nbreak"}', "일치하는 법령이 없습니다", "  "])
 def test_valid_or_non_json_bodies_are_not_flagged_as_truncated(body):
     err = detect_upstream_body_error(body, "JSON", endpoint="/DRF/lawSearch.do")
-    assert err is None or "불완전한 JSON" not in err["message"]
+    assert err is None or "invalid JSON body" not in err["message"]
+
+
+@pytest.mark.unit
+def test_json_check_ignores_bom_survives_deep_nesting_and_is_neutral():
+    assert detect_upstream_body_error("\ufeff" + GOOD, "JSON", endpoint="/DRF/lawSearch.do") is None
+    deep = "[" * 100000 + "]" * 100000                 # RecursionError inside json.loads
+    err = detect_upstream_body_error(deep, "JSON", endpoint="/DRF/lawSearch.do")
+    assert err["error_code"] == "UPSTREAM_ERROR" and "invalid JSON body" in err["message"]
+    text = detect_upstream_body_error("[공지] 점검 중입니다", "JSON", endpoint="/DRF/lawSearch.do")
+    assert text["error_code"] == "UPSTREAM_ERROR" and "끊" not in text["message"] and "truncated" not in text["message"]
 
 
 @pytest.mark.unit

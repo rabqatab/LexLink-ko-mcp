@@ -445,19 +445,19 @@ def detect_upstream_body_error(
             "해당 target을 알 수 없습니다. law.go.kr returned an empty JSON object.",
         )
 
-    # 8) JSON requested, body looks like JSON but does not parse: a cut-off transfer. An error is
-    # never cached, so a truncated body is not served again.
-    if fmt == "JSON" and text.lstrip()[:1] in ("{", "["):
+    # 8) JSON requested, body looks like JSON but does not parse. Often a cut-off transfer; an
+    # error is never cached, so such a body is not served again. A leading BOM is ignored.
+    jtext = text.lstrip("\ufeff \t\r\n")
+    if fmt == "JSON" and jtext[:1] in ("{", "["):
         try:
-            json.loads(text, strict=False)
-        except ValueError:
+            json.loads(jtext, strict=False)
+        except (ValueError, RecursionError):
             return create_error_response(
                 error_code=ErrorCode.UPSTREAM_ERROR,
-                message="법제처 API가 불완전한 JSON을 반환했습니다 (응답이 중간에 끊긴 것으로 보입니다). "
-                        "law.go.kr returned truncated or invalid JSON.",
+                message="법제처 API가 해석할 수 없는 JSON 본문을 반환했습니다 (invalid JSON body).",
                 hints=[
-                    "잠시 후 다시 시도하세요. 불완전한 응답은 캐시하지 않습니다",
-                    "Retry in a few seconds; incomplete bodies are not cached",
+                    "잠시 후 다시 시도하세요. 해석되지 않는 응답은 캐시하지 않습니다",
+                    "Retry in a few seconds; unparsable bodies are not cached",
                 ],
                 request_id=request_id,
                 upstream_target=target,

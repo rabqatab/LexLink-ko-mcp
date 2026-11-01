@@ -160,3 +160,49 @@ def test_normalize_jo_rejects_non_ascii_digits(raw):
 def test_normalize_jo_still_folds_fullwidth_digits():
     assert normalize_jo("３５") == "003500"
     assert normalize_jo("제３５조의５") == "003505"
+
+
+@pytest.mark.unit
+def test_validate_date_range_folds_fullwidth_and_returns_ascii():
+    from lexlink.validation import validate_date_range
+    assert validate_date_range("２０２００１０１~２０２４１２３１", "ef_yd") == "20200101~20241231"
+    assert validate_date_range("20200101~20241231", "ef_yd") == "20200101~20241231"
+    for bad in ("٢٠٢٠٠١٠١~٢٠٢٤١٢٣١", "2020-01-01~2024-12-31", "20241231~20200101"):
+        with pytest.raises(ValueError):
+            validate_date_range(bad, "ef_yd")
+
+
+@pytest.mark.unit
+def test_eflaw_search_sends_ascii_for_fullwidth_ef_yd(monkeypatch):
+    import asyncio
+    import httpx
+    import lexlink.server as server_mod
+    from lexlink.client import LawAPIClient
+    from lexlink.cache import get_cache
+    from urllib.parse import unquote
+    get_cache().invalidate()
+    monkeypatch.setenv("OC", "unit-test-oc")
+    seen = []
+
+    def handler(req):
+        seen.append(unquote(str(req.url)))
+        return httpx.Response(200, text=json.dumps({"LawSearch": {"totalCnt": "0", "law": []}}), request=req)
+
+    def mk(*a, **k):
+        c = LawAPIClient(base_url="http://law.test")
+        c.client = httpx.Client(transport=httpx.MockTransport(handler))
+        return c
+
+    monkeypatch.setattr(server_mod, "LawAPIClient", mk)
+    asyncio.set_event_loop(asyncio.new_event_loop())
+    tool = server_mod.create_server()._tool_manager.get_tool("eflaw_search").fn
+    out = tool(query="민법", ef_yd="２０２００１０１~２０２４１２３１")
+    assert out["status"] == "ok" and "20200101" in seen[0] and "２" not in seen[0]
+
+
+@pytest.mark.unit
+def test_linkage_normalize_jo_code_digits():
+    from lexlink.linkage import normalize_jo_code
+    assert normalize_jo_code("３５") == "003500" and normalize_jo_code("제３５조의５") == "003505"
+    with pytest.raises(Exception):
+        normalize_jo_code("٣٥")

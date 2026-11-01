@@ -621,7 +621,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (Î
         """
         resolved_oc = resolve_oc(override_oc=oc)
         if ef_yd:
-            validate_date_range(ef_yd, "ef_yd")
+            ef_yd = validate_date_range(ef_yd, "ef_yd")
         if nw is not None and nw != "" and not re.fullmatch(r"[123](,[123])*", str(nw).replace(" ", "")):
             raise ValueError("nw must be a comma separated subset of 1,2,3 (1=Ïó∞ÌòÅ, 2=ÌòÑÌñâ, 3=ÏãúÌñâÏòàÏ†ï), e.g. '1,2,3'")
         snake_params = {
@@ -1038,7 +1038,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (Î
 
         # Validate date range if provided
         if ef_yd:
-            validate_date_range(ef_yd, "ef_yd")
+            ef_yd = validate_date_range(ef_yd, "ef_yd")
 
         # Build parameters
         params = {
@@ -1244,9 +1244,9 @@ For article_citation: you MUST first call eflaw_search to get the current MST (Î
         """
         resolved_oc = resolve_oc(override_oc=oc)
         if prml_yd:
-            validate_date_range(prml_yd, "prml_yd")
+            prml_yd = validate_date_range(prml_yd, "prml_yd")
         if mod_yd:
-            validate_date_range(mod_yd, "mod_yd")
+            mod_yd = validate_date_range(mod_yd, "mod_yd")
         snake_params = {
             "oc": resolved_oc, "target": "admrul", "query": query,
             "display": display, "page": page, "nw": nw, "search": search,
@@ -1638,7 +1638,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (Î
         if gana: snake_params["gana"] = gana
         if date: snake_params["date"] = date
         if prnc_yd:
-            validate_date_range(prnc_yd, "prnc_yd")
+            prnc_yd = validate_date_range(prnc_yd, "prnc_yd")
             snake_params["prnc_yd"] = prnc_yd
         if nb: snake_params["nb"] = nb
         if dat_src_nm: snake_params["dat_src_nm"] = dat_src_nm
@@ -1755,7 +1755,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (Î
         if sort: snake_params["sort"] = sort
         if date: snake_params["date"] = date
         if ed_yd:
-            validate_date_range(ed_yd, "ed_yd")
+            ed_yd = validate_date_range(ed_yd, "ed_yd")
             snake_params["ed_yd"] = ed_yd
         if nb: snake_params["nb"] = nb
         if pop_yn: snake_params["pop_yn"] = pop_yn
@@ -1862,9 +1862,9 @@ For article_citation: you MUST first call eflaw_search to get the current MST (Î
         """
         resolved_oc = resolve_oc(override_oc=oc)
         if reg_yd:
-            validate_date_range(reg_yd, "reg_yd")
+            reg_yd = validate_date_range(reg_yd, "reg_yd")
         if expl_yd:
-            validate_date_range(expl_yd, "expl_yd")
+            expl_yd = validate_date_range(expl_yd, "expl_yd")
         snake_params = {
             "oc": resolved_oc, "target": "expc", "type": type,
             "query": query, "display": display, "page": page,
@@ -1989,9 +1989,9 @@ For article_citation: you MUST first call eflaw_search to get the current MST (Î
         """
         resolved_oc = resolve_oc(override_oc=oc)
         if dpa_yd:
-            validate_date_range(dpa_yd, "dpa_yd")
+            dpa_yd = validate_date_range(dpa_yd, "dpa_yd")
         if rsl_yd:
-            validate_date_range(rsl_yd, "rsl_yd")
+            rsl_yd = validate_date_range(rsl_yd, "rsl_yd")
         snake_params = {
             "oc": resolved_oc, "target": "decc", "type": type,
             "query": query, "display": display, "page": page,
@@ -2339,9 +2339,9 @@ For article_citation: you MUST first call eflaw_search to get the current MST (Î
         """
         resolved_oc = resolve_oc(override_oc=oc)
         if ef_yd:
-            validate_date_range(ef_yd, "ef_yd")
+            ef_yd = validate_date_range(ef_yd, "ef_yd")
         if anc_yd:
-            validate_date_range(anc_yd, "anc_yd")
+            anc_yd = validate_date_range(anc_yd, "anc_yd")
         snake_params = {
             "oc": resolved_oc, "target": "ordin", "type": type,
             "query": query, "display": display, "page": page,
@@ -2532,9 +2532,9 @@ For article_citation: you MUST first call eflaw_search to get the current MST (Î
         """
         resolved_oc = resolve_oc(override_oc=oc)
         if eft_yd:
-            validate_date_range(eft_yd, "eft_yd")
+            eft_yd = validate_date_range(eft_yd, "eft_yd")
         if conc_yd:
-            validate_date_range(conc_yd, "conc_yd")
+            conc_yd = validate_date_range(conc_yd, "conc_yd")
         snake_params = {
             "oc": resolved_oc, "target": "trty", "type": type,
             "query": query, "display": display, "page": page,
@@ -3268,10 +3268,10 @@ For article_citation: you MUST first call eflaw_search to get the current MST (Î
         if cls: snake_params["cls"] = cls
         if date: snake_params["date"] = date
         if dpa_yd:
-            validate_date_range(dpa_yd, "dpa_yd")
+            dpa_yd = validate_date_range(dpa_yd, "dpa_yd")
             snake_params["dpa_yd"] = dpa_yd
         if rsl_yd:
-            validate_date_range(rsl_yd, "rsl_yd")
+            rsl_yd = validate_date_range(rsl_yd, "rsl_yd")
             snake_params["rsl_yd"] = rsl_yd
 
         # Response root is "Decc", list key "decc" ‚Äî not the target name

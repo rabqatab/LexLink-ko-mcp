@@ -10,7 +10,18 @@ import re
 from typing import Optional, Union
 
 
-def validate_date_range(date_range: str, param_name: str) -> None:
+_FULLWIDTH_DIGITS = {ord("０") + i: str(i) for i in range(10)}
+
+
+def fold_fullwidth_digits(value) -> str:
+    """Trimmed text with the full-width digits ０-９ folded to ASCII (nothing else is folded).
+
+    Shared by normalize_jo, normalize_jo_code and validate_date_range; Arabic-Indic and other
+    Unicode digits stay as they are and fail the [0-9] checks."""
+    return ("" if value is None else str(value)).translate(_FULLWIDTH_DIGITS).strip()
+
+
+def validate_date_range(date_range: str, param_name: str) -> str:
     """
     Validate date range format (YYYYMMDD~YYYYMMDD).
 
@@ -30,11 +41,13 @@ def validate_date_range(date_range: str, param_name: str) -> None:
         ValueError: ef_yd must be in format YYYYMMDD~YYYYMMDD, got: 2024-01-01~2024-12-31
     """
     pattern = r"^[0-9]{8}~[0-9]{8}$"
+    original = date_range
+    date_range = fold_fullwidth_digits(date_range)
 
     if not re.match(pattern, date_range):
         raise ValueError(
             f"{param_name} must be in format YYYYMMDD~YYYYMMDD "
-            f"(e.g., '20240101~20241231'), got: {date_range}"
+            f"(e.g., '20240101~20241231'), got: {original}"
         )
 
     # Additional validation: check start <= end
@@ -47,6 +60,7 @@ def validate_date_range(date_range: str, param_name: str) -> None:
             f"{param_name} start date must be <= end date, "
             f"got: {start_str} > {end_str}"
         )
+    return date_range
 
 
 def format_article_number(article: int, branch: int = 0) -> str:
@@ -144,12 +158,12 @@ def normalize_jo(value: Union[str, int, None]) -> Optional[str]:
     if value is None:
         return None
 
-    text = str(value).strip()
+    text = fold_fullwidth_digits(value)
     if text == "":
         return None
 
-    # Normalize full-width digits / punctuation that LLMs or copy-paste may produce
-    text = text.translate(str.maketrans("０１２３４５６７８９（）～－", "0123456789()~-"))
+    # Normalize full-width digits (above) and punctuation that LLMs or copy-paste may produce
+    text = text.translate(str.maketrans("（）～－", "()~-"))
     text = re.sub(r"\s+", " ", text)
 
     # Exactly 6 digits: already the upstream code
