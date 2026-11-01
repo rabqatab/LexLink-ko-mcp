@@ -1019,55 +1019,92 @@ def low_relevance_warning(query: str, rows: list) -> Optional[str]:
     return LOW_RELEVANCE_WARNING
 
 
-_TERM_PARTICLES = (
-    "에서는", "에서", "으로", "에게", "한테", "이라", "라고", "까지", "부터", "보다", "처럼",
-    "이", "가", "을", "를", "은", "는", "의", "에", "도", "로", "와", "과", "만",
-)
-# Words that occur in nearly every statute or question; matching them proves nothing.
-_TERM_STOPWORDS = frozenset({
-    "관련", "경우", "사항", "규정", "대한", "대하여", "대해", "따라", "따른", "위한", "위하여", "있는", "없는",
-    "하는", "되는", "해당", "방법", "문제", "가능", "여부", "어떻게", "어떤", "알려줘", "알려주세요", "법률", "법령",
-    "조항", "조문", "하나요", "있나요", "인가요", "되나요", "해야", "하면", "해요", "줘요", "주세요", "그리고",
-    "그런데", "하지만", "때문", "정도", "이상", "이하", "및", "또는",
+# Verb endings and particles cut from the end of a query word (longest first), so that
+# 이혼하고 -> 이혼, 외도를 -> 외도, 퇴직금은 -> 퇴직금.
+_TERM_ENDINGS = tuple(sorted({
+    "싶어요", "싶습니다", "싶은데", "싶어서", "싶어", "싶다", "돌려줘요", "돌려주세요", "돌려받고", "돌려받을", "돌려받아",
+    "해주세요", "해줘요", "하려고", "하려면", "했는데", "했어요", "했습니다", "합니다", "하는데", "하나요", "하고", "해서",
+    "하는", "하면", "하여", "해요", "하다", "한다", "했다", "되나요", "됩니다", "되는", "돼요", "되고", "있나요", "있어요",
+    "없어요", "않아요", "줘요", "주세요", "받고", "받을", "받는", "받아", "에서는", "에서", "으로", "에게", "한테", "이라",
+    "라고", "까지", "부터", "보다", "처럼", "이", "가", "을", "를", "은", "는", "의", "에", "도", "로", "와", "과", "만",
+}, key=len, reverse=True))
+# Whole words that are only an ending or filler and carry no meaning of their own.
+_TERM_FILLER = frozenset({
+    "해서", "하고", "하는", "하면", "싶어요", "싶어", "싶다", "돌려줘요", "돌려주세요", "해요", "해주세요", "줘요", "주세요",
+    "하나요", "되나요", "있나요", "인가요", "합니다", "됩니다", "돼요", "있어요", "없어요", "않아요", "받고", "받을", "받아",
+    "관련", "경우", "사항", "규정", "대한", "대하여", "대해", "따라", "따른", "위한", "위하여", "있는", "없는", "해당", "방법",
+    "문제", "가능", "여부", "어떻게", "어떤", "알려줘", "알려주세요", "법률", "법령", "조항", "조문", "해야", "그리고", "그런데",
+    "하지만", "때문", "정도", "이상", "이하", "또는",
 })
+# Words in so many cases and statutes that matching one proves nothing on its own.
+GENERIC_TERMS = frozenset({"재산", "청구", "보증금", "손해배상", "합의금"})
+# Colloquial words and the statute word they usually stand for (matched as an alternative form).
+_TERM_ALIASES = {"집주인": "임대인", "세입자": "임차인", "남편": "배우자", "아내": "배우자", "부인": "배우자"}
+
+
+def _strip_ending(word: str) -> str:
+    """``word`` without trailing particles/verb endings, never shorter than 2 characters."""
+    changed = True
+    while changed:
+        changed = False
+        for ending in _TERM_ENDINGS:
+            if word.endswith(ending) and len(word) - len(ending) >= 2:
+                word = word[: -len(ending)]
+                changed = True
+                break
+    return word
 
 
 def query_terms(query: str) -> list:
-    """Distinctive words of ``query`` for a lexical relevance check, in order.
+    """Meaningful words of ``query`` for a lexical overlap check, in order.
 
-    Hangul/Latin/digit words of 2+ characters (a trailing particle such as 을/이/에서 is cut),
-    minus digit-only words and common words that occur in almost every text. Jamo-only
-    strings (ㅋㅋㅋ) and single characters give nothing: the caller must then treat
-    relevance as unverifiable, not as a match.
+    Hangul/Latin/digit words with particles and verb endings cut (이혼하고 -> 이혼), minus
+    digit-only words, fillers and endings standing alone (해서, 싶어요). Jamo-only strings
+    (ㅋㅋㅋ) and single characters give nothing: the caller must then treat the overlap
+    as unverifiable, not as a match.
     """
     terms: list = []
-    for word in re.findall(r"[0-9A-Za-z가-힣]+", (query or "").lower()):
-        if word.isdigit():
+    for word in re.findall(r"[0-9A-Za-z\uAC00-\uD7A3]+", (query or "").lower()):
+        if word.isdigit() or word in _TERM_FILLER:
             continue
-        stem = word
-        for particle in _TERM_PARTICLES:
-            if stem.endswith(particle) and len(stem) - len(particle) >= 2:
-                stem = stem[: -len(particle)]
-                break
-        if len(stem) >= 2 and stem not in _TERM_STOPWORDS and stem not in terms:
+        stem = _strip_ending(word)
+        if len(stem) >= 2 and stem not in _TERM_FILLER and stem not in terms:
             terms.append(stem)
     return terms
+
+
+def distinctive_terms(terms: list) -> list:
+    """The terms that can show overlap on their own: ``terms`` minus GENERIC_TERMS. When
+    every term is generic they all count (nothing better to compare)."""
+    return [t for t in terms if t not in GENERIC_TERMS] or list(terms)
 
 
 def matched_query_terms(terms: list, *texts) -> list:
     """The ``terms`` that occur in any of ``texts`` (case-insensitive, spaces ignored).
 
-    A literal check only: a result that names the same thing in other words
-    (경찰서 vs 수사기관) matches nothing. It shows overlap, not meaning. A word of 4+
-    characters also matches when both its halves occur (공정이용 in "공정한 이용").
+    A literal check only: it shows word overlap, not meaning, and can err both ways. A term
+    also matches when (3+ characters) its stem without the last character occurs (양육권 in
+    "양육", 퇴직금 in "퇴직급여"), when (4+ characters) both halves occur (공정이용 in
+    "공정한 이용"), or through a colloquial alias (집주인 -> 임대인).
     """
     haystack = re.sub(r"\s+", "", " ".join(str(t) for t in texts if t)).lower()
     found = []
     for term in terms:
+        forms = [term]
+        if len(term) >= 3:
+            forms.append(term[:-1])
+        if term in _TERM_ALIASES:
+            forms.append(_TERM_ALIASES[term])
         half = len(term) // 2
-        if term in haystack or (len(term) >= 4 and term[:half] in haystack and term[half:] in haystack):
+        if any(f in haystack for f in forms) or (
+                len(term) >= 4 and term[:half] in haystack and term[half:] in haystack):
             found.append(term)
     return found
+
+
+def counts_as_overlap(terms: list, matched: list) -> bool:
+    """True when a distinctive (non-generic) query term is among ``matched``."""
+    return bool(set(distinctive_terms(terms)) & set(matched))
 
 
 # The 주문 ends at ANY following 【...】 heading (이유, 청구취지 및 항소취지, ...)
@@ -1175,16 +1212,25 @@ def extract_key_factors(text: str) -> list[str]:
 
 
 def extract_legal_terms(text: str) -> list[str]:
-    """Extract candidate legal terms from Korean legal text for simplification."""
+    """Candidate legal terms of Korean legal text, taken on word boundaries.
+
+    Each Hangul word has its particles/endings cut and is kept only when the whole word has a
+    legal-term shape (ends in 자/인/권/의무/...). Fragments of longer words (지방자 from
+    지방자치단체) are not produced. A word ending in 인 is kept only up to 5 characters:
+    longer ones (지방자치단체인) are a noun plus the copula.
+    """
     if not text:
         return []
-    matches = LEGAL_TERM_SUFFIXES.findall(text)
     seen = set()
     terms = []
-    for m in matches:
-        if m not in seen and len(m) >= 2:
-            seen.add(m)
-            terms.append(m)
+    for word in re.findall(r"[\uAC00-\uD7A3]+", text):
+        word = _strip_ending(word)
+        if len(word) < 2 or word in seen or not LEGAL_TERM_SUFFIXES.fullmatch(word):
+            continue
+        if word.endswith("인") and len(word) > 5:
+            continue
+        seen.add(word)
+        terms.append(word)
     return terms[:20]
 
 

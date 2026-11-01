@@ -60,7 +60,7 @@ def _prec_rows(n=N_CASES):
 def _prec_body():
     # outcome keyword sits far beyond char 500 and 인용 (first in keyword order) is absent
     holding = "<br/>".join(f"[{i}] {_factor(i)}" for i in range(15))
-    summary = "가" * 900 + " 원심판결을 파기환송한다."
+    summary = "저작권 침해 " + "가" * 900 + " 원심판결을 파기환송한다."
     return {"PrecService": {"사건명": "x", "판시사항": holding, "판결요지": summary,
                             "판례내용": "【주    문】<br/>원심판결을 파기하고, 사건을 서울고등법원에 환송한다.<br/><br/>【이    유】<br/>저작권 침해 본문"}}
 
@@ -297,6 +297,7 @@ def test_chain_law_system_slim_old_limits(slim_env, tools):
     assert delegation_notes and all(f"{shown}건" in n for n in delegation_notes)
     assert not any("80건으로 줄였습니다" in n for n in out["truncated_notes"]) or shown == 80
     assert f"delegation_tree.entries: 400건 중 {shown}건만 표시" in out["truncated_fields"]
+    assert "lsDelegated_service" in out["truncated_note"] and "받을 수 없음" not in out["truncated_note"]
     assert all(len(e["references"]) == 3 for e in tree["entries"])
 
 

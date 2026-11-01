@@ -69,7 +69,7 @@ STATUS_PENDING = "시행예정"
 _DEDUPE_STATUS_RANK = {STATUS_CURRENT: 0, STATUS_PENDING: 1, STATUS_HISTORY: 2}
 
 _WS_RE = re.compile(r"\s+")
-_TAG_RE = re.compile(r"<[^>]+>")
+_TAG_RE = re.compile(r"</?[A-Za-z\uAC00-\uD7A3][^<>]*>|<!--.*?-->", re.DOTALL)
 _BR_RE = re.compile(r"<\s*br\s*/?\s*>", re.IGNORECASE)
 _CDATA_RE = re.compile(r"<!\[CDATA\[(.*?)\]\]>", re.DOTALL)
 

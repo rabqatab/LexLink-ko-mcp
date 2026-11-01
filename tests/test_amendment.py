@@ -173,7 +173,7 @@ def test_simplify_article_returns_full_text_from_current_version(tools):
         "4. 저작물의 이용이 그 저작물의 현재 시장 또는 가치나 잠재적인 시장 또는 가치에 미치는 영향",
     ]
     assert out["article"] == "제35조의5" and out["article_title"] == "저작물의 공정한 이용"
-    assert out["terms_found"] > 0
+    assert out["term_glossary"] == [] and out["glossary_status"] == "withheld"
     # article fetched with target=law, 6-digit JO, from the 현행 MST
     svc = [p for ep, p in FakeClient.calls if ep == "/DRF/lawService.do" and p.get("target") == "law"]
     assert svc and svc[0]["MST"] == "283335" and svc[0]["JO"] == "003505"
