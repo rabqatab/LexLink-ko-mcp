@@ -63,6 +63,32 @@ def validate_date_range(date_range: str, param_name: str) -> str:
     return date_range
 
 
+def require_text(value, param_name: str) -> str:
+    """Return ``value`` stripped; raise ValueError when it is None, not text or blank.
+
+    The upstream answers an empty query with an arbitrary default hit (or a huge
+    unfiltered result), which a caller would read as a real answer, so tools whose
+    query is required refuse it before any upstream call.
+    """
+    if value is None or not isinstance(value, str) or not value.strip():
+        raise ValueError(
+            f"{param_name} must be a non-empty string (got {value!r}). "
+            f"{param_name}은(는) 비어 있지 않은 문자열이어야 합니다."
+        )
+    return value.strip()
+
+
+def reject_blank(value, param_name: str):
+    """Pass ``value`` through; raise ValueError when it is a blank string (None stays None).
+
+    For list tools whose query defaults to "*": an explicitly empty query is not "list
+    everything", it is a missing search term.
+    """
+    if value is not None:
+        return require_text(value, param_name)
+    return value
+
+
 def format_article_number(article: int, branch: int = 0) -> str:
     """
     Format article number for law.go.kr API (XXXXXX format).

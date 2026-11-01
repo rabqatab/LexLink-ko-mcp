@@ -122,9 +122,13 @@ def test_range_connectors_keep_same_external_law():
     body = (f"{_law('도로법')} {_a('sfon2', '제56조')}부터 {_a('sfon2', '제62조')}까지 및 "
             f"{_a('sfon2', '제76조')}부터 {_a('sfon2', '제82조')}까지, {_a('sfon2', '제90조의2')}")
     cits = _extract(body)
-    assert [(c.citation_type, c.target_article) for c in cits] == [
-        ("external", 56), ("external", 62), ("external", 76),
-        ("external", 82), ("external", 90)]
+    # ranges are expanded: every article from the start to the end, not just the two links
+    assert [(c.citation_type, c.target_article) for c in cits] == (
+        [("external", n) for n in range(56, 63)] + [("external", n) for n in range(76, 83)]
+        + [("external", 90)])
+    assert {c.target_law_name for c in cits} == {"도로법"}
+    assert cits[0].range_text == "제56조부터 제62조" and cits[3].range_text == "제56조부터 제62조"
+    assert cits[-1].range_text is None
 
 
 def test_same_article_reference_inherits_article():

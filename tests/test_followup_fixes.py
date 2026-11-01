@@ -240,15 +240,16 @@ class MissingMstFake(AmendmentFakeClient):
 
 
 @pytest.mark.unit
-def test_article_amendment_diff_still_tries_next_mst(monkeypatch):
+def test_article_amendment_diff_unknown_mst_is_an_error_not_a_verdict(monkeypatch):
+    """An unknown MST must not be reported as "article added/deleted" (it says nothing about the article)."""
     monkeypatch.setattr(server_mod, "LawAPIClient", MissingMstFake)
     monkeypatch.setenv("OC", FAKE_OC)
     server = server_mod.create_server()
     out = server._tool_manager.get_tool("article_amendment_diff").fn(
         mst_old="999", mst_new="283335", article=35, article_branch=5)
-    assert out["status"] == "ok", out
-    assert out["old_version"]["note"]
-    assert out["new_version"]["text"]
+    assert out["status"] == "error" and out["error_code"] == ErrorCode.NOT_FOUND, out
+    assert "999" in out["message"]
+    assert "has_changes" not in out and "summary" not in out
 
 
 # --- item 4: id -> rank ---------------------------------------------------------

@@ -97,7 +97,7 @@ def validate_digits(value, name: str, *, allow_empty: bool = True) -> Optional[s
             return None
         raise _bad(f"{name} is required")
     s = ascii_digits(value)
-    if not re.fullmatch(r"[0-9]{1,12}", s):
+    if not re.fullmatch(r"[0-9]{1,30}", s):
         raise _bad(
             f"{name} must be numeric, got: {value!r}",
             hints=["검색 도구 결과의 법령ID(예: 001706) 또는 일련번호(MST)를 그대로 사용하세요"],

@@ -44,7 +44,7 @@ Where each runtime variable is read: `grep -rn "getenv\|environ" src/`. The docu
 - Tool arguments are snake_case; `params.py` maps them to the upstream names. Unknown arguments are accepted and ignored (verified with `cache_stats(bogus_param=1)`).
 - Default response type is `JSON`. The cache key includes the response type.
 - Errors use `{status, error_code, message, hints, request_id}`. Codes are in `errors.py`.
-- Article numbers are 6 digits (`000300` = 제3조, `001502` = 제15조의2). `validation.py` also accepts `3`, `"3의2"`, `"제3조의2"`, `"3-2"`.
+- Article numbers are 6 digits (4-digit article + 2-digit branch: `000300` = 제3조, not 제300조 which is `030000`; `001502` = 제15조의2). `validation.py` also accepts `3`, `"3의2"`, `"제3조의2"`, `"3-2"`.
 - Dates are `YYYYMMDD`, ranges `YYYYMMDD~YYYYMMDD`.
 - `ctx: Context = None` on tools for MCP logging.
 

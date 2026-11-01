@@ -39,6 +39,7 @@ from .validation import format_article_number
 
 __all__ = [
     "ArticleNotFoundError",
+    "VersionNotFoundError",
     "normalize_article",
     "article_label",
     "article_jo",
@@ -74,7 +75,21 @@ _BR_RE = re.compile(r"<\s*br\s*/?\s*>", re.IGNORECASE)
 
 
 class ArticleNotFoundError(ToolValidationError):
-    """Raised when a law payload has no article text to extract."""
+    """Raised when a law payload has no article text to extract.
+
+    ``law`` holds the law metadata (법령ID, name ...) of the payload when it had any, so a
+    caller can tell which law the article is missing from.
+    """
+
+    law: Optional[dict] = None
+
+
+class VersionNotFoundError(ArticleNotFoundError):
+    """Raised when the upstream has no law at all for the MST (unknown or retired MST).
+
+    Unlike a plain ArticleNotFoundError the version itself is missing, so the
+    article cannot be called absent from it.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -376,21 +391,25 @@ def extract_article(
     meta = _law_meta(data)
     if not units:
         law_desc = meta.get("law_name", "")
-        raise ArticleNotFoundError(
+        err = ArticleNotFoundError(
             f"{law_desc + ' ' if law_desc else ''}{label}: 이 법령 버전(MST)에 해당 조문이 없습니다.",
             hints=[
                 "조문이 신설되기 전 버전이거나 삭제된 조문일 수 있습니다.",
                 "law_amendment_summary로 다른 MST를 확인하거나 조문 번호/가지번호를 확인하세요.",
             ],
         )
+        err.law = meta
+        raise err
 
     unit = select_article_unit(units, *(wanted or (None, None)))
     if unit is None:
         available = sorted({article_label(n, b) for n, b in (_unit_number(u) for u in units) if n})
-        raise ArticleNotFoundError(
+        err = ArticleNotFoundError(
             f"{label}을(를) 응답에서 찾을 수 없습니다.",
             hints=[f"응답에 포함된 조문: {', '.join(available[:20])}"] if available else None,
         )
+        err.law = meta
+        raise err
 
     text = article_unit_text(unit)
     if not text:

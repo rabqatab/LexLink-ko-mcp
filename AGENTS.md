@@ -68,5 +68,5 @@ Resources (2): `lexlink://laws/frequently-used` (static, about 20 law names to �
 
 - Tools use `@server.tool(annotations=TOOL_ANNOTATIONS)` (read-only, idempotent) and `ctx: Context = None`.
 - Arguments are snake_case; `params.py` maps them to upstream camelCase.
-- Article numbers are 6 digits (`000003` = 제3조). Date ranges are `YYYYMMDD~YYYYMMDD`.
+- Article numbers are 6 digits, 4-digit article + 2-digit branch (`000300` = 제3조, not 제300조 which is `030000`; `001502` = 제15조의2). Date ranges are `YYYYMMDD~YYYYMMDD`.
 - A change that touches a tool's behaviour needs a line under Unreleased in CHANGELOG.md (English and Korean) and an update of the affected doc.
