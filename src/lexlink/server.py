@@ -1797,6 +1797,95 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                           body_fields=["판시사항", "판결요지", "판례내용"])
         return guards.add_notes(dict(response), guards.LM_NOT_SENT_NOTE if lm else None)
 
+    # ==================== prec_status (precedent citator) ====================
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
+    def prec_status(
+        case_number: Optional[str] = None,
+        id: Optional[Union[str, int]] = None,
+        max_scan: int = 5,
+        oc: Optional[str] = None,
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Has a later Supreme Court en banc decision overruled this precedent? (판례 변경 여부 확인)
+
+        law.go.kr has no citator, so this scans: decisions that quote the case number
+        (prec_search query=사건번호, search=2) -> the later 대법원 전원합의체 ones -> their
+        참조판례 "(변경)" markers and the sentences that name the case and say 변경/폐기. Returns
+        quoted evidence with the source decision, never a bare verdict.
+
+        Args:
+            case_number: e.g. "94므1713", "대법원 1995. 5. 23. 선고 94므1713 판결" (a joined
+                "94므1713, 1720" uses the first number). Give this or id.
+            id: 판례일련번호 (not the search row number)
+            max_scan: how many later 전원합의체 decisions to read (default 5, max 10); each is one
+                prec_service call
+            oc: Optional OC override
+
+        Returns:
+            overruling_status: "overruled_found" (evidence: source decision + exact quote),
+            "possible_overruling_needs_review" (leads only), "case_not_found" (the case number is
+            not in the 판례 index, e.g. a joined case's second number: nothing can be said),
+            "incomplete_search" (citing list truncated, or a candidate not read) or
+            "no_overruling_found_in_searched_set" (NOT "not overruled": see searched_scope and
+            caveats; treat as 확인 필요). Also target, searched_scope, upstream_calls.
+            Accepts "94므1713", "1994므1713" or a full citation; id must be digits.
+
+        Examples:
+            >>> prec_status(case_number="94므1713")
+        """
+        resolved_oc = resolve_oc(override_oc=oc)
+        from .precedent_status import run_prec_status
+        return run_prec_status(get_client=_get_client, oc=resolved_oc, case_number=case_number,
+                               prec_id=str(id) if id not in (None, "") else None, max_scan=max_scan)
+
+    # ==================== law_constitutional_check ====================
+    @server.tool(annotations=TOOL_ANNOTATIONS)
+    @handle_tool_error
+    def law_constitutional_check(
+        law_name: str,
+        article: Union[str, int],
+        article_branch: Union[int, str] = 0,
+        max_scan: int = 8,
+        oc: Optional[str] = None,
+        ctx: Context = None,
+    ) -> dict:
+        """
+        Lead: did the Constitutional Court strike down or find this article 헌법불합치? (헌재 위헌·헌법불합치 단서)
+
+        law_as_of reads 시행일 data and does not show an article 헌재 invalidated (형법 제241조,
+        2015-02-26). This tool resolves the law name (abbreviations such as 가족관계등록법 work; an
+        unknown name is an error), searches the full text for the quoted "<법령명> 제N조"
+        (detc_search search=2), reads the decisions whose 사건명 names the law/article (and the ones
+        found by the phrase whose 주문 names the article, e.g. 형법 제270조 in 2017헌바127) with
+        detc_service and classifies each 주문 clause by clause (위헌, 헌법불합치, 한정위헌, 합헌, 각하,
+        기각). It never changes law_as_of's in_force and is a lead to verify, not a ruling on effect
+        (소급효, 잠정적용 시한 and later amendments are not computed).
+
+        Args:
+            law_name: Law name or abbreviation, e.g. "형법", "민법", "가족관계등록법"
+            article: e.g. 241, "제241조", "76의2"
+            article_branch: Branch number when article is a plain number
+            max_scan: How many candidate decisions to read (default 8, max 12); each is one call
+            oc: Optional OC override
+
+        Returns:
+            status "ok" with decisions (case_number, decision_date, outcome, quoted 주문,
+            article_specific), adverse_decisions, decision_status "adverse_decision_found",
+            "needs_review" (an adverse 주문 that could not be tied to the article),
+            "incomplete_search" (list truncated or candidates unread) or
+            "no_adverse_decision_in_searched_set" (NOT "never struck down"), searched_scope,
+            upstream_calls, caveats. VALIDATION_ERROR when the law name cannot be resolved.
+
+        Examples:
+            >>> law_constitutional_check(law_name="형법", article=241)
+        """
+        resolved_oc = resolve_oc(override_oc=oc)
+        from .constitutional import run_constitutional_check
+        return run_constitutional_check(get_client=_get_client, oc=resolved_oc, law_name=law_name,
+                                        article=article, article_branch=article_branch, max_scan=max_scan)
+
     # ==================== TOOL 18: detc_search ====================
     @server.tool(annotations=TOOL_ANNOTATIONS)
     @handle_tool_error
@@ -5475,7 +5564,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         if d > today:
             caveats.append(f"기준일 {d}: 미래 날짜입니다. 오늘({today}) 알려진 개정만 반영한 결과이며 이후 개정될 수 있습니다.")
         if wanted:
-            caveats.append("위헌결정으로 인한 효력상실(예: 형법 제241조 2015-02-26)은 eflaw 시행일 데이터에 반영되지 않을 수 있습니다.")
+            caveats.append("위헌결정으로 인한 효력상실(예: 형법 제241조 2015-02-26)은 eflaw 시행일 데이터에 반영되지 않을 수 있습니다. "
+                           "헌재 위헌·헌법불합치 단서는 law_constitutional_check(law_name, article)로 따로 확인하세요(in_force에는 반영되지 않음).")
         # history truncation notices produced by _resolve_law_versions (if any)
         for key in ("warnings", "history_warnings"):
             for w in info.get(key) or []:
@@ -5716,7 +5806,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                     out["article_deleted"] = True
                 else:
                     # article-level staged enforcement lives in 부칙 only (no separate eflaw row)
-                    staged_checked, staged = False, []
+                    staged_checked, staged, settled = False, [], []
                     try:
                         full = run_service(
                             get_client=_get_client, target="eflaw", response_type=fmt,
@@ -5724,8 +5814,12 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                                           "mst": mst, "ef_yd": eff},
                         )
                         if full.get("status") == "ok":
-                            staged = scan_bupchik(bupchik_units(parse_law_payload(full.get("raw_content", ""), fmt)),
-                                                  wanted[0], wanted[1], d)
+                            staged_all = scan_bupchik(
+                                bupchik_units(parse_law_payload(full.get("raw_content", ""), fmt)),
+                                wanted[0], wanted[1], d,
+                                own=(chosen["row"].get("공포일자", ""), chosen["row"].get("공포번호", "")))
+                            staged = [m_ for m_ in staged_all if not m_.get("settled_unresolved")]
+                            settled = [m_ for m_ in staged_all if m_.get("settled_unresolved")]
                             staged_checked = True
                     except Exception:  # the scan is best effort; never fail the lookup because of it
                         staged_checked = False
@@ -5739,17 +5833,44 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                     }
                     if not staged_checked:
                         caveats.append("부칙 전문을 조회하지 못해 조문별 단계적 시행 여부를 확인하지 못했습니다.")
+                    if settled:
+                        # an older amendment's "대통령령으로 정하는 날": a later revision has taken effect since,
+                        # so it is treated as settled and does not change in_force
+                        pe["earlier_amendment_unresolved_dates"] = [
+                            {"bupchik": m_["bupchik"], "phrases": m_["settled_unresolved"], "text": m_["text"][:300]}
+                            for m_ in settled]
+                        caveats.append(
+                            f"{label}: 이전 개정의 부칙[{settled[0]['bupchik']}]에 시행일을 계산할 수 없는 방식으로 정한 규정"
+                            f"({', '.join(settled[0]['settled_unresolved'])})이 있으나, 그 뒤 개정이 이미 시행되어 이 조회의 "
+                            "in_force 판단에는 쓰지 않았습니다.")
+                    unresolved_hits = [m_ for m_ in staged if m_.get("unresolved")]
+                    if unresolved_hits:
+                        # the 부칙 ties this article to a date that cannot be computed from the text
+                        # (대통령령으로 정하는 날, 시행일 기준 상대일 ...): not known to be in force on D
+                        out["in_force"] = None
+                        out["reason"] = "ARTICLE_STAGED_DATE_UNRESOLVED"
+                        pe["unresolved"] = [{"bupchik": m_["bupchik"], "phrases": m_["unresolved"], "text": m_["text"][:400]}
+                                            for m_ in unresolved_hits]
+                        caveats.append(
+                            f"{label}: 부칙이 이 조문의 시행일을 계산할 수 없는 방식으로 정하고 있어({', '.join(unresolved_hits[0]['unresolved'])}) "
+                            f"기준일 {d}에 이 조문이 시행 중이었는지 확인할 수 없습니다(in_force=null). 부칙 원문 "
+                            f"[{unresolved_hits[0]['bupchik']}]: " + unresolved_hits[0]["text"][:400].replace("\n", " "))
                     if staged:
                         pe["possible"] = True
                         later_dates = sorted({x for m_ in staged for x in m_["later_dates"]})
                         pe["note"] = ((pe["note"] + " ") if pe["note"] else "") + (
-                            "부칙에 이 조문의 시행일이 기준일 이후로 정해진 규정이 있습니다: "
-                            + ", ".join(later_dates))
-                        caveats.append(
-                            f"{label}: 부칙에 기준일({d}) 이후 시행일이 적힌 규정이 있어 이 본문이 기준일에 전부 "
-                            f"적용되었다고 단정할 수 없습니다. 부칙 원문 [{staged[0]['bupchik']}]: "
-                            + staged[0]["text"][:400].replace("\n", " ")
-                        )
+                            ("부칙에 이 조문의 시행일이 기준일 이후로 정해진 규정이 있습니다: " + ", ".join(later_dates))
+                            if later_dates else "부칙에 이 조문의 시행일이 계산할 수 없는 방식으로 정해져 있습니다.")
+                        dated = [m_ for m_ in staged if m_["later_dates"]]
+                        if dated:
+                            caveats.append(
+                                f"{label}: 부칙에 기준일({d}) 이후 시행일이 적힌 규정이 있어 이 본문이 기준일에 전부 "
+                                f"적용되었다고 단정할 수 없습니다. 부칙 원문 [{dated[0]['bupchik']}]: "
+                                + dated[0]["text"][:400].replace("\n", " ")
+                                + (f" (시행일은 공포일 {dated[0]['announced_date']} 기준 계산: "
+                                   + ", ".join(dated[0]["computed_from_announcement"]) + ")"
+                                   if dated[0].get("computed_from_announcement") else "")
+                            )
             if is_current:
                 comparison["differs_from_current"] = False
             elif cur_c is None:
@@ -5787,7 +5908,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         name_then = version.get("law_name") or law_label
         if _sq(name_then) != _sq(law_label):  # renamed law: show the name as of that version and the current one
             what = what.replace(law_label, f"{name_then}(현행 명칭: {law_label})", 1)
-        pe_found = bool(out["partial_effect"].get("article_scan", {}).get("article_staged_enforcement_found"))
+        pe_found = bool(out["partial_effect"].get("article_scan", {}).get("article_staged_enforcement_found")) \
+            and out.get("reason") != "ARTICLE_STAGED_DATE_UNRESOLVED"
         absent = wanted is not None and art is None
         stmt = (f"기준일 {d}, {what}: 시행 중인 버전은 MST {mst} "
                 f"(시행일 {eff}, 공포일 {version['announced_date']}, 공포번호 {version['announcement_no']}, "
@@ -5799,6 +5921,9 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         if pe_found:
             stmt += (" 다만 부칙에 이 조문의 시행일이 기준일 이후로 정해진 규정이 있어 조문 전체가 기준일에 적용되었다고 "
                      "단정할 수 없습니다(partial_effect.article_scan 참조).")
+        if out.get("reason") == "ARTICLE_STAGED_DATE_UNRESOLVED":
+            stmt += (" 부칙이 이 조문의 시행일을 계산할 수 없는 방식(대통령령으로 정하는 날 등)으로 정하고 있어 "
+                     "기준일에 시행 중이었는지 확인할 수 없습니다(in_force=null, ARTICLE_STAGED_DATE_UNRESOLVED).")
         stmt += (f" 이 버전은 {out['valid_until']}까지 유효합니다." if out["valid_until"] else " 이후 시행 예정 개정은 없습니다.")
         if later_other:
             stmt += " 이후 개정이 있습니다."
@@ -7237,7 +7362,7 @@ Tool selection priority for unclear queries:
             }
         ]
 
-    logger.info("LexLink server initialized with 66 tools, 9 prompts, and 2 resources")
+    logger.info("LexLink server initialized with 68 tools, 9 prompts, and 2 resources")
     logger.info("Phase 1 & 2 Tools (15):")
     logger.info("  - eflaw_search, law_search, eflaw_service, law_service, eflaw_josub, law_josub")
     logger.info("  - elaw_search, elaw_service, admrul_search, admrul_service")
