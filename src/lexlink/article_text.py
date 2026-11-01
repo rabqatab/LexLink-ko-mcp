@@ -71,6 +71,7 @@ _DEDUPE_STATUS_RANK = {STATUS_CURRENT: 0, STATUS_PENDING: 1, STATUS_HISTORY: 2}
 _WS_RE = re.compile(r"\s+")
 _TAG_RE = re.compile(r"<[^>]+>")
 _BR_RE = re.compile(r"<\s*br\s*/?\s*>", re.IGNORECASE)
+_CDATA_RE = re.compile(r"<!\[CDATA\[(.*?)\]\]>", re.DOTALL)
 
 
 class ArticleNotFoundError(ToolValidationError):
@@ -631,6 +632,8 @@ def strip_html(text: Any) -> str:
     if isinstance(text, list):
         return "\n".join(strip_html(t) for t in text)
     s = str(text)
+    # XML answers wrap prose in <![CDATA[...]]>; unwrap it first or the tag strip eats the text
+    s = _CDATA_RE.sub(r"\1", s)
     s = _BR_RE.sub("\n", s)
     s = _TAG_RE.sub("", s)
     s = _html.unescape(s)

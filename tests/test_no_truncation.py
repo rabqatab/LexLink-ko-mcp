@@ -62,7 +62,7 @@ def _prec_body():
     holding = "<br/>".join(f"[{i}] {_factor(i)}" for i in range(15))
     summary = "가" * 900 + " 원심판결을 파기환송한다."
     return {"PrecService": {"사건명": "x", "판시사항": holding, "판결요지": summary,
-                            "판례내용": "【주    문】<br/>원심판결을 파기하고, 사건을 서울고등법원에 환송한다.<br/><br/>【이    유】<br/>본문"}}
+                            "판례내용": "【주    문】<br/>원심판결을 파기하고, 사건을 서울고등법원에 환송한다.<br/><br/>【이    유】<br/>저작권 침해 본문"}}
 
 
 def _ai_rows():
@@ -287,9 +287,16 @@ def test_chain_law_system_default_full_tree(default_env, tools):
 
 @pytest.mark.unit
 def test_chain_law_system_slim_old_limits(slim_env, tools):
-    tree = tools("chain_law_system", law_name="저작권법")["delegation_tree"]
-    assert tree["entry_count"] == 400 and 0 < len(tree["entries"]) <= 80  # size guard may trim more
-    assert tree["truncated"] is True and "80건" in tree["note"]
+    out = tools("chain_law_system", law_name="저작권법")
+    tree = out["delegation_tree"]
+    shown = len(tree["entries"])
+    assert tree["entry_count"] == 400 and 0 < shown <= 80  # size guard may trim more
+    # the notes must state the number really shown (the 20KB guard cut 80 down to `shown`)
+    assert tree["truncated"] is True and f"400건 중 {shown}건만 표시" in tree["note"]
+    delegation_notes = [n for n in out["truncated_notes"] if "위임 조문" in n]
+    assert delegation_notes and all(f"{shown}건" in n for n in delegation_notes)
+    assert not any("80건으로 줄였습니다" in n for n in out["truncated_notes"]) or shown == 80
+    assert f"delegation_tree.entries: 400건 중 {shown}건만 표시" in out["truncated_fields"]
     assert all(len(e["references"]) == 3 for e in tree["entries"])
 
 

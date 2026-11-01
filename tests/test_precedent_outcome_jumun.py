@@ -51,7 +51,7 @@ def odds(monkeypatch):
 
 @pytest.mark.unit
 def test_odds_classifies_by_jumun_not_recital(odds):
-    out = odds(query="x", display=10, top_n=6)
+    out = odds(query="사건", display=10, top_n=6)
     by_no = {c["case_number"]: c["outcome"] for c in out["representative_cases"]}
     assert by_no["2023다308270"] == "파기환송"   # recital said 인용, 주문 says 파기환송
     assert by_no["2025다210305"] == "상고기각"   # recital "인용하여야" must not win

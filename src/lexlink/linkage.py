@@ -233,6 +233,35 @@ def pick_linked_term(root: Any, name_key: str, term: str = "") -> tuple[str, str
     return "", "", False
 
 
+# DB synonym links observed live (2026-11) that are wrong or misleading for legal reading.
+# This is a list of examples, not a check: the DB cannot be validated, so every link that is
+# kept is still reported as unverified.
+UNSAFE_GLOSSES = {
+    ("사용자", "경영자"): "근로기준법상 사용자는 사업주·사업경영담당자·사업주를 위해 행위하는 자를 모두 포함하여 '경영자'보다 넓습니다",
+    ("근로자", "피용자"): "근로기준법상 근로자는 직업의 종류와 관계없이 임금을 목적으로 근로를 제공하는 사람으로, 민법상 피용자와 범위가 다릅니다",
+    ("채무자", "부채자"): "'부채자'는 법령에서 쓰는 말이 아니며 채무자와 같은 뜻으로 쓸 수 없습니다",
+    ("채권자", "채급자"): "'채급자'는 일반적으로 쓰이지 않는 말이라 채권자의 쉬운 말로 볼 수 없습니다",
+}
+
+
+def gloss_problem(term: str, linked: str) -> str:
+    """Why a database synonym ``linked`` must not be offered as a plain version of ``term``, or ''.
+
+    Rejects abbreviations (손해배상 -> 손배: shorter, only drops characters) and the known
+    wrong links in UNSAFE_GLOSSES.
+    """
+    if not linked:
+        return ""
+    reason = UNSAFE_GLOSSES.get((term, linked))
+    if reason:
+        return reason
+    if len(linked) < len(term):
+        chars = iter(term)
+        if all(c in chars for c in linked):  # linked is a subsequence of term
+            return "줄임말이라 법적 의미가 달라질 수 있어 쉬운 말로 쓰지 않았습니다"
+    return ""
+
+
 def parse_drlaw_html(html: str) -> Optional[dict]:
     """Parse the drlaw (법령-자치법규 연계현황) HTML dashboard into plain data.
 

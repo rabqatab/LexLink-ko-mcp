@@ -1019,6 +1019,57 @@ def low_relevance_warning(query: str, rows: list) -> Optional[str]:
     return LOW_RELEVANCE_WARNING
 
 
+_TERM_PARTICLES = (
+    "에서는", "에서", "으로", "에게", "한테", "이라", "라고", "까지", "부터", "보다", "처럼",
+    "이", "가", "을", "를", "은", "는", "의", "에", "도", "로", "와", "과", "만",
+)
+# Words that occur in nearly every statute or question; matching them proves nothing.
+_TERM_STOPWORDS = frozenset({
+    "관련", "경우", "사항", "규정", "대한", "대하여", "대해", "따라", "따른", "위한", "위하여", "있는", "없는",
+    "하는", "되는", "해당", "방법", "문제", "가능", "여부", "어떻게", "어떤", "알려줘", "알려주세요", "법률", "법령",
+    "조항", "조문", "하나요", "있나요", "인가요", "되나요", "해야", "하면", "해요", "줘요", "주세요", "그리고",
+    "그런데", "하지만", "때문", "정도", "이상", "이하", "및", "또는",
+})
+
+
+def query_terms(query: str) -> list:
+    """Distinctive words of ``query`` for a lexical relevance check, in order.
+
+    Hangul/Latin/digit words of 2+ characters (a trailing particle such as 을/이/에서 is cut),
+    minus digit-only words and common words that occur in almost every text. Jamo-only
+    strings (ㅋㅋㅋ) and single characters give nothing: the caller must then treat
+    relevance as unverifiable, not as a match.
+    """
+    terms: list = []
+    for word in re.findall(r"[0-9A-Za-z가-힣]+", (query or "").lower()):
+        if word.isdigit():
+            continue
+        stem = word
+        for particle in _TERM_PARTICLES:
+            if stem.endswith(particle) and len(stem) - len(particle) >= 2:
+                stem = stem[: -len(particle)]
+                break
+        if len(stem) >= 2 and stem not in _TERM_STOPWORDS and stem not in terms:
+            terms.append(stem)
+    return terms
+
+
+def matched_query_terms(terms: list, *texts) -> list:
+    """The ``terms`` that occur in any of ``texts`` (case-insensitive, spaces ignored).
+
+    A literal check only: a result that names the same thing in other words
+    (경찰서 vs 수사기관) matches nothing. It shows overlap, not meaning. A word of 4+
+    characters also matches when both its halves occur (공정이용 in "공정한 이용").
+    """
+    haystack = re.sub(r"\s+", "", " ".join(str(t) for t in texts if t)).lower()
+    found = []
+    for term in terms:
+        half = len(term) // 2
+        if term in haystack or (len(term) >= 4 and term[:half] in haystack and term[half:] in haystack):
+            found.append(term)
+    return found
+
+
 # The 주문 ends at ANY following 【...】 heading (이유, 청구취지 및 항소취지, ...)
 # or at a known [..] heading; the body is capped so a missing heading cannot
 # swallow the judgment.
