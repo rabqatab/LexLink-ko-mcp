@@ -85,15 +85,32 @@ def test_id_plus_lm_drops_LM(tool, name):
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("name,kw", [
-    ("admrul_service", {}),
-    ("prec_service", {"id": ""}),
-    ("detc_service", {"id": ""}),
-    ("expc_service", {"id": "315191"}),
-    ("decc_service", {"id": "245011"}),
-])
-def test_lm_forwarded_as_LM_without_id_filter(tool, name, kw):
-    tool(name, lm="이름", type="XML", **kw)
+def test_lm_forwarded_as_LM_without_id_filter(tool):
+    tool("admrul_service", lm="이름", type="XML")
     (_, params), = RecordingClient.calls
     assert params["LM"] == "이름"
     assert "lm" not in params
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("name,kw", [
+    ("prec_service", {"id": "228541"}),
+    ("detc_service", {"id": "58386"}),
+    ("expc_service", {"id": "315191"}),
+    ("decc_service", {"id": "245011"}),
+])
+def test_case_service_with_id_does_not_send_lm(tool, name, kw):
+    """A lm that is not the exact title makes the upstream answer 'no match' for a valid id."""
+    out = tool(name, lm="이름", type="XML", **kw)
+    (_, params), = RecordingClient.calls
+    assert "LM" not in params and "lm" not in params
+    assert any(w.startswith("lm_ignored") for w in out["warnings"])
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("name", ["prec_service", "detc_service", "expc_service", "decc_service"])
+def test_case_service_lm_only_is_validation_error(tool, name):
+    """The guides make ID required; a name-only call returns an empty body upstream (measured)."""
+    out = tool(name, id="", lm="이름", type="XML")
+    assert out["error_code"] == "VALIDATION_ERROR"
+    assert RecordingClient.calls == []

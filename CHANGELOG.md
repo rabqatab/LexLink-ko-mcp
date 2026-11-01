@@ -8,6 +8,19 @@ All notable changes to LexLink are documented here in both English and Korean.
 
 ### Unreleased
 
+#### Filters that did nothing, size control, id collision (#45)
+- `date` on `prec_search` / `detc_search` / `decc_search` / `special_decc_search` was ignored upstream (prec `date=20240111`: 175,598 rows, no filter). It is now sent as the guide's range parameter `D~D` (`prnc_yd` / `ed_yd` / `rsl_yd`; measured 52 / 31 / 24 / 3 rows) and echoed as `filters_applied`; a `date` that disagrees with an explicit range is `VALIDATION_ERROR`. `dpa_yd` works upstream but the 처분일자 field is almost always empty (decc 7 of 35,255, ttSpecialDecc 0), so it now carries a `dpa_yd_sparse` warning.
+- `nb`: a comma list returned 0 rows even when every number exists, so it is `VALIDATION_ERROR` (one call per number); the display form `대법원-2025-두-34754` (0 rows upstream) is converted to `2025두34754`. `detc_search` `nb` is now a string (`2022헌마1312`; the old `int` could not carry it); the upstream ignores `nb` whenever `query` is sent (even `*`: 38,739 rows), so `detc_search` omits `query` for `nb` and rejects a real query with `nb`. A digits-only `nb` is a substring match upstream and warns (`nb_substring`).
+- `expc_search` `inq` takes a 질의기관코드 (digits, e.g. 1290000 = 국방부, 132 rows); a name returned 3,805 unrelated rows and is `VALIDATION_ERROR`.
+- Ranking fields: `prec_search` ranked on `판례명` and `expc_search` on `사건명`, keys that do not exist in the rows (no-op); now `사건명` / `안건명`. An explicit `sort` is no longer re-ordered by relevance.
+- `display` above 100 is capped to 100 on prec/detc/expc/decc/special_decc with a `display_capped` warning (it was sent as is; expc `display=500` was 474 KB). Unknown `sort` / `search` / `gana` / `cls` (numeric 재결구분코드) and `sections` values are `VALIDATION_ERROR` (the upstream ignores them or returns partial counts, e.g. `cls=zz` 716 rows). The `*_service` tools no longer send `lm` together with `id` (a non-exact title made the upstream answer "일치하는 … 없습니다" for a valid id; response `lm_ignored`) and a blank `id` is `VALIDATION_ERROR` (the guides make `ID` required; lm-only returns a 0-byte body).
+- `drlaw_search` gains `display` (max 100) and `page` (the upstream honours them; 981 rows in total); `parse_drlaw_html` no longer mislabels the second and later article rows of a law (rowspan cells), which used to give `법령명 "4"`.
+- `lsDelegated_service` gains `jo` (client-side filter of the JSON body; `selection` reports articles in the law and matches): 건축법 3.69 MB -> 5 KB (제2조) / 61 KB (제11조); a body over 1 MB warns `large_response`. Policy `size` large -> normal (per-article median 2.3 KB, 5 of 140 articles over 100 KB, max 제80조 283 KB).
+- `ordin_service` with `id` also looks up `mst=<id>` once and warns `id_collision` / `id_is_serial_number` when the number is one ordinance's 자치법규ID and another's 일련번호 (`id=2116749` returned 정읍시립도서관 ... 시행규칙, `mst=2116749` is 서울특별시 건축 조례); a failed probe is reported (`id_check_skipped`). Policy `upstream_calls` 1 -> 2.
+- `aiSearch`: docstring default fixed (display 7, not 20); `page` > 1 warns `page_ignored` (the upstream returns page 1 again); the colloquial `뺑소니` no longer triggers `relevance_unverified` (short alias list `COLLOQUIAL_LEGAL_TERMS`). `ls_rlt_search` documents exact-name matching and adds a hint to zero-result responses.
+- Synchronous tool functions now run in worker threads (`install_threaded_tool_calls`, `tool.fn` stays sync) and `ResponseCache` has a lock. Measured over Streamable HTTP with `lsDelegated_service(id=001823)` (4.4-5.1 s): 6 concurrent `cache_stats` pings waited 1.56-4.07 s before and 0.00-0.02 s after.
+- Tests: `tests/test_filters_and_size.py` (50), fixture `tests/fixtures/drlaw_page_rowspan_trimmed.html`.
+
 #### Tool policy metadata
 - Every tool's `tools/list` entry now carries `_meta["lexlink/policy"]` (contract v1): `version`, `category`, `evidence` (primary / derived / heuristic / none), `size` (normal / large), `upstream_calls` (usual maximum law.go.kr requests per call), `may_expose_credential` and optional `notes`. The table is `TOOL_POLICIES` in `src/lexlink/tool_policy.py`, filled from the code and live measurements; it is registered through the existing `server.tool` wrapper (FastMCP 1.26 `meta=`). A tool without an entry makes `create_server()` fail. Tool behaviour, input schemas and annotations are unchanged. Contract: `docs/API_REFERENCE.md`; tests: `tests/test_tool_policy.py` (real clients over stdio and Streamable HTTP).
 
@@ -619,6 +632,19 @@ All notable changes to LexLink are documented here in both English and Korean.
 ## 한국어 (Korean)
 
 ### 미배포 (Unreleased)
+
+#### 동작하지 않던 필터, 크기 제어, id 충돌 (#45)
+- `prec_search` / `detc_search` / `decc_search` / `special_decc_search`의 `date`는 업스트림이 무시했습니다(prec `date=20240111`: 175,598건, 필터 없음). 이제 가이드의 범위 파라미터 `D~D`(`prnc_yd` / `ed_yd` / `rsl_yd`, 측정 52 / 31 / 24 / 3건)로 보내고 `filters_applied`로 표시합니다. 명시한 범위와 `date`가 다르면 `VALIDATION_ERROR`입니다. `dpa_yd`는 동작하지만 처분일자 필드가 거의 비어 있어(decc 35,255건 중 7건, ttSpecialDecc 0건) `dpa_yd_sparse` 경고가 붙습니다.
+- `nb`: 쉼표 목록은 번호가 모두 있어도 0건이라 `VALIDATION_ERROR`(번호마다 따로 호출)이고, 표시형 `대법원-2025-두-34754`(업스트림 0건)는 `2025두34754`로 변환합니다. `detc_search`의 `nb`는 문자열입니다(`2022헌마1312`, 기존 `int`로는 입력 불가). 업스트림은 `query`가 있으면(`*` 포함, 38,739건) `nb`를 무시하므로 `detc_search`는 `nb`가 있으면 `query`를 보내지 않고, 실제 질의어와 `nb`를 함께 쓰면 오류입니다. 숫자만 넣은 `nb`는 부분일치라 `nb_substring` 경고가 붙습니다.
+- `expc_search`의 `inq`는 질의기관코드(숫자, 예 1290000=국방부, 132건)만 받습니다. 이름은 관련 없는 3,805건을 돌려주므로 `VALIDATION_ERROR`입니다.
+- 랭킹 필드: `prec_search`는 `판례명`, `expc_search`는 `사건명`으로 재정렬해 행에 없는 키라 no-op이었습니다. 이제 `사건명` / `안건명`입니다. 명시한 `sort`는 관련도로 다시 정렬하지 않습니다.
+- prec/detc/expc/decc/special_decc의 100 초과 `display`는 100으로 제한하고 `display_capped` 경고를 붙입니다(기존에는 그대로 전송, expc `display=500`은 474KB). 알 수 없는 `sort` / `search` / `gana` / `cls`(숫자 재결구분코드) / `sections` 값은 `VALIDATION_ERROR`입니다(업스트림은 무시하거나 부분 건수를 반환, 예 `cls=zz` 716건). `*_service`는 `id`와 함께 `lm`을 보내지 않고(제목이 정확하지 않으면 유효한 id도 "일치하는 … 없습니다", 응답 `lm_ignored`), 빈 `id`는 `VALIDATION_ERROR`입니다(가이드상 `ID` 필수, lm만 보내면 0바이트 응답).
+- `drlaw_search`에 `display`(최대 100)와 `page`를 추가했습니다(업스트림 지원, 전체 981행). `parse_drlaw_html`은 법령의 두 번째 이후 조문 행(rowspan 셀 없음)을 잘못 읽어 `법령명 "4"`가 나오던 문제를 고쳤습니다.
+- `lsDelegated_service`에 `jo`를 추가했습니다(JSON 본문 클라이언트 측 필터, `selection`에 법령의 조문 수와 일치 수): 건축법 3.69MB -> 5KB(제2조) / 61KB(제11조). 1MB 초과 본문은 `large_response` 경고를 붙입니다. 정책 `size`를 large에서 normal로 바꿨습니다(조문별 중앙값 2.3KB, 140개 중 5개가 100KB 초과, 최대 제80조 283KB).
+- `ordin_service`는 `id` 조회 시 `mst=<id>`도 한 번 조회해, 같은 숫자가 한 자치법규의 자치법규ID이자 다른 자치법규의 일련번호이면 `id_collision` / `id_is_serial_number`로 경고합니다(`id=2116749`는 정읍시립도서관 ... 시행규칙, `mst=2116749`는 서울특별시 건축 조례). 점검 요청이 실패하면 `id_check_skipped`로 알립니다. 정책 `upstream_calls`는 1에서 2로 바뀌었습니다.
+- `aiSearch`: docstring 기본값을 바로잡았고(display 7, 20 아님), `page` > 1은 `page_ignored` 경고를 붙이며(업스트림이 1페이지를 다시 반환), 구어 `뺑소니`가 `relevance_unverified`를 일으키지 않습니다(짧은 별칭 목록 `COLLOQUIAL_LEGAL_TERMS`). `ls_rlt_search`는 정확한 법령명만 일치함을 문서화하고 0건 응답에 힌트를 붙입니다.
+- 동기 도구 함수는 이제 워커 스레드에서 실행되고(`install_threaded_tool_calls`, `tool.fn`은 동기 그대로) `ResponseCache`에 락이 있습니다. Streamable HTTP에서 `lsDelegated_service(id=001823)`(4.4-5.1초) 동안 `cache_stats` 핑 6개를 측정: 수정 전 1.56-4.07초 대기, 수정 후 0.00-0.02초.
+- 테스트: `tests/test_filters_and_size.py`(50개), 픽스처 `tests/fixtures/drlaw_page_rowspan_trimmed.html`.
 
 #### 도구 정책 메타데이터
 - 모든 도구의 `tools/list` 항목에 `_meta["lexlink/policy"]`(계약 v1)가 실립니다: `version`, `category`, `evidence`(primary / derived / heuristic / none), `size`(normal / large), `upstream_calls`(호출당 law.go.kr 요청 수 통상 최대), `may_expose_credential`, 선택 `notes`. 표는 `src/lexlink/tool_policy.py`의 `TOOL_POLICIES`이며 코드 분석과 라이브 측정으로 채웠습니다. 기존 `server.tool` 래퍼로 등록합니다(FastMCP 1.26 `meta=`). 항목이 없는 도구가 있으면 `create_server()`가 실패합니다. 도구 동작, 입력 스키마, annotations는 그대로입니다. 계약: `docs/API_REFERENCE.md`, 테스트: `tests/test_tool_policy.py`(stdio와 Streamable HTTP 실제 클라이언트).

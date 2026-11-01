@@ -341,7 +341,45 @@ def slim_limited(func):
     @functools.wraps(func)
     def sync_wrapper(*args, **kwargs):
         return enforce_slim_limit(func(*args, **kwargs), note=note)
+    # FastMCP calls a sync tool function on the event loop; install_threaded_tool_calls() moves it to a worker thread
+    sync_wrapper._lexlink_threaded = True
     return sync_wrapper
+
+
+_THREADED_CALLS_INSTALLED = False
+
+
+def install_threaded_tool_calls() -> None:
+    """Run LexLink's synchronous tool functions in worker threads instead of on the event loop.
+
+    The tools use blocking HTTP (``requests``-style client), and FastMCP calls a sync tool
+    function directly on the event loop, so one slow upstream call (건축법 lsDelegated: 3.7 MB, several
+    seconds) froze every other session, even a cache_stats ping, until it returned (measured over
+    Streamable HTTP). Only functions marked by ``slim_limited`` are moved; ``tool.fn`` itself stays
+    a plain sync function. Idempotent.
+    """
+    global _THREADED_CALLS_INSTALLED
+    if _THREADED_CALLS_INSTALLED:
+        return
+    import anyio.to_thread
+    from mcp.server.fastmcp.utilities.func_metadata import FuncMetadata
+
+    original = FuncMetadata.call_fn_with_arg_validation
+
+    async def call_fn_with_arg_validation(self, fn, fn_is_async, arguments_to_validate, arguments_to_pass_directly):
+        if fn_is_async or not getattr(fn, "_lexlink_threaded", False):
+            return await original(self, fn, fn_is_async, arguments_to_validate, arguments_to_pass_directly)
+
+        async def in_worker(**kwargs):
+            return await anyio.to_thread.run_sync(functools.partial(fn, **kwargs))
+
+        return await original(self, in_worker, True, arguments_to_validate, arguments_to_pass_directly)
+
+    FuncMetadata.call_fn_with_arg_validation = call_fn_with_arg_validation
+    _THREADED_CALLS_INSTALLED = True
+
+
+install_threaded_tool_calls()
 
 
 from .params import map_params_to_upstream
@@ -987,6 +1025,12 @@ RELEVANCE_UNCHECKABLE_WARNING = (
 _RELEVANCE_FIELDS = ("법령명", "조문제목", "조문내용")
 
 
+# Colloquial words that never appear in statute text but whose usual legal term does, e.g.
+# 뺑소니 -> 도주차량 운전자의 가중처벌 (특정범죄 가중처벌법 제5조의3). Their legal terms count as lexical
+# evidence so a correct aiSearch result is not flagged; the list is deliberately short.
+COLLOQUIAL_LEGAL_TERMS = {"뺑소니": ("도주",)}
+
+
 def _query_grams(query: str) -> set:
     """Character bigrams of each word. Single-character words and digit-only
     words yield nothing: they match dates, article numbers and particles by accident."""
@@ -1012,6 +1056,10 @@ def low_relevance_warning(query: str, rows: list) -> Optional[str]:
     grams = _query_grams(query or "")
     if not grams:
         return RELEVANCE_UNCHECKABLE_WARNING
+    for colloquial, terms in COLLOQUIAL_LEGAL_TERMS.items():
+        if colloquial in (query or ""):
+            for term in terms:
+                grams |= _query_grams(term)
     for row in rows:
         text = " ".join(str(row.get(k, "")) for k in _RELEVANCE_FIELDS).lower()
         if any(g in text for g in grams):

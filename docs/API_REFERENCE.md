@@ -33,13 +33,13 @@
 | `admrul_search` | - | query=*, display=20, page=1, type=JSON, nw=1, search=1, org, knd, date, prml_yd, mod_yd, sort |
 | `admrul_service` | - | id, lid, lm, type=JSON |
 | `ordin_search` | - | query=*, display=20, page=1, type=JSON, nw=1, search=1, sort, date, ef_yd, anc_yd, anc_no, org, sborg, knd, rr_cls_cd, ordin_fd, gana |
-| `ordin_service` | - | id, mst, type=JSON |
+| `ordin_service` | - | id, mst, type=JSON (id 조회는 mst=id도 한 번 조회해 `id_collision` 경고) |
 | `ordinLsCon_search` | - | query, law_id, org, display=20, page=1, sort, type=JSON |
 | `lnkLs_search` | - | query=*, display=20, page=1, type=JSON, sort |
 | `lnkLsOrdJo_search` | - | query=*, display=20, page=1, type=JSON, knd, jo, jobr, sort |
 | `lnkDep_search` | org | display=20, page=1, type=JSON, sort |
-| `drlaw_search` | - | - |
-| `lsDelegated_service` | - | id, mst, type=JSON |
+| `drlaw_search` | - | display=20 (최대 100), page=1 |
+| `lsDelegated_service` | - | id, mst, type=JSON, jo |
 
 ### 판례 · 결정례 · 해석례 (Case law)
 
@@ -47,7 +47,7 @@
 |---|---|---|
 | `prec_search` | - | query=*, display=20, page=1, type=JSON, search, sort, org, curt, jo, gana, date, prnc_yd, nb, dat_src_nm, pop_yn |
 | `prec_service` | id | lm, sections, type=JSON |
-| `detc_search` | - | query=*, display=20, page=1, type=JSON, search, gana, sort, date, ed_yd, nb, pop_yn |
+| `detc_search` | - | query=*, display=20, page=1, type=JSON, search, gana, sort, date, ed_yd, nb (문자열), pop_yn |
 | `detc_service` | id | lm, sections, type=JSON |
 | `expc_search` | - | query=*, display=20, page=1, type=JSON, search=1, inq, rpl, gana, itmno, reg_yd, expl_yd, sort, pop_yn |
 | `expc_service` | id | lm, sections, type=JSON |
@@ -71,7 +71,7 @@
 
 | Tool | 필수 인자 | 선택 인자 (기본값) |
 |---|---|---|
-| `aiSearch` | query | search=0, display=7, page=1, type=JSON |
+| `aiSearch` | query | search=0, display=7, page=1 (업스트림이 무시, `page_ignored` 경고), type=JSON |
 | `aiRltLs_search` | query | search=0, type=JSON |
 | `lstrm_ai_search` | - | query=*, display=20, page=1, type=JSON |
 | `dlytrm_search` | - | query=*, display=20, page=1, type=JSON |
@@ -79,7 +79,7 @@
 | `dlytrm_rlt_search` | - | query, mst, trm_rlt_cd, type=JSON |
 | `lstrm_rlt_jo_search` | - | query, mst, type=JSON |
 | `jo_rlt_lstrm_search` | jo | query, law_id, type=JSON |
-| `ls_rlt_search` | - | query=*, display=20, page=1, type=JSON |
+| `ls_rlt_search` | - | query=* (정확한 법령명만 일치), display=20, page=1, type=JSON |
 
 ### 이력 · 비교 · 별표 · 용어사전 (History, comparison, appendix, dictionary)
 
@@ -237,7 +237,8 @@ for t in asyncio.run(create_server().list_tools()):
 2026-10-31 기준 코드에서 확인한 것만 적었습니다.
 
 - **알 수 없는 인자는 무시됩니다.** 존재하지 않는 인자(`bogus_param`)를 넘겨도 오류가 없고 기본값으로 실행됩니다(`cache_stats(bogus_param=1)`로 확인). 인자 이름을 틀리면 조용히 다른 결과가 나올 수 있습니다.
-- **일부 `*_service`에는 크기 제어 옵션이 없습니다**: `elaw_service`, `admrul_service`, `lsDelegated_service`, `ordin_service`, `trty_service`, `committee_service`, `cgm_expc_service`, `special_decc_service` (도구 설명에 같은 경고가 있음). 실제 크기는 법령마다 다릅니다. `eflaw_service`/`law_service`는 `jo` 없이 호출하면 법령 전체를 받습니다.
+- **조용히 무시되던 필터 (#45)**: 업스트림은 `prec`/`detc`/`decc`/`special_decc`의 `date`를 무시하므로 도구가 `prnc_yd`/`ed_yd`/`rsl_yd`의 `D~D`로 바꿔 보내고 응답에 `filters_applied`를 표시합니다. `nb`는 사건번호 하나만 받습니다(쉼표 목록은 항상 0건, 표시형 `대법원-2025-두-34754`는 `2025두34754`로 변환, `detc`는 `query`가 있으면 `nb`를 무시하므로 함께 쓰면 오류). expc `inq`는 질의기관코드(숫자)만 받습니다(이름은 오필터). `dpa_yd`(처분일자)는 업스트림 필드가 거의 비어 있어 0건이어도 결정이 없다는 뜻이 아닙니다. 100 초과 `display`는 100으로 제한하고 `display_capped`로 알립니다. 알 수 없는 `sort`/`search`/`gana`/`cls`/`sections`는 `VALIDATION_ERROR`입니다. `*_service`는 `id`가 있으면 `lm`을 보내지 않습니다(`lm_ignored`). `aiSearch`의 `page`는 업스트림이 무시합니다(`page_ignored`).
+- **일부 `*_service`에는 크기 제어 옵션이 없습니다**: `elaw_service`, `admrul_service`, `ordin_service`, `trty_service`, `committee_service`, `cgm_expc_service`, `special_decc_service` (도구 설명에 같은 경고가 있음). 실제 크기는 법령마다 다릅니다. `eflaw_service`/`law_service`는 `jo` 없이 호출하면 법령 전체를 받고, `lsDelegated_service`는 `jo` 없이 건축법 3.7MB(조문별 중앙값 2.3KB)이며 `jo`는 클라이언트 측 필터입니다(업스트림 파라미터 아님).
 - **`article_citation`**: "제88조 내지 제93조" 같은 범위는 한 개의 HTML 링크라 첫 조문만 추출될 수 있습니다. 삭제되었거나 개정으로 사라진 조문을 가리키는 인용도 그대로 추출됩니다. 외부 법령은 이름 텍스트만 주므로 MST가 필요하면 `eflaw_search`를 따로 호출해야 합니다. "같은 법"과 조문 나열은 휴리스틱으로 해석합니다.
 - **계정 단위 API 신청**: OC마다 신청한 API 범위가 다릅니다. 신청하지 않은 API는 `API_NOT_SUBSCRIBED` 오류가 됩니다(예: 현행법령 시행일 본문 `eflaw`는 `law_service`/`eflaw_josub`으로 대신할 수 있음).
 - **서버 IP 등록**: law.go.kr은 OC와 호출 IP를 함께 검증합니다. 등록되지 않은 IP에서는 "사용자 정보 검증에 실패하였습니다" 오류가 납니다([OPERATIONS.md](OPERATIONS.md)).
@@ -698,9 +699,13 @@ http://www.law.go.kr/DRF/lawSearch.do?OC=test&target=lnkDep&org=1400000&type=XML
 | target | string: drlaw(필수) | 서비스 대상 |
 | type | char(필수) | 출력 형태: **HTML만 지원** |
 
+| display | int | 페이지당 행 수 (측정: 지원, 최대 100으로 제한) |
+| page | int | 페이지 (측정: 지원, 전체 981행) |
+
 **Sample URLs:**
 ```
 http://www.law.go.kr/DRF/lawSearch.do?OC=test&target=drlaw&type=HTML
+http://www.law.go.kr/DRF/lawSearch.do?OC=test&target=drlaw&type=HTML&display=100&page=2
 ```
 
 ---

@@ -250,17 +250,28 @@ def parse_drlaw_html(html: str) -> Optional[dict]:
     header_rows = table.find("thead").find_all("tr") if table.find("thead") else []
     columns = [th.get_text(strip=True) for th in header_rows[-1].find_all("th")] if header_rows else []
     rows = []
+    ministry = law = ""
     for tr in body.find_all("tr"):
-        cells = tr.find_all("td")
-        if len(cells) < 3:
+        # 소관부처/법령명 cells use rowspan: the 2nd..nth article row of a law has no such cells,
+        # so they carry down from the previous row (reading cells[0..1] there mislabels the row).
+        lead = []
+        article_td = None
+        for cell in tr.find_all("td", recursive=False):
+            if cell.get("id") == "unOrdinStatsTd":
+                article_td = cell
+                break
+            lead.append(cell)
+        if article_td is None:
             continue
+        if len(lead) >= 2:
+            ministry, law = lead[0].get_text(strip=True), lead[1].get_text(strip=True)
         # The article <td> is never closed upstream, so the count cells nest inside it:
         # read only its own text and take the counts by class.
-        article = "".join(cells[2].find_all(string=True, recursive=False)).strip()
+        article = "".join(article_td.find_all(string=True, recursive=False)).strip()
         counts = [c.get_text(strip=True) for c in tr.find_all("td", class_="unordTd")]
         rows.append({
-            "소관부처": cells[0].get_text(strip=True),
-            "법령명": cells[1].get_text(strip=True),
+            "소관부처": ministry,
+            "법령명": law,
             "조문": article,
             "자치법규수": dict(zip(columns, counts)) if len(columns) == len(counts) else counts,
         })

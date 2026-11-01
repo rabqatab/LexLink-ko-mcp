@@ -145,10 +145,10 @@ def test_table_matches_documented_cases():
     assert TOOL_POLICIES["article_citation"]["evidence"] == "derived"
     assert TOOL_POLICIES["elaw_search"]["evidence"] == "derived"
     # size: large = representative size ~100KB or more and no control brings it below
-    assert TOOL_POLICIES["lsDelegated_service"]["size"] == "large"
     assert TOOL_POLICIES["elaw_service"]["size"] == "large"
     assert TOOL_POLICIES["lstrm_rlt_jo_search"]["size"] == "large"
-    for name in ("eflaw_service", "law_service", "thdCmp_service", "ordin_service", "lsJoHstInf_search"):
+    for name in ("eflaw_service", "law_service", "thdCmp_service", "ordin_service", "lsJoHstInf_search",
+                 "lsDelegated_service"):  # lsDelegated: `jo` filters client-side (median 2.3KB per article)
         assert TOOL_POLICIES[name]["size"] == "normal"
 
 
