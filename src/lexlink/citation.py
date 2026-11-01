@@ -30,7 +30,7 @@ class Citation:
 
     # Target info (required)
     target_text: str              # Original link text
-    target_ref_id: str            # Reference ID from fncLsLawPop
+    target_ref_id: Optional[str]  # Reference ID from fncLsLawPop (None for articles expanded from a range)
     target_type: str              # "ALLJO" (whole law) or "JO" (article)
 
     # Parsed target details (optional)
@@ -354,7 +354,7 @@ class CitationExtractor:
             label = f"제{number}조" + (f"의{branch}" if branch else "")
             clones.append(Citation(
                 target_text=label,
-                target_ref_id=start.target_ref_id,
+                target_ref_id=None,  # the range link's ref_id belongs to the start article only
                 target_type=start.target_type,
                 target_article=number,
                 target_article_branch=branch or None,
@@ -622,7 +622,29 @@ class CitationExtractor:
                     citation.citation_type = "internal"
                     consolidated.append(citation)
 
-        return consolidated
+        return self._dedupe_range_overlaps(consolidated)
+
+    @staticmethod
+    def _dedupe_range_overlaps(citations: List[Citation]) -> List[Citation]:
+        """Drop an article listed twice when one of the two comes from a range
+        ("제46조부터 제48조까지 및 제47조"). Repeated plain citations are kept as written."""
+        def key(c: Citation):
+            return (c.citation_type, c.target_law_name, c.target_article, c.target_article_branch,
+                    c.target_paragraph, c.target_item)
+
+        seen: Dict[tuple, Citation] = {}
+        result: List[Citation] = []
+        for c in citations:
+            k = key(c)
+            first = seen.get(k)
+            if first is not None and (c.range_text or first.range_text) and c.target_article is not None:
+                if c.range_text and not first.range_text:
+                    first.range_text = c.range_text
+                    first.range_note = first.range_note or c.range_note
+                continue
+            seen.setdefault(k, c)
+            result.append(c)
+        return result
 
     async def extract_citations(
         self,

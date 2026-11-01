@@ -151,7 +151,11 @@ VALID_RESPONSE_TYPES = ("HTML", "XML", "JSON")
 ERROR_PAGE_MARKER_RE = re.compile(r'id\s*=\s*["\']error\d{3}["\']', re.I)
 _HTML_START_RE = re.compile(r"^\s*(?:<!doctype\s+html|<html)", re.I)
 _TAG_RE = re.compile(r"<[^>]+>")
-NO_MATCH_RE = re.compile(r"일치하는 \S+ 없습니다")
+# "일치하는 법령이 없습니다", "일치하는 고용노동부 법령해석이 없습니다" (the subject may hold spaces)
+NO_MATCH_RE = re.compile(r'일치하는 [^\n<>"{}]{1,60}? 없습니다')
+# Query-keyed targets keep the narrow one-word form: their longer "no linkage" texts are
+# an empty result (ok + no_results), not a missing record.
+NO_MATCH_NARROW_RE = re.compile(r"일치하는 \S+ 없습니다")
 _XML_SINGLE_TEXT_RE = re.compile(
     r"^\s*(?:<\?xml[^>]*\?>\s*)?(?P<open>(?:<[\w:-]+(?:\s[^<>]*)?>\s*)+)"
     r"(?P<text>[^<]*)(?P<close>(?:</[\w:-]+>\s*)+)$"
@@ -162,13 +166,13 @@ QUERY_KEYED_TARGETS = frozenset(
 )
 
 
-def _is_no_match_message(s: str) -> bool:
+def _is_no_match_message(s: str, narrow: bool = False) -> bool:
     s = s.strip()
-    m = NO_MATCH_RE.search(s)
+    m = (NO_MATCH_NARROW_RE if narrow else NO_MATCH_RE).search(s)
     return bool(m) and len(s) <= 200 and m.start() <= 20
 
 
-def _is_bare_no_match(text: str) -> bool:
+def _is_bare_no_match(text: str, narrow: bool = False) -> bool:
     """True when the whole body is just a "일치하는 … 없습니다" message."""
     t = text.strip()
     if not t:
@@ -182,16 +186,16 @@ def _is_bare_no_match(text: str) -> bool:
             isinstance(data, dict)
             and len(data) == 1
             and isinstance(next(iter(data.values())), str)
-            and _is_no_match_message(next(iter(data.values())))
+            and _is_no_match_message(next(iter(data.values())), narrow)
         )
     if t[0] == "<":
         m = _XML_SINGLE_TEXT_RE.match(t)
         return (
             bool(m)
             and m.group("open").count("<") == m.group("close").count("<")
-            and _is_no_match_message(m.group("text"))
+            and _is_no_match_message(m.group("text"), narrow)
         )
-    return _is_no_match_message(t)
+    return _is_no_match_message(t, narrow)
 
 
 def _html_headline(body: str) -> str | None:
@@ -381,7 +385,7 @@ def detect_upstream_body_error(
 
     # 6) "일치하는 …가 없습니다" on a service (본문) call: id missing or body not provided.
     # Length bound keeps real judgments that quote the phrase from tripping this.
-    if endpoint == "/DRF/lawService.do" and _is_bare_no_match(text):
+    if endpoint == "/DRF/lawService.do" and _is_bare_no_match(text, narrow=target in QUERY_KEYED_TARGETS):
         if "일치하는 법령이 없습니다" in text:
             message = (
                 "일치하는 법령이 없습니다. MST(법령일련번호)가 최신인지 확인하세요. "
@@ -674,14 +678,15 @@ class LawAPIClient:
         return None
 
     def _verify_not_subscribed(self, error: dict, target: str, oc: str, request_id: str) -> dict:
-        """Tell a real 미신청 account from a request the upstream rejected with the same page.
+        """Narrow down a 미신청 page with one list request on the same target.
 
         law.go.kr shows the identical "미신청된 목록/본문에 대한 접근입니다" page for a
-        wrong ef_yd, an unknown id and similar bad parameters (measured on eflaw), so the
-        page alone does not prove the OC lacks the API. One list request on the same
-        target tells them apart: when it works, the account holds the target and the
-        page came from the parameters (or from the 본문 API alone being unapplied,
-        which the upstream does not reveal). Without a clear answer the original error stays.
+        wrong ef_yd, an unknown id, an invalid type and a genuinely unapplied API, so the
+        page alone proves nothing. If the list request shows the same page too, the
+        account lacks the target (API_NOT_SUBSCRIBED). If the list works, the cause stays
+        unknowable (bad parameters or only the 본문 API unapplied): UPSTREAM_HTML_ERROR with
+        ``may_be_not_subscribed``. If the probe fails, the original error gets an
+        "unconfirmed" hint.
         """
         try:
             probe_params = {"OC": oc, "target": target, "type": "JSON", "display": 1, "query": "법"}
@@ -699,19 +704,24 @@ class LawAPIClient:
                                            endpoint="/DRF/lawSearch.do") is None
             and "totalCnt" in text
         ):
+            # The page is byte-identical for bad parameters and for a missing 본문 subscription,
+            # so the cause cannot be known here: say both and keep the alternatives.
             return create_error_response(
                 error_code=ErrorCode.UPSTREAM_HTML_ERROR,
-                message="법제처 API가 '미신청' 오류 페이지를 반환했지만, 같은 OC로 같은 target의 목록 조회는 "
-                        "정상 동작합니다. 계정 미신청이 아니라 요청 인자(id/mst/ef_yd/type)가 잘못되었거나 "
-                        "해당 본문 API만 미신청일 수 있습니다. law.go.kr showed the 미신청 page, but the same OC "
-                        f"can list target '{target}': the request parameters were most likely rejected.",
+                message="법제처 API가 '미신청' 오류 페이지를 반환했습니다. 같은 OC로 같은 target의 목록 조회는 "
+                        "정상이므로 원인은 (a) 요청 인자(id/mst/ef_yd 등)가 거부됨 또는 (b) 이 target의 '본문' API만 "
+                        "미신청 중 하나이며, 업스트림은 둘을 구분하지 않아 어느 쪽인지 알 수 없습니다. "
+                        "law.go.kr showed the 미신청 page while the same OC can list target "
+                        f"'{target}': either the parameters were rejected or only the 본문 API is not applied for; "
+                        "the upstream does not say which.",
                 hints=[
-                    "업스트림은 잘못된 인자(존재하지 않는 id, 해당 MST에 없는 ef_yd 등)에도 같은 '미신청' 페이지를 돌려줍니다",
-                    "id/mst/ef_yd 값을 검색 도구 결과에서 다시 확인하세요 (ef_yd는 그 MST 자신의 시행일자여야 함)",
+                    "먼저 id/mst/ef_yd 값을 검색 도구 결과에서 다시 확인하세요 (ef_yd는 그 MST 자신의 시행일자여야 함)",
                     "인자가 맞는데도 반복되면 open.law.go.kr에서 이 target의 '본문' API 신청 여부를 확인하세요",
+                    *_not_subscribed_hints(target)[2:],
                 ],
                 request_id=request_id,
                 upstream_target=target,
+                may_be_not_subscribed=True,
             )
         return _with_unverified_hint(error)
 

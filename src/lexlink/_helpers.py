@@ -869,6 +869,44 @@ def annotate_prec_body_availability(response: dict) -> dict:
     return response
 
 
+def _body_fields_blank(raw: str, response_type: str, fields: list[str]) -> bool:
+    """True when at least one of ``fields`` is present in the body and every present one is blank.
+
+    A body without any of the fields (an error text, another schema) is not "a record with
+    an empty body", so it does not count.
+    """
+    if not raw or not _fields_empty(raw, response_type, fields):
+        return False
+    if response_type == "JSON":
+        try:
+            data = json.loads(raw)
+            root = list(data.values())[0] if isinstance(data, dict) and data else {}
+        except Exception:
+            return False
+        return isinstance(root, dict) and any(f in root for f in fields)
+    if response_type == "XML":
+        return any(re.search(rf"<{re.escape(f)}[ >/]", raw) for f in fields)
+    return False
+
+
+def _annotate_empty_body(response: dict, full: dict, body_fields, response_type: str) -> dict:
+    """Add the machine-readable ``empty_body`` warning (see run_service ``body_fields``)."""
+    if body_fields and response.get("status") == "ok" \
+            and _body_fields_blank(full.get("raw_content", ""), response_type, body_fields):
+        response["warning"] = "empty_body"
+        response["empty_fields"] = list(body_fields)
+        response["message"] = (
+            "업스트림이 이 문서의 본문 필드(" + ", ".join(body_fields) + ")를 모두 비워서 반환했습니다. "
+            "기록은 존재하지만 내용이 제공되지 않았으므로 본문이 없다고 단정하지 말고 다른 출처로 확인하세요. "
+            "The upstream returned this record with every body field empty."
+        )
+        response["hints"] = [
+            "법제처 데이터 자체가 비어 있는 경우입니다(LexLink가 내용을 지우지 않음)",
+            "같은 사건의 다른 일련번호나 원 출처(법원·헌법재판소·부처 사이트)에서 본문을 확인하세요",
+        ]
+    return response
+
+
 def run_service(
     *,
     get_client,
@@ -903,6 +941,7 @@ def run_service(
         if snake_params.get(key) is not None:
             snake_params[key] = validate_digits(snake_params[key], key, allow_empty=True) or snake_params[key]
 
+    response_type = str(response_type).upper()  # "xml"/"json" must behave like "XML"/"JSON"
     upstream_params = map_params_to_upstream(snake_params)
 
     # Check cache (only for full responses — summary mode always fetches fresh then strips)
@@ -910,7 +949,7 @@ def run_service(
     if sections != "summary":
         cached = cache.get(target, upstream_params)
         if cached is not None:
-            return cached
+            return _annotate_empty_body(dict(cached), cached, body_fields, response_type)
 
     client = get_client()
     response = client.get("/DRF/lawService.do", upstream_params, response_type)
@@ -967,22 +1006,7 @@ def run_service(
             except:
                 pass  # If JSON parsing fails, return unmodified
 
-    if body_fields and response.get("status") == "ok":
-        full = cached_full.get("raw_content", "")
-        if full and _fields_empty(full, response_type, body_fields):
-            response["warning"] = "empty_body"
-            response["empty_fields"] = list(body_fields)
-            response["message"] = (
-                "업스트림이 이 문서의 본문 필드(" + ", ".join(body_fields) + ")를 모두 비워서 반환했습니다. "
-                "기록은 존재하지만 내용이 제공되지 않았으므로 본문이 없다고 단정하지 말고 다른 출처로 확인하세요. "
-                "The upstream returned this record with every body field empty."
-            )
-            response["hints"] = [
-                "법제처 데이터 자체가 비어 있는 경우입니다(LexLink가 내용을 지우지 않음)",
-                "같은 사건의 다른 일련번호나 원 출처(법원·헌법재판소·부처 사이트)에서 본문을 확인하세요",
-            ]
-
-    return response
+    return _annotate_empty_body(response, cached_full, body_fields, response_type)
 
 
 # ============================================================

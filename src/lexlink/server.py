@@ -1379,7 +1379,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         type: str = "JSON",
         knd: Optional[str] = None,
         jo: Optional[Union[str, int]] = None,
-        jobr: Optional[int] = None,
+        jobr: Optional[Union[str, int]] = None,
         sort: Optional[str] = None,
         ctx: Context = None,
     ) -> dict:
@@ -1421,6 +1421,10 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             "type": type,
         }
         if knd: snake_params["knd"] = knd
+        if jobr is not None and str(jobr).strip() != "":
+            jobr = int(validate_digits(jobr, "jobr"))
+        elif jobr is not None:
+            jobr = None
         if jo is not None:
             # Same forms as every other jo: 20, "0020", "제20조", "20의2", "제20조의2", "002002".
             # The upstream takes the article number in `jo` and the branch in `jobr`.
@@ -4362,8 +4366,10 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 missing_versions.append(mst)
                 return None, str(e)
             except ArticleNotFoundError as e:
+                absent_law[mst] = e.law or {}
                 return None, str(e)
 
+        absent_law: dict = {}
         old_info, old_err = _try_fetch(mst_old)
         new_info, new_err = _try_fetch(mst_new)
 
@@ -4385,6 +4391,25 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                     "law_amendment_summary로 같은 법령ID의 MST인지, 조문 번호/가지번호가 맞는지 확인하세요.",
                 ],
             )
+
+        # An article missing from one side is only "added/deleted" when both MSTs are versions of
+        # the same law (법령ID survives renames; names may differ). Otherwise there is no verdict.
+        old_law = (old_info or {}).get("law") or absent_law.get(mst_old) or {}
+        new_law = (new_info or {}).get("law") or absent_law.get(mst_new) or {}
+        if (old_info is None) != (new_info is None):
+            if old_law.get("law_id") and new_law.get("law_id") and old_law["law_id"] != new_law["law_id"]:
+                return create_error_response(
+                    error_code=ErrorCode.VALIDATION_ERROR,
+                    message=(f"MST {mst_old}({old_law.get('law_name', '?')}, 법령ID {old_law['law_id']})와 "
+                             f"MST {mst_new}({new_law.get('law_name', '?')}, 법령ID {new_law['law_id']})는 서로 다른 법령이라 "
+                             f"{article_display}의 신설/삭제를 판단할 수 없습니다. "
+                             "The two MSTs belong to different laws, so no added/deleted verdict is given."),
+                    hints=["law_amendment_summary로 같은 법령ID의 MST 두 개를 골라 비교하세요."],
+                )
+        else_warning = None
+        if (old_info is None) != (new_info is None) and not (old_law.get("law_id") and new_law.get("law_id")):
+            else_warning = ("조문이 없는 쪽 버전의 법령ID를 확인하지 못해 같은 법령인지 검증되지 않았습니다 "
+                            "(신설/삭제 판단은 같은 법령일 때만 유효).")
 
         old_meta = _version_meta(old_info) if old_info else {"mst": mst_old, "text": "", "note": old_err}
         new_meta = _version_meta(new_info) if new_info else {"mst": mst_new, "text": "", "note": new_err}
@@ -4439,6 +4464,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 "unified_diff": unified,
                 "summary": summary if changes else "No textual changes between the two versions",
             }
+        warning = warning or else_warning
         if warning:
             result["warning"] = warning
         return result

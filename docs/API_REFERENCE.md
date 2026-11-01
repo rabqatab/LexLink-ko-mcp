@@ -241,7 +241,7 @@ for t in asyncio.run(create_server().list_tools()):
 - **알 수 없는 인자는 무시됩니다.** 존재하지 않는 인자(`bogus_param`)를 넘겨도 오류가 없고 기본값으로 실행됩니다(`cache_stats(bogus_param=1)`로 확인). 인자 이름을 틀리면 조용히 다른 결과가 나올 수 있습니다.
 - **일부 `*_service`에는 크기 제어 옵션이 없습니다**: `elaw_service`, `admrul_service`, `lsDelegated_service`, `ordin_service`, `trty_service`, `committee_service`, `cgm_expc_service`, `special_decc_service` (도구 설명에 같은 경고가 있음). 실제 크기는 법령마다 다릅니다. `eflaw_service`/`law_service`는 `jo` 없이 호출하면 법령 전체를 받습니다.
 - **`article_citation`**: "제33조부터 제37조까지" 같은 범위는 법제처가 한 개의 링크로 걸어 두며, LexLink가 시작~끝의 모든 조문을 나열하고 각 항목에 `range_text`/`range_note`를 붙입니다(범위 사이의 가지조문 `제N조의M`이나 시작·끝에 가지조문이 있는 범위는 나열하지 않으며 `range_note`에 표시). `mst`는 숫자여야 합니다(`VALIDATION_ERROR`). 삭제되었거나 개정으로 사라진 조문을 가리키는 인용도 그대로 추출됩니다. 외부 법령은 이름 텍스트만 주므로 MST가 필요하면 `eflaw_search`를 따로 호출해야 합니다. "같은 법"과 조문 나열은 휴리스틱으로 해석합니다.
-- **계정 단위 API 신청**: OC마다 신청한 API 범위가 다릅니다. 신청하지 않은 API는 `API_NOT_SUBSCRIBED` 오류가 됩니다(예: 현행법령 시행일 본문 `eflaw`는 `law_service`/`eflaw_josub`으로 대신할 수 있음).
+- **계정 단위 API 신청**: OC마다 신청한 API 범위가 다릅니다. 신청하지 않은 API는 `API_NOT_SUBSCRIBED` 오류가 됩니다(예: 현행법령 시행일 본문 `eflaw`는 `law_service`/`eflaw_josub`으로 대신할 수 있음). 같은 페이지가 잘못된 인자(없는 id, 해당 MST에 없는 `ef_yd`)와 본문 API만 미신청인 계정에도 나옵니다(바이트 단위로 동일). 그래서 본문(lawService) 호출에서 이 페이지가 오면 같은 target의 목록 조회를 **추가로 1회** 호출합니다(오류 경로에서만, 10초 제한): 목록도 미신청이면 `API_NOT_SUBSCRIBED`, 목록이 정상이면 원인을 알 수 없으므로(인자 거부 또는 본문 API만 미신청) `UPSTREAM_HTML_ERROR` + `may_be_not_subscribed: true`(대안 도구 안내 유지), 확인 불가면 '확인하지 못함' 힌트가 붙은 `API_NOT_SUBSCRIBED`입니다. 잘못된 `type`은 호출 전 `VALIDATION_ERROR`입니다.
 - **서버 IP 등록**: law.go.kr은 OC와 호출 IP를 함께 검증합니다. 등록되지 않은 IP에서는 "사용자 정보 검증에 실패하였습니다" 오류가 납니다([OPERATIONS.md](OPERATIONS.md)).
 - **`simplify_article`**: 본문을 쉬운 말로 바꾸지 않습니다. 법제처 용어 DB에 연결이 있는 용어만 `term_glossary`에 나오며, 연결이 법적 의미와 다를 수 있습니다.
 - **`check_precedent_odds`**: 판례 주문의 분포이며 승소율이나 결과 예측이 아닙니다.
@@ -327,7 +327,7 @@ http://www.law.go.kr/DRF/lawSearch.do?OC=test&target=eflaw&query=자동차관리
 
 > **LexLink `jo` 정규화 (v2.2.0):** `eflaw_service`, `law_service`, `eflaw_josub`, `law_josub`은 `35`, `35의5`, `제35조의5`, `35-5`, `003505`를 모두 받아 업스트림용 6자리 코드(`003505`)로 변환한다. 형식이 잘못되면 `VALIDATION_ERROR`, 해당 조문이 응답에 없으면 `ARTICLE_NOT_FOUND`.
 > **`ef_yd` 규칙 (LexLink 도구, Unreleased):** `ef_yd`는 해당 MST 자신의 시행일을 고르는 개정본 선택자다. `mst` 없이 `id` + `ef_yd`만 주면 `VALIDATION_ERROR`(업스트림이 무시하거나 `{}`를 돌려줌), `mst` + `ef_yd`면 `id`는 보내지 않는다(`id`를 같이 보내면 업스트림이 현재본을 반환). `mst`를 쓸 때는 `ef_yd` 또는 `id`가 필요하다. 특정 날짜에 시행 중이던 본문은 `law_as_of`를 쓴다(1.2.3절). `ef_yd`는 정수/문자열 모두 허용. `lm`은 업스트림에 대문자 `LM`으로 전송되며 `lm`만으로 조회할 수 있다.
-> **계정 신청 주의:** `eflaw` **본문**(`lawService.do?target=eflaw`)은 OC에 해당 API가 신청돼 있지 않으면 "미신청된 목록/본문에 대한 접근입니다" HTML을 반환한다 → LexLink는 `API_NOT_SUBSCRIBED` 오류로 변환하고 `law_service`/`eflaw_josub`을 대안으로 안내한다 (Appendix C).
+> **계정 신청 주의:** `eflaw` **본문**(`lawService.do?target=eflaw`)은 OC에 해당 API가 신청돼 있지 않으면 "미신청된 목록/본문에 대한 접근입니다" HTML을 반환한다 → LexLink는 `API_NOT_SUBSCRIBED` 오류로 변환하고 `law_service`/`eflaw_josub`을 대안으로 안내한다 (Appendix C). 같은 페이지가 잘못된 인자(없는 id, 해당 MST에 없는 `ef_yd`)와 본문 API만 미신청인 계정에도 나옵니다(바이트 단위로 동일). 그래서 본문(lawService) 호출에서 이 페이지가 오면 같은 target의 목록 조회를 **추가로 1회** 호출합니다(오류 경로에서만, 10초 제한): 목록도 미신청이면 `API_NOT_SUBSCRIBED`, 목록이 정상이면 원인을 알 수 없으므로(인자 거부 또는 본문 API만 미신청) `UPSTREAM_HTML_ERROR` + `may_be_not_subscribed: true`(대안 도구 안내 유지), 확인 불가면 '확인하지 못함' 힌트가 붙은 `API_NOT_SUBSCRIBED`입니다. 잘못된 `type`은 호출 전 `VALIDATION_ERROR`입니다.
 
 **Sample URLs:**
 ```
@@ -1653,10 +1653,10 @@ article_citation(
 | `ARTICLE_NOT_FOUND` | 요청한 조문(`jo`)이 응답에 없음 | 조문 번호·법령 버전 확인 |
 | `NOT_FOUND` | 업스트림이 "일치하는 … 없습니다"로 답했거나 본문이 비어 있음 (`prec_service`/`detc_service`/`expc_service`의 없는 ID, `lawService.do`의 빈 본문 등). 오류는 캐시되지 않음 | ID·검색어 확인 |
 | `EMPTY_RESPONSE` | HTTP 200이지만 0-byte 본문. 대개 잘못된 target/엔드포인트 | target·엔드포인트 점검 (코드 버그 신호) |
-| `API_NOT_SUBSCRIBED` | "미신청된 목록/본문에 대한 접근입니다" — OC 계정이 해당 API 종류를 open.law.go.kr에서 신청하지 않음. 업스트림은 잘못된 인자(없는 id, 해당 MST에 없는 `ef_yd`, 잘못된 `type`)에도 같은 페이지를 돌려주므로, 본문(lawService) 호출에서 이 페이지가 오면 같은 target의 목록 조회를 한 번 더 호출해 확인합니다: 목록도 미신청이면 이 코드, 목록이 정상이면 `UPSTREAM_HTML_ERROR`(인자 확인 안내), 확인 불가면 이 코드에 '확인하지 못함' 힌트. 잘못된 `type`은 호출 전에 `VALIDATION_ERROR`. `eflaw` 본문이면 `law_service`/`eflaw_josub` 대안 안내 | open.law.go.kr에서 API 신청 추가 |
+| `API_NOT_SUBSCRIBED` | "미신청된 목록/본문에 대한 접근입니다" — OC 계정이 해당 API 종류를 open.law.go.kr에서 신청하지 않음. 같은 페이지가 잘못된 인자에도 나오므로 본문 호출에서는 목록 조회 1회로 확인합니다: 목록도 미신청이면 이 코드, 목록이 정상이면 `UPSTREAM_HTML_ERROR` + `may_be_not_subscribed: true`(인자 거부와 본문만 미신청을 구분 불가), 확인 불가면 '확인하지 못함' 힌트. 잘못된 `type`은 호출 전 `VALIDATION_ERROR`. `eflaw` 본문이면 `law_service`/`eflaw_josub` 대안 안내 | open.law.go.kr에서 API 신청 추가 |
 | `UPSTREAM_HTML_ERROR` | JSON/XML을 요청했는데 HTML 또는 `error500` 페이지가 반환됨 | 재시도, 지속되면 `type=HTML` 가능 여부 확인 |
 
-`status: ok`이지만 본문이 비어 있으면 `warning: "empty_body"`와 `empty_fields`(`prec`/`detc`/`expc`/`decc`/`trty`/`cgm_expc`/`special_decc` `*_service`)가 붙습니다. 업스트림 데이터가 비어 있는 경우이므로(예: `detc_service` id 150756, 150770) 본문이 없다고 단정하지 말고 원 출처로 확인하세요.
+`status: ok`이지만 본문이 비어 있으면 `warning: "empty_body"`와 `empty_fields`(`prec`/`detc`/`expc`/`decc`/`trty`/`cgm_expc`/`special_decc` `*_service`)가 붙습니다. 업스트림 데이터가 비어 있는 경우이므로(예: `detc_service` id 150756, 150770) 본문이 없다고 단정하지 말고 원 출처로 확인하세요. 본문 필드가 있는데 모두 빈 경우에만 붙으며("일치하는 … 없습니다"류 응답은 `NOT_FOUND`), `type=HTML`에는 적용하지 않습니다(JSON/XML만 검사).
 
 앞의 세 종류(EMPTY_RESPONSE, API_NOT_SUBSCRIBED, UPSTREAM_HTML_ERROR)는 `client.py`에서 감지하며, 이전에는 `status: ok`로 통과했다.
 

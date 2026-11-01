@@ -175,7 +175,10 @@ def test_not_subscribed_page_with_working_list_is_not_reported_as_unsubscribed()
     assert out["status"] == "error"
     assert out["error_code"] == ErrorCode.UPSTREAM_HTML_ERROR
     assert out["error_code"] != ErrorCode.API_NOT_SUBSCRIBED
-    assert "목록 조회는" in out["message"] and "eflaw" in out["message"]
+    assert out["may_be_not_subscribed"] is True
+    # both causes are named, and the law_service / eflaw_josub alternatives stay
+    assert "인자" in out["message"] and "미신청" in out["message"] and "구분하지 않아" in out["message"]
+    assert "law_service" in " ".join(out["hints"]) and "eflaw_josub" in " ".join(out["hints"])
 
 
 @pytest.mark.integration
@@ -440,3 +443,120 @@ def test_default_query_still_reaches_upstream(monkeypatch, tool):
     out = call(tool, **LIST_TOOLS[tool])
     assert out.get("error_code") != ErrorCode.VALIDATION_ERROR, out
     assert FakeClient.calls
+
+
+# --- review follow-ups ---------------------------------------------------------------
+
+from lexlink.client import detect_upstream_body_error  # noqa: E402
+from test_amendment import load  # noqa: E402
+
+
+@pytest.mark.unit
+def test_13_digit_admrul_id_is_accepted(monkeypatch):
+    _, call = _tools(monkeypatch, _service_fake({"admrul": '{"AdmRulService": {"행정규칙명": "x"}}'}))
+    out = call("admrul_service", id="2100000245624")
+    assert out["status"] == "ok", out
+    assert call("admrul_service", id="1" * 31)["error_code"] == ErrorCode.VALIDATION_ERROR
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("fmt,body", [
+    ("XML", '<?xml version="1.0" encoding="utf-8"?><Law>일치하는 고용노동부 법령해석이 없습니다.  법령해석명을 확인하여 주십시오.</Law>'),
+    ("JSON", '{"Law": "일치하는 고용노동부 법령해석이 없습니다.  법령해석명을 확인하여 주십시오."}'),
+    ("XML", '<?xml version="1.0" encoding="utf-8"?><Law>일치하는 조세심판원 특별행정심판재결례이 없습니다.  특별행정심판명을 확인하여 주십시오.</Law>'),
+    ("JSON", '{"Law": "일치하는 조세심판원 특별행정심판재결례이 없습니다.  특별행정심판명을 확인하여 주십시오."}'),
+])
+def test_multiword_no_match_is_not_found_in_every_type(fmt, body):
+    err = detect_upstream_body_error(body, fmt, target="moelCgmExpc", endpoint=SERVICE)
+    assert err["error_code"] == ErrorCode.NOT_FOUND
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("fmt", ["XML", "JSON"])
+def test_cgm_and_special_service_unknown_id_is_not_found(monkeypatch, fmt):
+    text = "일치하는 고용노동부 법령해석이 없습니다.  법령해석명을 확인하여 주십시오."
+    body = f'<?xml version="1.0" encoding="utf-8"?><Law>{text}</Law>' if fmt == "XML" else json.dumps({"Law": text}, ensure_ascii=False)
+    monkeypatch.setattr(server_mod, "LawAPIClient", lambda *a, **k: _routing_client(body, body))
+    monkeypatch.setenv("OC", "unit-test-oc")
+    server = server_mod.create_server()
+    for tool, kw in (("cgm_expc_service", {"ministry": "고용노동부"}), ("special_decc_service", {"tribunal": "조세심판원"})):
+        out = server._tool_manager.get_tool(tool).fn(id="88", type=fmt, **kw)
+        assert out["error_code"] == ErrorCode.NOT_FOUND, (tool, out)
+
+
+@pytest.mark.unit
+def test_query_keyed_no_linkage_text_stays_ok():
+    body = '{"Law": "일치하는 법령용어-조문 연계 정보가 없습니다. 검색조건을 확인하여 주십시오."}'
+    assert detect_upstream_body_error(body, "JSON", target="lstrmRltJo", endpoint=SERVICE) is None
+
+
+@pytest.mark.unit
+def test_empty_body_needs_the_fields_to_be_present(monkeypatch):
+    """A message-only body is not "a record with empty fields"."""
+    for body, fmt in (('{"Law": "무언가 다른 안내문"}', "JSON"), ('<Law>x</Law>', "XML")):
+        _, call = _tools(monkeypatch, _service_fake({"detc": body}))
+        out = call("detc_service", id="1", type=fmt)
+        assert out.get("warning") != "empty_body"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("fmt", ["xml", "XML"])
+def test_empty_body_lowercase_type_and_cache_and_sections_full(monkeypatch, fmt):
+    xml = ('<DetcService><판시사항><![CDATA[]]></판시사항><결정요지><![CDATA[]]></결정요지>'
+           '<전문><![CDATA[]]></전문></DetcService>')
+    _, call = _tools(monkeypatch, _service_fake({"detc": xml}))
+    for sections in (None, "full", "full", "summary"):   # repeated calls hit the cache
+        out = call("detc_service", id="150756", type=fmt, sections=sections)
+        assert out.get("warning") == "empty_body", (sections, out)
+
+
+def _law_fake(old_law_id, old_name):
+    class Fake(FakeClient):
+        def _service(self, target, params, response_type):
+            if target == "law" and params.get("MST") == "999":
+                d = json.loads(load("law_283335_nojo.json"))
+                d["법령"]["기본정보"]["법령ID"] = old_law_id
+                d["법령"]["기본정보"]["법령명_한글"] = old_name
+                return self._ok(json.dumps(d, ensure_ascii=False))
+            return super()._service(target, params, response_type)
+    return Fake
+
+
+@pytest.mark.unit
+def test_diff_other_law_without_article_gives_no_verdict(monkeypatch):
+    _, call = _tools(monkeypatch, _law_fake("009999", "전혀 다른 법"))
+    out = call("article_amendment_diff", mst_old="999", mst_new="283335", article=35, article_branch=5)
+    assert out["status"] == "error" and out["error_code"] == ErrorCode.VALIDATION_ERROR
+    assert "009999" in out["message"] and "has_changes" not in out
+
+
+@pytest.mark.unit
+def test_diff_renamed_law_keeps_its_verdict(monkeypatch):
+    _, call = _tools(monkeypatch, _law_fake("000798", "구 저작권법"))
+    out = call("article_amendment_diff", mst_old="999", mst_new="283335", article=35, article_branch=5)
+    assert out["status"] == "ok" and "added" in out["summary"]
+    assert "warning" not in out
+
+
+@pytest.mark.unit
+def test_range_and_explicit_repeat_are_deduplicated():
+    body = (f"{_a('sfon1', '「신탁법」')} {_a('sfon2', '제46조부터 제48조')}까지 및 {_a('sfon2', '제47조')}")
+    cits = _extract(body, "민법")
+    assert [c.target_article for c in cits] == [46, 47, 48]
+    plain = _extract(f"{_a('sfon1', '「신탁법」')} {_a('sfon2', '제46조')}, {_a('sfon2', '제46조')}", "민법")
+    assert [c.target_article for c in plain] == [46, 46]   # repeats outside ranges are kept
+
+
+@pytest.mark.unit
+def test_range_clones_have_no_borrowed_ref_id():
+    cits = _extract(f"{_a('sfon2', '제33조부터 제35조')}까지")
+    assert cits[0].to_dict()["ref_id"] == "1"
+    assert [c.to_dict()["ref_id"] for c in cits[1:]] == [None, None]
+
+
+@pytest.mark.unit
+def test_lnkLsOrdJo_non_numeric_jobr_is_validation_error(monkeypatch):
+    _, call = _tools(monkeypatch)
+    out = call("lnkLsOrdJo_search", knd="002118", jo=20, jobr="abc")
+    assert out["error_code"] == ErrorCode.VALIDATION_ERROR and "jobr" in out["message"]
+    assert FakeClient.calls == []
