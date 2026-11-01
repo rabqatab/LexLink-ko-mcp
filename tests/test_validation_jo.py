@@ -146,3 +146,17 @@ def test_extract_law_name():
     assert extract_law_name(XML_ONLY_BASIC_INFO, "XML") == "저작권법"
     assert extract_law_name("{}", "JSON") is None
     assert extract_law_name(None, "JSON") is None
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("raw", ["٣٥", "٠٠٣٥٠٥", "제٣٥조", "٣٥의٥", "٣٥-٥", "३५"])
+def test_normalize_jo_rejects_non_ascii_digits(raw):
+    # same policy as law_extras.ascii_digits: only full-width digits are folded
+    with pytest.raises(JoFormatError):
+        normalize_jo(raw)
+
+
+@pytest.mark.unit
+def test_normalize_jo_still_folds_fullwidth_digits():
+    assert normalize_jo("３５") == "003500"
+    assert normalize_jo("제３５조의５") == "003505"

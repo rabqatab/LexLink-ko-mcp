@@ -315,11 +315,15 @@ def _article_lists(section) -> list:
     return found
 
 
-_HEADING_RE = re.compile(r"제\s*[0-9]+\s*(?:편|장|절|관)")
+# "제3장 총칙", "제2장의2 ...", "제1편": the unit word must end the token (so "제3장에 따른 ..." is a
+# sentence), and the rest must be a short title, not a clause (see _looks_like_heading_title).
+_HEADING_RE = re.compile(r"제\s*[0-9]+\s*(?:편|장|절|관)(?:\s*의\s*[0-9]+)?(?=\s|$)")
+_HEADING_TAIL_TAGS_RE = re.compile(r"\s*(?:<[^<>]*>|\[[^\[\]]*\])\s*")
+_HEADING_MAX_TITLE = 60
 _HANG_HEADING_RE = re.compile(r"제\s*[0-9]+\s*항\s")
 
 
-_BASE_ROW_KEYS = {"조제목", "조가지번호", "조내용", "조번호"}
+_BASE_ROW_KEYS = {"조제목", "조가지번호", "조내용", "조번호", "own_text_is_heading"}
 
 
 def _has_children(row: dict) -> bool:
@@ -327,10 +331,24 @@ def _has_children(row: dict) -> bool:
     return any(k not in _BASE_ROW_KEYS and v for k, v in row.items())
 
 
+def _looks_like_heading_title(rest: str) -> bool:
+    """What follows "제N장" is a short title, not a clause ("총칙", "양도소득금액의 계산"; not "에 따른 ...다.")."""
+    title = _HEADING_TAIL_TAGS_RE.sub(" ", rest).strip()
+    return len(title) <= _HEADING_MAX_TITLE and not re.search(r"(?:다|요)[.,]?$|[.。]\s*\S", title)
+
+
 def has_heading_text(row: dict) -> bool:
-    """The row's own 조내용 is a chapter/section heading, not article text."""
+    """The row's own 조내용 is a chapter/section heading, not article text.
+
+    A titled row (조제목 set) is an article, whatever its text starts with: "제3장에 따른 ..." is
+    a sentence, and a heading must look like one (unit word ends the token, short title)."""
     content = str(row.get("조내용", "") or "").strip()
-    return bool(_HEADING_RE.match(content)) or (not row.get("조제목") and bool(_HANG_HEADING_RE.match(content)))
+    if str(row.get("조제목", "") or "").strip():
+        return False
+    m = _HEADING_RE.match(content)
+    if m:
+        return _looks_like_heading_title(content[m.end():])
+    return bool(_HANG_HEADING_RE.match(content))
 
 
 def is_heading_row(row: dict) -> bool:
@@ -344,14 +362,25 @@ def is_heading_row(row: dict) -> bool:
     return has_heading_text(row) and not _has_children(row)
 
 
-def thdcmp_heading_only(new_root: dict) -> bool:
-    """True when every row kept by select_thdcmp_article has a heading as its own text."""
+def thdcmp_heading_rows(new_root: dict) -> tuple:
+    """(rows whose own text is a heading, rows kept) in the output of select_thdcmp_article."""
+    rows = thdcmp_kept_rows(new_root)
+    return sum(1 for r in rows if has_heading_text(r)), len(rows)
+
+
+def thdcmp_kept_rows(new_root: dict) -> list:
     rows = []
     for sec_key in ("인용조문삼단비교", "위임조문삼단비교"):
         section = new_root.get(sec_key)
         for list_key in _article_lists(section):
             rows.extend(r for r in as_list(section[list_key]) if isinstance(r, dict))
-    return bool(rows) and all(has_heading_text(r) for r in rows)
+    return rows
+
+
+def thdcmp_heading_only(new_root: dict) -> bool:
+    """True when every row kept by select_thdcmp_article has a heading as its own text."""
+    heading, kept = thdcmp_heading_rows(new_root)
+    return bool(kept) and heading == kept
 
 
 def select_thdcmp_article(root: dict, jo_code: str) -> tuple:
@@ -376,6 +405,8 @@ def select_thdcmp_article(root: dict, jo_code: str) -> tuple:
                     if isinstance(r, dict) and r.get("조번호") not in (None, "") and not is_heading_row(r)
                     and ascii_digits(r["조번호"]).zfill(4) == number
                     and ascii_digits(r.get("조가지번호") or "00").zfill(2) == branch]
+            # a kept row whose own text is a heading (it carries delegated children) is marked per row
+            keep = [{**r, "own_text_is_heading": True} if has_heading_text(r) else r for r in keep]
             total += len(rows)
             matched += len(keep)
             new_section[list_key] = keep

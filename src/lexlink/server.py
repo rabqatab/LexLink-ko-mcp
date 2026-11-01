@@ -36,7 +36,7 @@ from .law_extras import (
     as_list, ascii_digits, filter_abbreviations, normalize_jo_info, normalize_ranked_rows,
     normalize_thdcmp_knd, oldnew_has_none, oldnew_versions, parse_json_root,
     parse_lstrm_xml, select_thdcmp_article, thdcmp_anchor, thdcmp_has_no_comparison,
-    thdcmp_heading_only, thdcmp_mismatch, total_count, validate_choice, validate_digits, validate_display,
+    thdcmp_heading_rows, thdcmp_mismatch, total_count, validate_choice, validate_digits, validate_display,
     validate_gana, validate_law_list_filters, validate_list_type, validate_org, validate_yyyymmdd,
     validate_ymd_range,
 )
@@ -5908,11 +5908,14 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         }
         add_no_results_guidance(response)
         add_no_more_results_hint(response, page, display)
+        warnings = [response["warning"]] if response.get("warning") else []
         if matched and start >= len(matched):
-            response["warning"] = "page_out_of_range"
+            warnings.append("page_out_of_range")
         if mismatch:
-            response["warning"] = (f"upstream_total_mismatch: upstream totalCnt {declared} but {len(rows)} rows returned; "
-                                   "the list may be incomplete (not cached)")
+            warnings.append(f"upstream_total_mismatch: upstream totalCnt {declared if declared is not None else '(missing or not a number)'} "
+                            f"but {len(rows)} rows returned; the list may be incomplete (not cached)")
+        if warnings:
+            response["warning"] = " / ".join(warnings)
         return response
 
     # ==================== TOOL 62: licbyl_search ====================
@@ -6165,12 +6168,19 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             )
         response["raw_content"] = json.dumps({root_key: new_root}, ensure_ascii=False)
         response["selection"] = {"jo": jo, "matched_rows": matched, "total_rows": total}
-        if thdcmp_heading_only(new_root):
-            response["selection"]["own_text_is_heading"] = True
+        heading_rows, kept_rows = thdcmp_heading_rows(new_root)
+        if heading_rows:
+            only = heading_rows == kept_rows
+            response["selection"]["heading_rows"] = heading_rows
+            if only:
+                response["selection"]["own_text_is_heading"] = True
             response["warning"] = (
                 (response["warning"] + " / " if response.get("warning") else "")
-                + "이 knd에서 업스트림의 법률조문 조내용은 조문이 아니라 장·절 제목입니다(조번호만 해당 조문). "
-                  "조문 본문으로 인용하지 마세요. 시행령·시행규칙 하위 조문은 유효하며, 법률 조문 본문은 knd=1 또는 "
+                + ("이 knd에서 업스트림의 법률조문 조내용은 조문이 아니라 장·절 제목입니다(조번호만 해당 조문). "
+                   if only else
+                   f"반환된 {kept_rows}행 중 {heading_rows}행은 조내용이 조문이 아니라 장·절 제목입니다"
+                   "(행마다 own_text_is_heading=true 표시, 조번호만 해당 조문). ")
+                + "조문 본문으로 인용하지 마세요. 시행령·시행규칙 하위 조문은 유효하며, 법률 조문 본문은 knd=1 또는 "
                   "eflaw_service / law_service(jo)로 확인하세요")
         return response
 

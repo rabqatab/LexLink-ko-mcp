@@ -1036,3 +1036,57 @@ def test_thd_cmp_plain_headings_are_still_excluded_and_real_articles_have_no_hea
     assert_error(t("thdCmp_service", knd=1, id="1", jo=5), "ARTICLE_NOT_FOUND")
     ok = t("thdCmp_service", knd=1, id="1", jo=6)
     assert ok["status"] == "ok" and "own_text_is_heading" not in ok["selection"] and "warning" not in ok
+
+
+@pytest.mark.unit
+def test_thd_cmp_heading_row_with_children_next_to_a_real_row_is_marked_per_row(call):
+    heading = so_row("0094", "제4절 양도소득금액의 계산 <개정 2009.12.31>", "0157")
+    real = {"조제목": "제94조(양도소득의 범위)", "조가지번호": "00", "조내용": "양도소득은 다음 각 호의 소득으로 한다.", "조번호": "0094"}
+    out = call({(SERVICE, "thdCmp"): thd_body([heading, real])})("thdCmp_service", knd=1, id="1", jo=94)
+    kept = json.loads(out["raw_content"])["ThdCmpLawXService"]["인용조문삼단비교"]["법률조문"]
+    assert [bool(r.get("own_text_is_heading")) for r in kept] == [True, False]
+    assert out["selection"] == {"jo": "009400", "matched_rows": 2, "total_rows": 2, "heading_rows": 1}
+    assert "1행은" in out["warning"] and "own_text_is_heading" in out["warning"]
+
+
+@pytest.mark.unit
+def test_thd_cmp_sentence_starting_with_je_n_jang_is_not_a_heading(call):
+    rows = [{"조번호": "0007", "조가지번호": "00", "조제목": "제7조(적용)", "조내용": "제3장에 따른 신고는 다음과 같다."},
+            {"조번호": "0007", "조가지번호": "00", "조제목": "", "조내용": "제3장에 따른 신고를 한다."},
+            {"조번호": "0007", "조가지번호": "00", "조제목": "", "조내용": "제3장 총칙"}]
+    out = call({(SERVICE, "thdCmp"): thd_body(rows)})("thdCmp_service", knd=1, id="1", jo=7)
+    kept = json.loads(out["raw_content"])["ThdCmpLawXService"]["인용조문삼단비교"]["법률조문"]
+    assert [r["조내용"] for r in kept] == ["제3장에 따른 신고는 다음과 같다.", "제3장에 따른 신고를 한다."]
+    assert "own_text_is_heading" not in out["selection"] and "warning" not in out
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("text", ["제1장 총칙", "제2장의2 벌칙 <신설 2020.1.1>", "제4절 양도소득금액의 계산 <개정 2009.12.31>", "제1편", "제3관 보칙"])
+def test_heading_text_forms(text):
+    from lexlink.law_extras import has_heading_text
+    assert has_heading_text({"조제목": "", "조내용": text})
+    assert not has_heading_text({"조제목": "제3조(x)", "조내용": text})
+
+
+@pytest.mark.unit
+def test_abrv_mismatch_keeps_no_results_and_page_out_of_range_warnings(call):
+    d = json.loads(fx("lsAbrv_list_trimmed.json"))
+    d["LawSearch"]["totalCnt"] = str(len(d["LawSearch"]["law"]) + 5)
+    t = call({(SEARCH, "lsAbrv"): json.dumps(d, ensure_ascii=False)})
+    none = t("lsAbrv_search", query="존재하지않는약칭zzz")
+    assert "no_results" in none["warning"] and "upstream_total_mismatch" in none["warning"] and none["hints"]
+    far = t("lsAbrv_search", display=10, page=999)
+    assert "page_out_of_range" in far["warning"] and "upstream_total_mismatch" in far["warning"]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("total", [None, "abc"])
+def test_abrv_missing_totalcnt_message_is_readable(call, total):
+    d = json.loads(fx("lsAbrv_list_trimmed.json"))
+    if total is None:
+        del d["LawSearch"]["totalCnt"]
+    else:
+        d["LawSearch"]["totalCnt"] = total
+    out = call({(SEARCH, "lsAbrv"): json.dumps(d, ensure_ascii=False)})("lsAbrv_search", display=100)
+    assert out["status"] == "ok" and "upstream_total_mismatch" in out["warning"]
+    assert "None" not in out["warning"] and "totalCnt (missing or not a number)" in out["warning"]

@@ -94,7 +94,10 @@ def redact_oc(text: str, oc: str | None = None) -> str:
       * shorter values are replaced only directly after ``=``, ``&``, or
         ``="`` / ``='`` (left context) and before a quote, ``&``, ``<``, ``>``
         or whitespace. A short value elsewhere (``"law" means``) is left alone
-        on purpose, so oc="law" never alters English statute text.
+        on purpose, so oc="law" never alters English statute text;
+      * a short value directly after an ``OC`` label (``OC g4c는``, ``oc: g4c``,
+        ``(OC=g4c,``) is also replaced; the match is ASCII-delimited, so Korean
+        text next to it is kept and ``DOC g4c`` / ``OC g4cx`` are untouched.
     """
     if not text:
         return text
@@ -118,6 +121,13 @@ def redact_oc(text: str, oc: str | None = None) -> str:
                 rf"""(?:(?<=[=&])|(?<==")|(?<=='))"""
                 rf"""{re.escape(oc)}(?=["'&<>\s])""",
                 "***", text,
+            )
+            # Free-text echoes ("OC g4c 는", "oc: g4c", "(OC=g4c,"): the value is redacted when an
+            # ASCII-delimited "OC" label directly precedes it, whatever follows (Korean particles,
+            # punctuation). Without the label a short value is left alone (see docstring).
+            text = re.sub(
+                rf"""(?<![A-Za-z0-9_-])(OC\s*[:=]?\s*["']?){re.escape(oc)}(?![A-Za-z0-9_])""",
+                r"\1***", text, flags=re.I,
             )
     return text
 
@@ -165,6 +175,15 @@ def _is_no_match_message(s: str) -> bool:
     s = s.strip()
     m = NO_MATCH_RE.search(s)
     return bool(m) and len(s) <= 200 and m.start() <= 20
+
+
+_HTML_HIDDEN_RE = re.compile(r"<(script|style)\b.*?</\1\s*>|<!--.*?-->", re.I | re.S)
+_HTML_TAG_RE = re.compile(r"<[^>]*>")
+
+
+def _html_visible_text(text: str) -> str:
+    """Text a browser would show: scripts, styles, comments and tags dropped, whitespace collapsed."""
+    return re.sub(r"\s+", " ", _HTML_TAG_RE.sub(" ", _HTML_HIDDEN_RE.sub(" ", text))).strip()
 
 
 def _is_bare_no_match(text: str) -> bool:
@@ -280,6 +299,7 @@ def detect_upstream_body_error(
       - 미신청된 목록/본문      → API not applied for by the OC account (API_NOT_SUBSCRIBED)
       - <div id="error500">    → generic upstream error page            (UPSTREAM_HTML_ERROR)
       - any HTML page when XML/JSON was requested                       (UPSTREAM_HTML_ERROR)
+      - JSON requested, body starts with { or [ but does not parse      (UPSTREAM_ERROR)
 
     Returns a structured error dict (status="error") or None when the body looks
     like a normal payload. Anti-bot JS redirect pages are handled before this
@@ -373,7 +393,10 @@ def detect_upstream_body_error(
 
     # 6) "일치하는 …가 없습니다" on a service (본문) call: id missing or body not provided.
     # Length bound keeps real judgments that quote the phrase from tripping this.
-    if endpoint == "/DRF/lawService.do" and _is_bare_no_match(text):
+    # (in HTML the same message arrives inside a page, e.g. oldAndNew: "일치하는 신구법 없습니다.")
+    if endpoint == "/DRF/lawService.do" and (
+        _is_bare_no_match(text) or (is_html and _is_bare_no_match(_html_visible_text(text)))
+    ):
         if "일치하는 법령이 없습니다" in text:
             message = (
                 "일치하는 법령이 없습니다. MST(법령일련번호)가 최신인지 확인하세요. "
@@ -421,6 +444,24 @@ def detect_upstream_body_error(
             "법제처 API가 본문 조회에 빈 JSON 객체를 반환했습니다. ID가 잘못되었거나 "
             "해당 target을 알 수 없습니다. law.go.kr returned an empty JSON object.",
         )
+
+    # 8) JSON requested, body looks like JSON but does not parse: a cut-off transfer. An error is
+    # never cached, so a truncated body is not served again.
+    if fmt == "JSON" and text.lstrip()[:1] in ("{", "["):
+        try:
+            json.loads(text, strict=False)
+        except ValueError:
+            return create_error_response(
+                error_code=ErrorCode.UPSTREAM_ERROR,
+                message="법제처 API가 불완전한 JSON을 반환했습니다 (응답이 중간에 끊긴 것으로 보입니다). "
+                        "law.go.kr returned truncated or invalid JSON.",
+                hints=[
+                    "잠시 후 다시 시도하세요. 불완전한 응답은 캐시하지 않습니다",
+                    "Retry in a few seconds; incomplete bodies are not cached",
+                ],
+                request_id=request_id,
+                upstream_target=target,
+            )
 
     return None
 

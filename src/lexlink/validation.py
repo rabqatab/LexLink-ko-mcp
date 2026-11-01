@@ -29,7 +29,7 @@ def validate_date_range(date_range: str, param_name: str) -> None:
         >>> validate_date_range("2024-01-01~2024-12-31", "ef_yd")  # Invalid
         ValueError: ef_yd must be in format YYYYMMDD~YYYYMMDD, got: 2024-01-01~2024-12-31
     """
-    pattern = r"^\d{8}~\d{8}$"
+    pattern = r"^[0-9]{8}~[0-9]{8}$"
 
     if not re.match(pattern, date_range):
         raise ValueError(
@@ -114,11 +114,11 @@ class JoFormatError(ValueError):
 
 # 제35조의5 / 35조의5 / 35의5 / 35조 / 35 (optional whitespace, full-width-free)
 _JO_KOREAN_RE = re.compile(
-    r"^제?\s*(\d{1,4})\s*조?\s*(?:의\s*(\d{1,2}))?$"
+    r"^제?\s*([0-9]{1,4})\s*조?\s*(?:의\s*([0-9]{1,2}))?$"
 )
 # 35-5, 35_5, 35.5, 35/5, 35:5, 35,5, (35,5), [35, 5]
 _JO_SEPARATED_RE = re.compile(
-    r"^[\(\[]?\s*(\d{1,4})\s*[-_./:,]\s*(\d{1,2})\s*[\)\]]?$"
+    r"^[\(\[]?\s*([0-9]{1,4})\s*[-_./:,]\s*([0-9]{1,2})\s*[\)\]]?$"
 )
 
 
@@ -153,7 +153,7 @@ def normalize_jo(value: Union[str, int, None]) -> Optional[str]:
     text = re.sub(r"\s+", " ", text)
 
     # Exactly 6 digits: already the upstream code
-    if re.fullmatch(r"\d{6}", text):
+    if re.fullmatch(r"[0-9]{6}", text):
         article, branch = int(text[:4]), int(text[4:])
         if article < 1:
             raise JoFormatError(
@@ -162,7 +162,7 @@ def normalize_jo(value: Union[str, int, None]) -> Optional[str]:
         return text
 
     # 5 digits is ambiguous (e.g. "35505" could be 355의5 or 35의50) — reject
-    if re.fullmatch(r"\d{5}", text):
+    if re.fullmatch(r"[0-9]{5}", text):
         raise JoFormatError(
             f"jo 값 '{text}'은(는) 5자리여서 해석이 모호합니다. 6자리 코드(예: 003505) 또는 '35의5' 형식으로 전달하세요."
         )
@@ -185,7 +185,7 @@ def normalize_jo(value: Union[str, int, None]) -> Optional[str]:
 
 def describe_jo(code: str) -> str:
     """Render a 6-digit JO code as human-readable Korean (003505 → 제35조의5)."""
-    if not code or not re.fullmatch(r"\d{6}", code):
+    if not code or not re.fullmatch(r"[0-9]{6}", code):
         return str(code)
     article, branch = int(code[:4]), int(code[4:])
     return f"제{article}조의{branch}" if branch else f"제{article}조"
