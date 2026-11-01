@@ -199,3 +199,27 @@ def test_law_as_of_in_force_is_null_when_the_date_cannot_be_computed(stalking):
     assert out["partial_effect"]["unresolved"][0]["phrases"]
     assert "in_force=null" in out["statement"]
     assert any("대통령령으로 정하는 날" in c and "확인할 수 없습니다" in c for c in out["caveats"])
+
+
+# ---- 공포-relative wordings that used to be ignored silently (integration review L1) ----
+
+@pytest.mark.parametrize("wording", [
+    "공포 후 1년 6개월이 되는 날부터",
+    "공포 후 1년 6개월 후부터",
+    "공포한 날이 속하는 달의 다음 달 1일부터",
+    "공포일부터 1년이 경과한 날부터",
+    "공포한 날이 속하는 해의 다음 해 1월 1일부터",
+])
+def test_unhandled_relative_wording_is_flagged_never_ignored(wording):
+    u = unit("20210420", f"제1조(시행일) 제9조는 {wording} 시행한다.")
+    hits = scan_bupchik([u], 9, 0, "20210501", own=("20210420", "1"))
+    assert len(hits) == 1 and hits[0]["unresolved"], hits
+    assert not hits[0]["later_dates"]
+
+
+def test_announcement_day_and_next_day_are_computed_not_flagged():
+    u = unit("20210420", "제1조(시행일) 제9조는 공포한 날의 다음 날부터 시행한다.")
+    assert scan_bupchik([u], 9, 0, "20210420", own=("20210420", "1"))[0]["later_dates"] == ["20210421"]
+    assert scan_bupchik([u], 9, 0, "20210421", own=("20210420", "1")) == []
+    u = unit("20210420", "제1조(시행일) 제9조는 공포한 날부터 시행한다.")
+    assert scan_bupchik([u], 9, 0, "20210420", own=("20210420", "1")) == []

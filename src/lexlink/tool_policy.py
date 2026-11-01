@@ -148,7 +148,7 @@ TOOL_POLICIES: dict[str, dict] = {
     "thdCmp_service": _p("law_compare", "derived", "normal", 1, "jo 없이 호출하면 측정 89~610KB. jo 지정 시 대개 2~17KB, 건축법 제2조 약 158KB. eflaw_service와 개정 표기·따옴표 문자가 다름(14개 조문 중 8개)"),
     "check_precedent_odds": _p("assist", "heuristic", "normal", 11, "주문 분포 추정, 승률 아님. 검색 최대 2회 + 본문 조회 최대 top_n+4회(조회 불가 건 포함). 측정 3~11회, 보통 7~11회"),
     "legal_resolver": _p("assist", "heuristic", "normal", 10, "상황 -> 법령·판례·해석례 묶음. 측정 5~9회(조문 인용 포함), 최대 10회: 판례는 질의 단어로 먼저 검색하고(안 나오면 한 단어로 재검색) 3건 미만이면 법령명으로 최대 4개 조회"),
-    "simplify_article": _p("assist", "heuristic", "normal", 3, "조문 원문만 반환, 용어 사전은 제공하지 않음(withheld). 법령 검색 1~2회 + 조문 1회, 측정 2회"),
+    "simplify_article": _p("assist", "primary", "normal", 3, "조문 원문만 반환, 용어 사전은 제공하지 않음(withheld). 법령 검색 1~2회 + 조문 1회, 측정 2회"),
     "chain_full_research": _p("chain", "heuristic", "normal", 20, "legal_resolver + check_precedent_odds 묶음. 측정 13~14회, 최대 약 20회(resolver 10 + odds 11 중 겹치는 검색 제외)"),
     "chain_amendment_track": _p("chain", "primary", "normal", 5, "대형 법령은 이력 페이지 추가로 최대 7회(건축법 6, 소득세법 7)"),
     "chain_dispute_prep": _p("chain", "primary", "normal", 8, "4개 출처, 결과가 적으면 출처마다 본문 검색 1회 추가(5~8회)"),

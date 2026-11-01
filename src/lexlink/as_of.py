@@ -219,6 +219,15 @@ _DELEGATED_RE = re.compile(
 )
 
 
+# "공포한 날부터 시행", "공포한 날의 다음 날부터 시행": the 공포일 itself / the day after it
+_SIMPLE_ANNOUNCE_RE = re.compile(
+    r"공포\s*(?:한\s*날|일)(?P<nx>\s*의\s*다음\s*날)?\s*(?:부터|에|로부터)?\s*(?=(?:이\s*법을\s*)?(?:시행|적용))")
+# Any other 공포-relative wording that names a date ("공포 후 1년 6개월이 되는 날", "공포한 날이 속하는 달의
+# 다음 달 1일", "공포일부터 1년이 경과한 날"): not computed here, so it is reported as unresolved, never ignored.
+_GENERIC_REL_RE = re.compile(
+    r"공포[^.;。]{0,60}?(?:후|부터|이\s*속하는|다음|경과|지난|이내|되는\s*날)[^.;。]{0,30}")
+
+
 def _add_months(d: date, n: int) -> date:
     y, m = divmod(d.month - 1 + n, 12)
     y, m = d.year + y, m + 1
@@ -269,8 +278,24 @@ def _relative_dates(text: str, announced: str) -> tuple[set, list]:
             dates.add(got)
         else:
             unresolved.append(m.group(0))
+    spans = [m.span() for m in _REL_RE.finditer(text)]
     for m in _DELEGATED_RE.finditer(text):
         unresolved.append(m.group(0))
+        spans.append(m.span())
+    for m in _SIMPLE_ANNOUNCE_RE.finditer(text):
+        spans.append(m.span())
+        if re.fullmatch(r"\d{8}", announced or ""):
+            try:
+                a = date(int(announced[:4]), int(announced[4:6]), int(announced[6:]))
+            except ValueError:
+                continue
+            dates.add((a + timedelta(days=1) if m.group("nx") else a).strftime("%Y%m%d"))
+    for m in _GENERIC_REL_RE.finditer(text):
+        if any(m.start() < e and s < m.end() for s, e in spans):
+            continue
+        phrase = m.group(0).strip()
+        if phrase not in unresolved:
+            unresolved.append(phrase)
     return dates, unresolved
 
 

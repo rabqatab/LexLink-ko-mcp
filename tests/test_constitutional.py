@@ -277,3 +277,29 @@ def test_validation(check):
 def test_policy():
     from lexlink.tool_policy import TOOL_POLICIES
     assert TOOL_POLICIES["law_constitutional_check"]["category"] == "constitutional"
+
+
+# ---- 2009헌바106 (민법 제1008조): old 전문 without brackets (integration review M3) ----
+
+OLD_JEONMUN = (
+    "사      건      2009헌바106  민법 제1008조 등 위헌소원청  구  인      김○갑당해사건      "
+    "대전지방법원 서산지원 2005가단9038 소유권이전등기주           문이 사건 심판청구를 각하한다.이           유"
+    "기록에 의하면, 청구인은 변호사를 대리인으로 선임하지 아니한 채 이 사건 심판청구를 하였고 ..."
+)
+
+
+def test_extract_order_spaced_old_form():
+    assert cn.extract_order({"전문": OLD_JEONMUN}) == "이 사건 심판청구를 각하한다."
+    rec = cn.decision_record({"사건번호": "2009헌바106", "사건명": "민법 제1008조 등 위헌소원"},
+                             {"전문": OLD_JEONMUN, "사건번호": "2009헌바106"}, 1008, 0, "민법")
+    assert rec["outcome"] == "각하" and not rec["needs_review"]
+
+
+def test_unreadable_order_is_never_clean():
+    row = {"헌재결정례일련번호": "1", "사건번호": "2000헌바1", "사건명": "민법 제1008조 위헌소원", "종국일자": "2000.01.01"}
+    res = cn.check_article(
+        law_name="민법", article=1008, branch=0,
+        search=lambda p: {"total": 1, "rows": [row]},
+        service=lambda i: {"전문": "본문 없음", "사건번호": "2000헌바1", "사건명": row["사건명"]})
+    assert res["decisions"][0]["outcome"] == "불명"
+    assert res["decision_status"] == cn.NEEDS_REVIEW

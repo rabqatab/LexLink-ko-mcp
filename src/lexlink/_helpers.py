@@ -1181,14 +1181,21 @@ def distinctive_terms(terms: list) -> list:
 
 
 def matched_query_terms(terms: list, *texts) -> list:
-    """The ``terms`` that occur in any of ``texts`` (case-insensitive, spaces ignored).
+    """The ``terms`` that occur in any of ``texts`` (case-insensitive) at the START of a word
+    (a mid-word hit such as 외도 in 국외도피 does not count).
 
     A literal check only: it shows word overlap, not meaning, and can err both ways. A term
     also matches when (3+ characters) its stem without the last character occurs (양육권 in
     "양육", 퇴직금 in "퇴직급여"), when (4+ characters) both halves occur (공정이용 in
     "공정한 이용"), or through a colloquial alias (집주인 -> 임대인).
     """
-    haystack = re.sub(r"\s+", "", " ".join(str(t) for t in texts if t)).lower()
+    words = re.findall(r"[0-9a-z\uAC00-\uD7A3]+", " ".join(str(t) for t in texts if t).lower())
+
+    def has(form: str) -> bool:
+        # a word must START with the form (국외도피 does not contain 외도; 양육비 starts with 양육), or
+        # for a 3+ character form END with it (임대차보호법 in 주택임대차보호법)
+        return any(w.startswith(form) or (len(form) >= 3 and w.endswith(form)) for w in words)
+
     found = []
     for term in terms:
         forms = [term]
@@ -1197,10 +1204,30 @@ def matched_query_terms(terms: list, *texts) -> list:
         if term in _TERM_ALIASES:
             forms.append(_TERM_ALIASES[term])
         half = len(term) // 2
-        if any(f in haystack for f in forms) or (
-                len(term) >= 4 and term[:half] in haystack and term[half:] in haystack):
+        if any(has(f) for f in forms) or (len(term) >= 4 and has(term[:half]) and has(term[half:])):
             found.append(term)
     return found
+
+
+def counts_for_odds(terms: list, matched: list, matched_head: list) -> bool:
+    """Whether a fetched case is counted by check_precedent_odds.
+
+    One distinctive term: any match (사건명/판시사항/판결요지) counts. Two or more: a distinctive term
+    of 3+ characters must match in the 사건명 or 판시사항 (``matched_head``), so a short common word
+    (아이) matched only in a 판결요지 cannot count an unrelated case.
+    """
+    distinct = distinctive_terms(terms)
+    if len(distinct) < 2:
+        return counts_as_overlap(terms, matched)
+    return any(t in distinct and len(t) >= 3 for t in matched_head)
+
+
+_CRIMINAL_CASE_RE = re.compile(r"\d{2,4}\s*(?:도|노|고합|고단|고정|고약|감도|감고|감노|전도|전노|보도|재도|재노|치도|치고)\s*\d")
+
+
+def is_criminal_case_number(case_no) -> bool:
+    """True for a 사건번호 of a criminal kind (2012도14788, 2019노1234, 2020고합12)."""
+    return bool(_CRIMINAL_CASE_RE.search(str(case_no or "")))
 
 
 def counts_as_overlap(terms: list, matched: list) -> bool:

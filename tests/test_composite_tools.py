@@ -478,3 +478,12 @@ def test_prompt_helper_rejects_bool(server):
     fn = server._prompt_manager._prompts["get-law-article"].fn
     with pytest.raises(ValueError):
         fn(law_id="000001", article_number=True)
+
+
+@pytest.mark.unit
+def test_explain_prompt_has_no_plain_language_mapping_table(server):
+    text = _prompt_text(server, "explain-legal-document", document_text="피고는 원고에게 위자료를 지급하라.")
+    assert "lstrm_search" in text
+    assert "| 법률 용어 | 쉬운 말 |" not in text
+    assert "검증된 쉬운 말 대응은 없" in text
+    assert "dlytrm_rlt_search 또는 lstrm_rlt_search로 쉬운 말을 검색" not in text

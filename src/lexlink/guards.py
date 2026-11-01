@@ -216,6 +216,20 @@ def check_nb_exactness(response: dict, nb: Optional[str]) -> dict:
         f"행의 사건번호를 직접 확인하세요"))
 
 
+def nb_year_form_hint(nb: Optional[str], response: dict) -> Optional[str]:
+    """Judgments before 2000 are indexed with a two-digit year (``94므1713``); the four-digit form
+    ``1994므1713`` finds nothing. Hint only when the four-digit pre-2000 form returned no rows."""
+    m = re.fullmatch(r"(19)(\d{2})([가-힣]+\d+)", nb or "")
+    if not m or not isinstance(response, dict) or response.get("status") != "ok":
+        return None
+    ranked = response.get("ranked_data")
+    rows = [v for v in ranked.values() if isinstance(v, list)] if isinstance(ranked, dict) else []
+    if any(rows[0] if rows else []):
+        return None
+    return (f"nb_year_form: 2000년 이전 사건은 두 자리 연도로 색인되어 있어 nb={nb}는 찾지 못할 수 있습니다. "
+            f"nb='{m.group(2)}{m.group(3)}'로 다시 조회하세요")
+
+
 def nb_numeric_warning(nb: Optional[str]) -> Optional[str]:
     return NB_NUMERIC_WARNING if nb and re.fullmatch(r"[0-9]+", nb) else None
 

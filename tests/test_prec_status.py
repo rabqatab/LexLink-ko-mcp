@@ -318,3 +318,13 @@ def test_policy_entry_and_registration():
     tools = {t.name for t in server_mod.create_server()._tool_manager.list_tools()}
     assert "prec_status" in tools and TOOL_POLICIES["prec_status"]["category"] == "precedent"
     assert TOOL_POLICIES["prec_status"]["evidence"] == "heuristic"
+
+
+@pytest.mark.parametrize("tail", [
+    "이 판결이 대법원 1995. 5. 23. 선고 94므1713 판결을 변경하고 있는 것이 아니다.",
+    "대법원 1995. 5. 23. 선고 94므1713 판결을 변경한 것이 아니다.",
+    "대법원 1995. 5. 23. 선고 94므1713 판결을 변경하는 것이 아니다.",
+])
+def test_not_changing_wording_is_not_evidence(tail):
+    out = ps.find_evidence({"판례내용": tail}, (1994, "므", 1713))
+    assert out["explicit"] == []

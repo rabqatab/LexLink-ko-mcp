@@ -560,3 +560,21 @@ def test_lnkLsOrdJo_non_numeric_jobr_is_validation_error(monkeypatch):
     out = call("lnkLsOrdJo_search", knd="002118", jo=20, jobr="abc")
     assert out["error_code"] == ErrorCode.VALIDATION_ERROR and "jobr" in out["message"]
     assert FakeClient.calls == []
+
+
+@pytest.mark.unit
+def test_diff_other_law_with_article_on_both_sides_is_a_validation_error(monkeypatch):
+    class Fake(FakeClient):
+        def _service(self, target, params, response_type):
+            if target == "law" and params.get("MST") == "888":
+                res = super()._service(target, {**params, "MST": "283335"}, response_type)
+                d = json.loads(res["raw_content"])
+                d["법령"]["기본정보"]["법령ID"] = "009999"
+                d["법령"]["기본정보"]["법령명_한글"] = "전혀 다른 법"
+                return self._ok(json.dumps(d, ensure_ascii=False))
+            return super()._service(target, params, response_type)
+
+    _, call = _tools(monkeypatch, Fake)
+    out = call("article_amendment_diff", mst_old="888", mst_new="283335", article=35, article_branch=5)
+    assert out["status"] == "error" and out["error_code"] == ErrorCode.VALIDATION_ERROR, out
+    assert "009999" in out["message"] and "has_changes" not in out

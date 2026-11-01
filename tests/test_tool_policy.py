@@ -135,7 +135,7 @@ def test_table_matches_documented_cases():
     assert TOOL_POLICIES["law_as_of"]["upstream_calls"] == 5
     assert TOOL_POLICIES["oldAndNew_service"]["evidence"] == "derived"
     assert TOOL_POLICIES["check_precedent_odds"]["evidence"] == "heuristic"
-    assert TOOL_POLICIES["simplify_article"]["evidence"] == "heuristic"
+    assert TOOL_POLICIES["simplify_article"]["evidence"] == "primary"
     assert TOOL_POLICIES["cache_stats"]["evidence"] == "none"
     # evidence: primary = upstream text fields unchanged (lists, sorted/filtered/repaged rows and
     # LexLink-computed side fields included); derived = wording edited or reconstructed

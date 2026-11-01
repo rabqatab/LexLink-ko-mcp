@@ -52,7 +52,7 @@ from ._helpers import (
     compact_limit, slim_limited, slim_enabled, mark_slim_cut, low_relevance_warning, SLIM_MAX_BYTES, _json_size,
     enforce_slim_limit,
     rename_row_ids_to_rank, run_ranked_paging, validate_paging, OVER_FETCH_WINDOW,
-    query_terms, matched_query_terms, distinctive_terms, counts_as_overlap,
+    query_terms, matched_query_terms, distinctive_terms, counts_as_overlap, counts_for_odds, is_criminal_case_number,
     add_no_more_results_hint, add_no_results_guidance, body_is_all_null, NO_MORE_RESULTS_HINT,
     trim_raw_to_ranked,
     NO_RESULTS_MESSAGE, NO_RESULTS_HINTS, NO_RESULTS_BODY_HINT, OUTCOME_NOTE,
@@ -1743,7 +1743,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         ))
         guards.attach_filters_applied(response, date_applied)
         guards.check_nb_exactness(response, nb)
-        return guards.add_warnings(response, capped, guards.nb_numeric_warning(nb))
+        return guards.add_warnings(response, capped, guards.nb_numeric_warning(nb),
+                                   guards.nb_year_form_hint(nb, response))
 
     # ==================== TOOL 17: prec_service ====================
     @server.tool(annotations=TOOL_ANNOTATIONS)
@@ -4066,6 +4067,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             # words by construction, so only 사건명, 판시사항 and 판결요지 can count a case.
             case_name = strip_html(item.get("사건명", ""))
             matched = matched_query_terms(terms, case_name, holding, summary_text)
+            matched_head = matched_query_terms(terms, case_name, holding)  # not 판결요지 alone
             case_info = {
                 "id": str(prec_id),
                 "name": case_name,
@@ -4074,7 +4076,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 "court": item.get("법원명", ""),
                 "matched_query_terms": matched,
             }
-            if not counts_as_overlap(terms, matched):
+            if not counts_for_odds(terms, matched, matched_head):
                 uncounted.append({**case_info, "low_relevance": True})
                 continue
             outcomes[outcome] = outcomes.get(outcome, 0) + 1
@@ -4118,14 +4120,17 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 "unavailable": unavailable,
                 "small_sample": small_sample,
                 "selection": (
-                    f"검색 결과({search_mode}) 중 사건명에 질의 단어가 있는 판례를 앞세우고 나머지는 검색 순서대로 "
-                    f"본문을 확인해, 사건명·판시사항·판결요지에 질의 단어가 있는 판례만 최대 {top_n}건 집계했습니다"
+                    f"검색 결과({search_mode})를 사건명에 질의 단어가 있는 판례가 앞에 오도록 다시 정렬하고(업스트림 순서를 바꿈, "
+                    f"나머지는 검색 순서 유지) 본문을 확인해, 질의 단어가 있는 판례만 최대 {top_n}건 집계했습니다"
+                    "(질의 단어가 둘 이상이면 3글자 이상의 단어가 사건명 또는 판시사항에 단어 시작으로 있어야 하고, 하나면 "
+                    "사건명·판시사항·판결요지 중 어디든 가능)"
                     f"(본문 조회 최대 {max_fetches}회). 무작위·전수 표본이 아닙니다"
                 ),
             },
             "statistics_note": (
                 f"outcome_summary는 검색된 {total_found}건 중 집계한 {counted}건의 주문 분류 건수일 뿐, "
-                "전체 판례의 분포가 아니며 이 사건의 승소 확률도 아닙니다"
+                "전체 판례의 분포가 아니며 이 사건의 승소 확률도 아닙니다. 관련성은 질의 단어와의 글자 일치(단어 시작) "
+                "검사라 거칠며, 집계된 판례도 사안과 다를 수 있으니 representative_cases를 직접 확인하세요"
             ),
             "key_factors": unique_factors[:compact_limit(10)],
             "search_mode": search_mode,
@@ -4313,6 +4318,11 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                         entry["found_via_law"] = law_name
                     if basis == "law_name" and not counts_as_overlap(terms, matched):
                         entry["relevance_unverified"] = True
+                    elif is_criminal_case_number(case_no) and len(matched) <= 1:
+                        # a criminal case (도/노/고합 ...) for a civil/family situation that shares one
+                        # short word only (2012도14788 matched 남편)
+                        entry["relevance_unverified"] = True
+                        entry["unverified_reason"] = "criminal_case_single_term"
                     related_precedents.append(entry)
                 break
 
@@ -4352,8 +4362,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         unverified = sum(1 for p in related_precedents if p.get("relevance_unverified"))
         if unverified:
             resolver_warnings.append(
-                f"relevance_unverified: 판례 {len(related_precedents)}건 중 {unverified}건은 법령명으로만 찾았고 "
-                "사건명에 질의 단어가 없습니다(relevance_unverified: true). 사안과 무관할 수 있습니다")
+                f"relevance_unverified: 판례 {len(related_precedents)}건 중 {unverified}건은 법령명으로만 찾았거나, 형사 사건(도/노/고합 등)이 "
+                "질의 단어 1개만 공유합니다(relevance_unverified: true). 사안과 무관할 수 있습니다")
 
         # Step 3: Citation network for the top article (upstream order; the overlap flag does not skip it)
         citations = []
@@ -4383,6 +4393,11 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             if current_row:
                 mst = current_row.get("법령일련번호", "")
 
+            if top.get("low_relevance"):
+                resolver_warnings.append(
+                    f"citations_low_relevance: 인용 관계는 upstream 1순위 조문({top['law_name']} {top.get('article', '')}조)로 "
+                    "찾았고, 이 조문은 질의의 핵심 단어가 보이지 않는 것으로 표시되었습니다(low_relevance). 인용 결과가 사안과 "
+                    "무관할 수 있습니다")
             if mst and top.get("article"):
                 try:
                     from .citation import extract_article_citations
@@ -4739,16 +4754,15 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         # the same law (법령ID survives renames; names may differ). Otherwise there is no verdict.
         old_law = (old_info or {}).get("law") or absent_law.get(mst_old) or {}
         new_law = (new_info or {}).get("law") or absent_law.get(mst_new) or {}
-        if (old_info is None) != (new_info is None):
-            if old_law.get("law_id") and new_law.get("law_id") and old_law["law_id"] != new_law["law_id"]:
-                return create_error_response(
-                    error_code=ErrorCode.VALIDATION_ERROR,
-                    message=(f"MST {mst_old}({old_law.get('law_name', '?')}, 법령ID {old_law['law_id']})와 "
-                             f"MST {mst_new}({new_law.get('law_name', '?')}, 법령ID {new_law['law_id']})는 서로 다른 법령이라 "
-                             f"{article_display}의 신설/삭제를 판단할 수 없습니다. "
-                             "The two MSTs belong to different laws, so no added/deleted verdict is given."),
-                    hints=["law_amendment_summary로 같은 법령ID의 MST 두 개를 골라 비교하세요."],
-                )
+        if old_law.get("law_id") and new_law.get("law_id") and old_law["law_id"] != new_law["law_id"]:
+            return create_error_response(
+                error_code=ErrorCode.VALIDATION_ERROR,
+                message=(f"MST {mst_old}({old_law.get('law_name', '?')}, 법령ID {old_law['law_id']})와 "
+                         f"MST {mst_new}({new_law.get('law_name', '?')}, 법령ID {new_law['law_id']})는 서로 다른 법령이라 "
+                         f"{article_display}를 비교할 수 없습니다. "
+                         "The two MSTs belong to different laws, so no comparison or added/deleted verdict is given."),
+                hints=["law_amendment_summary로 같은 법령ID의 MST 두 개를 골라 비교하세요."],
+            )
         else_warning = None
         if (old_info is None) != (new_info is None) and not (old_law.get("law_id") and new_law.get("law_id")):
             else_warning = ("조문이 없는 쪽 버전의 법령ID를 확인하지 못해 같은 법령인지 검증되지 않았습니다 "
@@ -7285,7 +7299,7 @@ Tool selection priority for unclear queries:
 
 **필수 단계**:
 
-1. 문서에서 법률 용어를 찾아 dlytrm_rlt_search 또는 lstrm_rlt_search로 쉬운 말을 검색하세요.
+1. 문서에서 법률 용어를 찾아 lstrm_search로 법령용어 정의를 확인하세요. 법제처 용어 연결(dlytrm_rlt_search, lstrm_rlt_search)은 법적 의미가 다른 용어를 '쉬운 말'로 연결할 수 있어 쉬운 말 대응표로 쓰지 마세요.
 2. 언급된 법령이 있으면 eflaw_search 또는 aiSearch로 관련 조문을 확인하세요.
 
 **응답 형식**:
@@ -7294,9 +7308,7 @@ Tool selection priority for unclear queries:
 - 이 문서가 무엇을 말하는지 일상적인 한국어로 설명
 
 **📝 핵심 용어**
-| 법률 용어 | 쉬운 말 |
-|-----------|---------|
-| (용어) | (설명) |
+- (용어): lstrm_search에서 확인한 정의를 출처와 함께 적으세요. 검증된 쉬운 말 대응은 없으므로 쉬운 말로 바꿔 쓰지 말고, 정의가 확인되지 않은 용어는 "확인되지 않음"이라고 적으세요.
 
 **💡 당신에게 미치는 영향**
 - 이 문서가 당신에게 의미하는 바

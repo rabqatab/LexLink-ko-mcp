@@ -75,6 +75,8 @@ def title_names_law(title: str, law_name: str) -> bool:
 
 
 _ORDER_RE = re.compile(r"[\[【]\s*주\s*문\s*[\]】](.*?)[\[【]\s*이\s*유\s*[\]】]", re.S)
+# Older 전문 texts have no brackets: "주           문이 사건 심판청구를 각하한다.이           유기록에 ..."
+_ORDER_SPACED_RE = re.compile(r"주\s{2,}문(.*?)이\s{2,}유", re.S)
 _OUTCOME_RULES = (
     # (label, regex); on overlapping matches the earlier rule wins
     ("헌법불합치", re.compile(r"헌법에\s*합치되지\s*아니(?:한다|하나|하고|하며)")),
@@ -93,7 +95,8 @@ def _clean(text: Any) -> str:
 
 def extract_order(fields: dict) -> str:
     """The 주문 text of a detc_service body ('' when the 전문 has no recognizable 주문 section)."""
-    m = _ORDER_RE.search(str(fields.get("전문") or ""))
+    text = str(fields.get("전문") or "")
+    m = _ORDER_RE.search(text) or _ORDER_SPACED_RE.search(text)
     return _clean(m.group(1)) if m else ""
 
 
@@ -173,7 +176,10 @@ def decision_record(row: dict, fields: dict, article: int, branch: int, law_name
         "outcome": ("/".join(dict.fromkeys(labels)) if labels else "불명"),
         "article_specific": cls["article_specific"],
         "adverse": bool(adverse),
-        "needs_review": bool(cls["needs_review"] and not adverse),
+        # a decision whose 주문 could not be read (outcome 불명) must never read as clean
+        "needs_review": bool((cls["needs_review"] or not labels) and not adverse),
+        "needs_review_reason": ("주문을 읽지 못했거나 결과를 분류하지 못했습니다(outcome 불명)"
+                                if not labels and not adverse else None),
         "order": order[:500],
         "holding_note": _clean(fields.get("판시사항"))[:300],
     }

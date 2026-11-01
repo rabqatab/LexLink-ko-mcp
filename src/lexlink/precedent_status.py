@@ -216,7 +216,7 @@ def change_ties_to_case(text: str, hs: int, he: int, change_start: int) -> bool:
         rest = rest[:m.start()] + " " + rest[m.end():]
     rest = _LIST_FILLER_RE.sub("", rest)
     return rest in ("", "은", "는", "을", "를", "도")      # the subject/object particle of the last case in the list
-_NEGATED_RE = re.compile(r"(변경|폐기)\s*(?:할\s*필요가?\s*없|하지\s*(?:아니|않)|할\s*수\s*없|할\s*이유가?\s*없)")
+_NEGATED_RE = re.compile(r"(변경|폐기)\s*(?:할\s*필요가?\s*없|하지\s*(?:아니|않)|할\s*수\s*없|할\s*이유가?\s*없|(?:하고\s*있는|한|하는)\s*것(?:이|은)\s*아니)")
 _GENERIC_RE = re.compile(r"(?:대법원|판결|판례|견해|결정|선례|법리)")
 
 
