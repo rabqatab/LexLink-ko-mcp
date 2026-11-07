@@ -76,13 +76,21 @@ def _blank_tag(m: "re.Match[str]", ) -> str:
     return _VALUE_ATTR_RE.sub('value=""', tag)
 
 
-def redact_oc(text: str, oc: str | None = None) -> str:
+def redact_oc(text: str, oc: str | None = None, *, shared: bool = False) -> str:
     """Mask ``oc`` plus the server env OC and the current request OC (see ``oc_context``).
+
+    ``shared=True`` is for text that goes into the shared response cache: only the server env OC
+    and the structural patterns (``OC=`` params, OC labels/elements) are masked, never the caller's
+    own OC literally (an OC such as ``totalCnt`` would otherwise corrupt the cached body for every
+    caller). The caller's copy is masked literally at the end of the tool call (``_helpers``).
 
     The generic ``OC=`` patterns are documented on ``_redact_one``.
     """
     if not text:
         return text
+    if shared:
+        env_oc = (os.environ.get("OC") or "").strip()
+        return _redact_one(text, env_oc or None)
     for secret in dict.fromkeys([*([oc] if oc else []), *secret_ocs()]):
         text = _redact_one(text, secret)
     return _redact_one(text, None) if not (oc or secret_ocs()) else text
@@ -321,7 +329,7 @@ def detect_upstream_body_error(
 
     law.go.kr signals many failures with HTTP 200:
       - 0-byte body            → unknown target / wrong endpoint       (EMPTY_RESPONSE)
-      - 사용자 정보 검증 실패   → OC / IP not authorised                (UPSTREAM_ERROR)
+      - 사용자 정보 검증 실패   → OC / IP not authorised                (OC_AUTH_FAILED)
       - 미신청된 목록/본문      → API not applied for by the OC account (API_NOT_SUBSCRIBED)
       - <div id="error500">    → generic upstream error page            (UPSTREAM_HTML_ERROR)
       - any HTML page when XML/JSON was requested                       (UPSTREAM_HTML_ERROR)
@@ -824,7 +832,7 @@ class LawAPIClient:
         Returns:
             Response with raw content, or error if upstream body contains error
         """
-        body = redact_oc(response.text, oc)
+        body = redact_oc(response.text, oc, shared=True)  # cached by callers: no literal caller OC
         error = detect_upstream_body_error(
             body, format_type, request_id=request_id, target=target, endpoint=endpoint
         )

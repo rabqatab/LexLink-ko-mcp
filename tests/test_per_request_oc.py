@@ -58,6 +58,8 @@ def app_env(monkeypatch, tmp_path):
         if mode["auth_fail"]:
             return httpx.Response(200, text=f"<Law>사용자 정보 검증에 실패하였습니다. OC={oc}</Law>", request=request)
         body = json.dumps(LAW, ensure_ascii=False).replace("{oc}", oc or "")
+        if mode.get("echo_free_text"):
+            body = body.replace("민법", f"민법 echo {oc} end", 1)
         return httpx.Response(200, text=body, request=request)
 
     real = server_mod.LawAPIClient
@@ -75,8 +77,8 @@ def app_env(monkeypatch, tmp_path):
     get_cache().invalidate()
 
 
-def _session(c):
-    r = c.post("/mcp", json=INIT, headers=auth_headers())
+def _session(c, oc=None):
+    r = c.post("/mcp", json=INIT, headers={**auth_headers(), **({"X-LexLink-OC": oc} if oc else {})})
     sid = r.headers["mcp-session-id"]
     h = {**auth_headers(), "mcp-session-id": sid}
     c.post("/mcp", json={"jsonrpc": "2.0", "method": "notifications/initialized"}, headers=h)
@@ -84,9 +86,9 @@ def _session(c):
 
 
 def _call(c, h, name, args, oc=None, rid=10):
-    hh = dict(h)
-    if oc is not None:
-        hh["X-LexLink-OC"] = oc
+    hh = list(h.items())
+    for value in ([] if oc is None else oc if isinstance(oc, list) else [oc]):
+        hh.append(("X-LexLink-OC", value))
     r = c.post("/mcp", json={"jsonrpc": "2.0", "id": rid, "method": "tools/call",
                              "params": {"name": name, "arguments": args}}, headers=hh)
     assert r.status_code == 200, r.text
@@ -215,3 +217,81 @@ def test_errors_are_not_cached_and_cache_key_has_no_oc(monkeypatch, app_env):
         res, text = _call(c, h, "law_search", {"query": "민법"}, HDR_OC2, rid=11)
         assert res.get("isError") is not True
     assert seen[-1][1] == HDR_OC2
+
+
+def test_caller_oc_that_looks_like_a_json_key_does_not_poison_the_shared_cache(monkeypatch, app_env):
+    seen, mode, tmp = app_env
+    _flag(monkeypatch)
+    with TestClient(http_server.create_app()) as c:
+        h = _session(c)
+        _, text_a = _call(c, h, "law_search", {"query": "민법"}, "totalCnt")
+        n = len(seen)
+        _, text_b = _call(c, h, "law_search", {"query": "민법"}, HDR_OC2, rid=11)
+        assert len(seen) == n  # B was served from the shared cache
+        assert "totalCnt" in text_b and "법령명한글" in text_b  # intact for everyone else
+    assert "totalCnt" not in text_a  # the caller's own OC is masked in its own copy
+    assert "***" in text_a
+
+
+def test_header_oc_echoed_in_free_text_is_masked_in_result_and_logs(monkeypatch, app_env):
+    seen, mode, tmp = app_env
+    _flag(monkeypatch)
+    mode["echo_free_text"] = True
+    with TestClient(http_server.create_app()) as c:
+        h = _session(c)
+        _, text = _call(c, h, "law_search", {"query": "민법"}, HDR_OC)
+    assert "echo" in text  # the echo is present but masked
+    assert HDR_OC not in text and HDR_OC not in _logs(tmp)
+
+
+def test_end_request_oc_restores_server_oc(monkeypatch):
+    from lexlink import oc_context
+    from lexlink.params import resolve_oc
+    monkeypatch.setenv("OC", ENV_OC)
+    monkeypatch.setenv("LEXLINK_ACCEPT_OC_HEADER", "true")
+    set_ignore_oc_override(True)
+    try:
+        token = oc_context.begin_request_oc({oc_context.OC_HEADER: HDR_OC})
+        assert resolve_oc() == HDR_OC
+        oc_context.end_request_oc(token)
+        assert oc_context.get_request_oc() is None and resolve_oc() == ENV_OC
+        token = oc_context.begin_request_oc({oc_context.OC_HEADER: "bad value"})
+        oc_context.end_request_oc(token)
+        assert resolve_oc() == ENV_OC
+    finally:
+        set_ignore_oc_override(False)
+
+
+def test_duplicate_headers_are_invalid_in_tool_path_and_logger(monkeypatch, app_env):
+    seen, mode, tmp = app_env
+    _flag(monkeypatch)
+    with TestClient(http_server.create_app()) as c:
+        h = _session(c)
+        _, text = _call(c, h, "law_search", {"query": "민법"}, [HDR_OC, HDR_OC2])
+        assert "VALIDATION_ERROR" in text
+    assert seen == []
+    log = _logs(tmp)
+    assert HDR_OC not in log and HDR_OC2 not in log and '"oc_source": "server"' in log
+
+
+def _read_resource(c, h, name, oc=None, rid=50):
+    hh = list(h.items()) + ([("X-LexLink-OC", oc)] if oc else [])
+    r = c.post("/mcp", json={"jsonrpc": "2.0", "id": rid, "method": "resources/read",
+                             "params": {"uri": f"lexlink://law/{name}"}}, headers=hh)
+    assert r.status_code == 200, r.text
+    return r.text
+
+
+def test_resource_read_uses_its_own_request_oc_not_the_session_creators(monkeypatch, app_env):
+    seen, mode, tmp = app_env
+    _flag(monkeypatch)
+    with TestClient(http_server.create_app()) as c:
+        h = _session(c, oc=HDR_OC)  # session created by "Alice"
+        _read_resource(c, h, "없는법령가", oc=HDR_OC2, rid=51)
+        assert seen and {o for _, o in seen} == {HDR_OC2}
+        seen.clear()
+        _read_resource(c, h, "없는법령나", rid=52)
+        assert seen and {o for _, o in seen} == {ENV_OC}
+        seen.clear()
+        _call(c, h, "law_search", {"query": "형법"}, rid=53)
+        assert {o for _, o in seen} == {ENV_OC}

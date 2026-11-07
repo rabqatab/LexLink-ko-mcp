@@ -377,6 +377,58 @@ def _request_headers():
         return None
 
 
+def _mask_request_oc_in_result(root) -> None:
+    """Mask the caller's own OC literally in the CallToolResult returned to that caller.
+
+    Cached/shared bodies are only masked structurally (``redact_oc(shared=True)``); the literal
+    caller OC is removed here, from this caller's copy only.
+    """
+    from mcp import types
+    if not oc_context.get_request_oc() or not isinstance(root, types.CallToolResult):
+        return
+
+    def mask(obj):
+        if isinstance(obj, str):
+            return redact_oc(obj)
+        if isinstance(obj, dict):
+            return {mask(k): mask(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [mask(v) for v in obj]
+        return obj
+
+    for item in root.content or []:
+        text = getattr(item, "text", None)
+        if isinstance(text, str):
+            item.text = redact_oc(text)
+    if root.structuredContent is not None:
+        root.structuredContent = mask(root.structuredContent)
+
+
+def _wrap_request_oc(server_cls, method_name: str, req_type) -> None:
+    original = getattr(server_cls, method_name)
+
+    def patched(self, *args, **kwargs):
+        decorator = original(self, *args, **kwargs)
+
+        def register(func):
+            registered = decorator(func)
+            inner = self.request_handlers[req_type]
+
+            async def handler(req):
+                token = oc_context.begin_request_oc(_request_headers())
+                try:
+                    return await inner(req)
+                finally:
+                    oc_context.end_request_oc(token)
+
+            self.request_handlers[req_type] = handler
+            return registered
+
+        return register
+
+    setattr(server_cls, method_name, patched)
+
+
 UPSTREAM_CALLS_META_KEY = "lexlink/upstream_calls"
 
 
@@ -406,6 +458,7 @@ def _install_upstream_call_meta() -> None:
                 oc_token = oc_context.begin_request_oc(_request_headers())
                 try:
                     result = await inner(req)
+                    _mask_request_oc_in_result(getattr(result, "root", None))
                 finally:
                     oc_context.end_request_oc(oc_token)
                     count = end_counter(token)
@@ -421,6 +474,12 @@ def _install_upstream_call_meta() -> None:
         return decorator
 
     Server.call_tool = call_tool
+
+    # resources/read and prompts/get can call resolve_oc too (e.g. lexlink://law/{name}): they get
+    # the OC of their own request, never one inherited from the session-creating request.
+    for method_name, req_type in (("read_resource", types.ReadResourceRequest),
+                                  ("get_prompt", types.GetPromptRequest)):
+        _wrap_request_oc(Server, method_name, req_type)
 
 
 def install_threaded_tool_calls() -> None:

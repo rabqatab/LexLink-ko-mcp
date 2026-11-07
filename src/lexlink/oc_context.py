@@ -29,16 +29,27 @@ def accept_oc_header() -> bool:
 
 
 def parse_oc_header(headers: Optional[Mapping[str, Any]]) -> tuple[Optional[str], bool]:
-    """(valid OC or None, header_present_but_invalid). Never raises; honours the env flag."""
+    """(valid OC or None, header_present_but_invalid). Never raises; honours the env flag.
+
+    ``headers`` is a Starlette ``Headers`` (``getlist``) or a dict whose value may be a list.
+    More than one ``X-LexLink-OC`` header is invalid (first-wins vs last-wins would differ
+    between the tool path and the logger).
+    """
     if headers is None or not accept_oc_header():
         return None, False
     try:
-        raw = headers.get(OC_HEADER)
+        if hasattr(headers, "getlist"):
+            values = list(headers.getlist(OC_HEADER))
+        else:
+            raw = headers.get(OC_HEADER)
+            values = [] if raw is None else (list(raw) if isinstance(raw, (list, tuple)) else [raw])
     except Exception:
         return None, False
-    if raw is None:
+    if not values:
         return None, False
-    value = raw.strip()
+    if len(values) > 1:
+        return None, True
+    value = values[0].strip()
     if _OC_RE.fullmatch(value):
         return value, False
     return None, True

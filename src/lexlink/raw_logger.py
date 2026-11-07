@@ -547,14 +547,17 @@ class LoggingMiddleware:
                 self._capture(resp_buf, body, info)
             await send(message)
 
-        # mask the per-request OC (and report its source) in everything this middleware logs
-        oc_headers = {k.decode("latin-1").lower(): v.decode("latin-1")
-                      for k, v in scope.get("headers", []) if k.lower() == oc_context.OC_HEADER.encode()}
-        oc_token = oc_context.begin_request_oc(oc_headers)
-        request_oc_source = oc_context.oc_source()
+        # Report the OC source and mask the per-request OC in what this middleware logs. The
+        # contextvar is set only around build_entry below, never around the app: the MCP session
+        # task inherits the context of the request that created it.
+        oc_headers = {oc_context.OC_HEADER: [v.decode("latin-1") for k, v in scope.get("headers", [])
+                                             if k.lower() == oc_context.OC_HEADER.encode()]}
+        request_oc, _invalid = oc_context.parse_oc_header(oc_headers)
+        request_oc_source = "header" if request_oc else "server"
         try:
             await self.app(scope, wrapped_receive, wrapped_send)
         finally:
+            oc_token = oc_context.begin_request_oc(oc_headers)
             try:
                 token_id = scope.get("state", {}).get("token_id", NO_AUTH_TOKEN_ID)
                 req_bytes = bytes(req_buf)
