@@ -14,6 +14,7 @@ buffered, so streaming (SSE) works unchanged.
 
 Environment variables:
     LEXLINK_AUTH_TOKENS       "name:token,name2:token2"
+    LEXLINK_ADMIN_TOKENS      operator tokens for /admin/* (see admin.py, tokens.py)
     LEXLINK_ALLOW_NO_AUTH     must be exactly "true" to start without tokens
     LEXLINK_ALLOWED_HOSTS     comma list of allowed Host header values
     LEXLINK_ALLOWED_ORIGINS   comma list of allowed Origin header values
@@ -39,6 +40,8 @@ from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import parse_qsl
 from uuid import UUID
+
+from .tokens import TokenRegistry, build_registry, parse_named_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -85,41 +88,26 @@ def parse_auth_tokens(raw: str) -> list[str]:
     """Parse ``"name:token,name2:token2"`` into a list of token values.
 
     Raises RuntimeError on any malformed entry or duplicate name/token.
-    Names are only used for validation; they are never logged or stored.
     """
-    names: set[str] = set()
-    tokens: list[str] = []
-    for entry in raw.split(","):
-        entry = entry.strip()
-        if not entry:
-            continue
-        name, sep, token = entry.partition(":")
-        name, token = name.strip(), token.strip()
-        if not sep or not name or not token:
-            raise RuntimeError(
-                "LEXLINK_AUTH_TOKENS has a malformed entry; expected 'name:token' "
-                "pairs separated by commas"
-            )
-        if name in names or token in tokens:
-            raise RuntimeError("LEXLINK_AUTH_TOKENS has a duplicate name or token")
-        names.add(name)
-        tokens.append(token)
-    if not tokens:
-        raise RuntimeError(
-            "LEXLINK_AUTH_TOKENS is set but contains no 'name:token' entries"
-        )
-    return tokens
+    return [t for _, t in parse_named_tokens(raw, "LEXLINK_AUTH_TOKENS")]
 
 
-def load_auth_tokens() -> Optional[list[str]]:
+def load_token_config() -> Optional[TokenRegistry]:
     """Read auth config from the environment.
 
-    Returns the token list, or None when running without auth
-    (LEXLINK_ALLOW_NO_AUTH=true). Raises RuntimeError (fail closed) otherwise.
+    Returns the token registry (env user + admin tokens + issued-token store),
+    or None when running without auth (LEXLINK_ALLOW_NO_AUTH=true). Raises
+    RuntimeError (fail closed) otherwise.
     """
     raw = os.getenv("LEXLINK_AUTH_TOKENS", "").strip()
-    if raw:
-        return parse_auth_tokens(raw)
+    raw_admin = os.getenv("LEXLINK_ADMIN_TOKENS", "").strip()
+    user = parse_named_tokens(raw, "LEXLINK_AUTH_TOKENS") if raw else []
+    admin = parse_named_tokens(raw_admin, "LEXLINK_ADMIN_TOKENS") if raw_admin else []
+    if user or admin:
+        if os.getenv("LEXLINK_ALLOW_NO_AUTH", "") == "true":
+            logger.warning(
+                "LEXLINK_ALLOW_NO_AUTH=true is ignored because tokens are configured")
+        return build_registry(user, admin)
     if os.getenv("LEXLINK_ALLOW_NO_AUTH", "") == "true":
         logger.warning(
             "!!! LEXLINK_ALLOW_NO_AUTH=true: the server is running WITHOUT "
@@ -196,6 +184,11 @@ async def _json_response(send, status: int, body: dict, extra_headers=()) -> Non
     await send({"type": "http.response.body", "body": payload})
 
 
+def is_admin_path(scope: dict) -> bool:
+    path = scope.get("path", "")
+    return path == "/admin" or path.startswith("/admin/")
+
+
 def _header(scope: dict, name: bytes) -> Optional[bytes]:
     for k, v in scope.get("headers", []):
         if k == name:
@@ -208,18 +201,22 @@ def _header(scope: dict, name: bytes) -> Optional[bytes]:
 # ---------------------------------------------------------------------------
 
 class BearerAuthMiddleware:
-    """Require ``Authorization: Bearer <token>`` matching one configured token.
+    """Require ``Authorization: Bearer <token>`` matching a registered token.
 
-    ``tokens=None`` means no-auth mode (explicitly allowed by the caller).
-    Sets ``scope["state"]["token_id"]`` (sha256 prefix, never the token/name).
+    ``tokens`` is a TokenRegistry (runtime issue/revoke take effect on the next
+    request), a plain list of token values (tests, fixed set), or None for
+    no-auth mode (explicitly allowed by the caller).
+    Sets ``scope["state"]["token_id"]`` (sha256 prefix, never the token) and,
+    for admin tokens, ``scope["state"]["is_admin"]``.
     """
 
-    def __init__(self, app, tokens: Optional[list[str]]):
+    def __init__(self, app, tokens):
         self.app = app
-        self._tokens = (
-            None if tokens is None
-            else [(t.encode("utf-8"), token_id_for(t)) for t in tokens]
-        )
+        if tokens is None or isinstance(tokens, TokenRegistry):
+            self.registry = tokens
+        else:
+            self.registry = TokenRegistry(
+                [(f"t{i}", t) for i, t in enumerate(tokens)], [], None)
 
     async def __call__(self, scope, receive, send):
         if scope["type"] == "lifespan":
@@ -231,7 +228,7 @@ class BearerAuthMiddleware:
                 await send({"type": "websocket.close", "code": 1008})
             return
         state = scope.setdefault("state", {})
-        if self._tokens is None:
+        if self.registry is None:
             state["token_id"] = NO_AUTH_TOKEN_ID
             await self.app(scope, receive, send)
             return
@@ -243,10 +240,7 @@ class BearerAuthMiddleware:
             if scheme.lower() == b"bearer":
                 presented = value.strip()
 
-        matched: Optional[str] = None
-        for token, tid in self._tokens:  # no early exit
-            if hmac.compare_digest(presented, token):
-                matched = tid
+        matched = self.registry.authenticate(presented)
         if matched is None:
             await _json_response(
                 send, 401,
@@ -254,7 +248,9 @@ class BearerAuthMiddleware:
                 [(b"www-authenticate", b"Bearer")],
             )
             return
-        state["token_id"] = matched
+        state["token_id"] = matched.token_id
+        if matched.admin:
+            state["is_admin"] = True
         await self.app(scope, receive, send)
 
 
@@ -263,7 +259,8 @@ class BearerAuthMiddleware:
 # ---------------------------------------------------------------------------
 
 class RateLimitMiddleware:
-    """Per-token concurrency and sliding-window per-minute limits (POST only).
+    """Per-token concurrency and sliding-window per-minute limits (POST only,
+    plus every method on /admin/*, counted in a separate per-token bucket).
 
     In-memory, single process. State changes happen without awaits in between,
     so no locking is needed on the asyncio event loop.
@@ -285,10 +282,13 @@ class RateLimitMiddleware:
         self._hits: dict[str, deque] = {}
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or scope.get("method") != "POST":
+        admin = is_admin_path(scope)
+        if scope["type"] != "http" or (scope.get("method") != "POST" and not admin):
             await self.app(scope, receive, send)
             return
         key = scope.get("state", {}).get("token_id", NO_AUTH_TOKEN_ID)
+        if admin:
+            key = "admin:" + key  # own bucket: admin calls and MCP calls do not compete
         now = self._clock()
 
         hits = self._hits.setdefault(key, deque())
@@ -516,6 +516,30 @@ class SessionBindingMiddleware:
                         "session terminate failed (%s); retry in %.0fs",
                         problem, m.backoff)
         return done
+
+    async def revoke_token(self, token_id: str) -> int:
+        """End every session bound to ``token_id`` (token revoked); returns the count.
+
+        Streamable HTTP: terminate through the app, then drop the binding. A
+        failed terminate leaves the session unusable (``doomed``) and the
+        sweeper retries. SSE: the binding is removed and the key tombstoned so
+        later POSTs get the unknown-session 404 (the open stream is not cut).
+        """
+        n = 0
+        for sid, owner in list(self._bindings.items()):
+            if not hmac.compare_digest(owner.encode("utf-8"), token_id.encode("utf-8")):
+                continue
+            n += 1
+            if sid.startswith("sse:"):
+                self._bindings.pop(sid, None)
+                self._tombstone(sid)
+                continue
+            m = self._meta.get(sid)
+            if m is None:
+                continue
+            m.doomed, m.next_try = True, 0.0  # a failed terminate is retried by the sweeper
+            await self._expire(sid)
+        return n
 
     async def sweep(self) -> int:
         """Terminate every idle/unusable session once; returns how many were removed."""

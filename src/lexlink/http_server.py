@@ -10,7 +10,8 @@ Transport Options:
 
 Authentication:
     Clients authenticate with ``Authorization: Bearer <token>``; tokens come
-    from LEXLINK_AUTH_TOKENS="name:token,...". The server fails closed at
+    from LEXLINK_AUTH_TOKENS="name:token,..." and from tokens the operator
+    issues at runtime through /admin/tokens (LEXLINK_ADMIN_TOKENS, admin.py). The server fails closed at
     startup without tokens unless LEXLINK_ALLOW_NO_AUTH=true (PlayMCP no-auth
     registration only). The tool `oc` argument is ignored in HTTP mode.
 
@@ -18,7 +19,7 @@ Authentication:
     law.go.kr validates OC + requesting IP as a pair, so the server's OC
     must have the server's public IP registered at open.law.go.kr.
 
-Hardening (pure ASGI, order Auth > Logging > RateLimit > SessionBinding > app):
+Hardening (pure ASGI, order Auth > Logging > RateLimit > Admin > SessionBinding > app):
     - Host/Origin validation via LEXLINK_ALLOWED_HOSTS / LEXLINK_ALLOWED_ORIGINS
     - Per-token concurrency and per-minute limits (single process only)
     - MCP sessions bound to the creating token (LEXLINK_MAX_SESSIONS)
@@ -57,6 +58,10 @@ import os
 import time
 from contextlib import asynccontextmanager
 
+from mcp.server.transport_security import (
+    TransportSecurityMiddleware,
+    TransportSecuritySettings,
+)
 from starlette.applications import Starlette
 from starlette.routing import Mount
 
@@ -65,10 +70,11 @@ from .http_security import (
     RateLimitMiddleware,
     SessionBindingMiddleware,
     build_transport_security,
-    load_auth_tokens,
+    load_token_config,
 )
+from .admin import AdminContext, AdminMiddleware
 from .params import set_ignore_oc_override
-from .raw_logger import LoggingMiddleware, flush_all
+from .raw_logger import LoggingMiddleware, flush_all, get_writer
 from .server import create_server
 
 # Set up logging
@@ -79,13 +85,21 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _default_security() -> TransportSecuritySettings:
+    """FastMCP's own default (localhost only), for the admin Host/Origin check."""
+    hosts = ["127.0.0.1:*", "localhost:*", "[::1]:*"]
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True, allowed_hosts=hosts,
+        allowed_origins=[f"http://{h}" for h in hosts])
+
+
 def create_app(transport: str = "http", *, clock=time.monotonic):
     """
-    Build the ASGI app: Auth > Logging > RateLimit > SessionBinding > FastMCP.
+    Build the ASGI app: Auth > Logging > RateLimit > Admin > SessionBinding > FastMCP.
 
     Owns the single create_server() call and the session manager lifespan.
     Raises RuntimeError at startup if authentication is not configured
-    (see http_security.load_auth_tokens). Also usable as a uvicorn factory:
+    (see http_security.load_token_config). Also usable as a uvicorn factory:
     ``uvicorn --factory lexlink.http_server:create_app`` (single worker only:
     rate limits and log writer are in-process).
 
@@ -109,7 +123,7 @@ def create_app(transport: str = "http", *, clock=time.monotonic):
     middleware, no auth); the session manager keeps terminated transports in
     its instance table, so the entry is dropped afterwards (see _release).
     """
-    tokens = load_auth_tokens()  # fail closed before anything else
+    tokens = load_token_config()  # fail closed before anything else
     # mcp logs session ids (INFO/WARNING); keep them out of the logs
     for name, level in (
         ("mcp.server.streamable_http_manager", logging.WARNING),
@@ -126,7 +140,8 @@ def create_app(transport: str = "http", *, clock=time.monotonic):
             "results (POST /messages returns 202 immediately). Prefer TRANSPORT=http. "
             "See docs/OPERATIONS.md."
         )
-    fastmcp = create_server(transport_security=build_transport_security())
+    security = build_transport_security()
+    fastmcp = create_server(transport_security=security)
     tool_schemas = {
         t.name: set((t.parameters or {}).get("properties", {}))
         for t in fastmcp._tool_manager.list_tools()
@@ -209,11 +224,18 @@ def create_app(transport: str = "http", *, clock=time.monotonic):
 
     starlette_app = Starlette(routes=[Mount("/", app=inner)], lifespan=lifespan)
     binding.app = starlette_app
+    writer = get_writer()
     app = binding
+    if tokens is not None:  # /admin/* needs token auth (no-auth mode has no admin)
+        app = AdminMiddleware(app, AdminContext(
+            registry=tokens, log_dir_fn=lambda: writer.log_dir,
+            flush_logs=writer.flush, end_sessions=binding.revoke_token,
+        ), TransportSecurityMiddleware(security or _default_security()))
     app = RateLimitMiddleware(app)
-    app = LoggingMiddleware(app, tool_schemas=tool_schemas)
+    app = LoggingMiddleware(app, writer=writer, tool_schemas=tool_schemas)
     outer = BearerAuthMiddleware(app, tokens)
     outer.session_binding = binding  # introspection for tests/ops
+    outer.tokens = tokens
     return outer
 
 

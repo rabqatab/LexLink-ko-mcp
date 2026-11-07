@@ -13,6 +13,9 @@ dist/
 venv/
 .env
 
+# Issued-token store (default LEXLINK_DATA_DIR)
+/data/
+
 # IDE
 .vscode/
 .idea/
