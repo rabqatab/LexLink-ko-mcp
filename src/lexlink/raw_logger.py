@@ -208,8 +208,18 @@ def _is_sensitive_key(key: Any) -> bool:
     return k in _SENSITIVE_KEYS or any(sub in k for sub in _SENSITIVE_SUBSTRINGS)
 
 
+def _redact_key(key: Any) -> Any:
+    """Dict key with the OC masked (a client may put it in a key)."""
+    if isinstance(key, str):
+        return redact_oc(key, os.environ.get("OC"))
+    return key
+
+
 def _redact_values(obj: Any) -> Any:
     """Redact OC in strings and drop oc/token/authorization-like keys, recursively."""
+    if isinstance(obj, (int, float)) and not isinstance(obj, bool):
+        oc = os.environ.get("OC")
+        return "***" if oc and oc in str(obj) else obj
     if isinstance(obj, str):
         stripped = obj.lstrip()
         if stripped[:1] in ("{", "["):  # JSON embedded in a string (MCP text content)
@@ -222,7 +232,7 @@ def _redact_values(obj: Any) -> Any:
         return redact_oc(obj, os.environ.get("OC"))
     if isinstance(obj, dict):
         return {
-            k: _redact_values(v) for k, v in obj.items() if not _is_sensitive_key(k)
+            _redact_key(k): _redact_values(v) for k, v in obj.items() if not _is_sensitive_key(k)
         }
     if isinstance(obj, list):
         return [_redact_values(v) for v in obj]
@@ -233,7 +243,10 @@ def _clean_text(value: Any, max_len: int) -> Optional[str]:
     """Client-controlled value -> str without control chars, truncated; None if not a usable string."""
     if not isinstance(value, str):
         return None
-    return _CONTROL_RE.sub("", value)[:max_len].strip() or None
+    value = _CONTROL_RE.sub("", value)
+    # mask OC before truncating so a cut cannot leave half a credential recognisable
+    value = redact_oc(value, os.environ.get("OC"))
+    return value[:max_len].strip() or None
 
 
 def _client_info(req: Optional[dict]) -> tuple[Optional[str], Optional[str]]:
@@ -512,6 +525,10 @@ class LoggingMiddleware:
             message = await receive()
             if message["type"] == "http.request" and http_method == "POST":
                 self._capture(req_buf, message.get("body", b""), info)
+                if not message.get("more_body"):  # request complete: forget a stale count for this id
+                    started = _parse_request(bytes(req_buf))
+                    if started is not None and started.get("method") == "tools/call":
+                        upstream_count.discard(req_session, started.get("id"))
             return message
 
         async def wrapped_send(message):

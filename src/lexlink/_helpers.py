@@ -7,6 +7,7 @@ All helpers preserve exact existing behavior.
 
 import asyncio
 import concurrent.futures
+import contextvars
 import copy
 import functools
 import inspect
@@ -55,10 +56,13 @@ def run_coroutine_sync(coro):
     Uses ``asyncio.run`` inside a dedicated worker thread, so it works both
     with and without an already running event loop (FastMCP runs sync tools on
     its loop; ``run_until_complete`` there raises RuntimeError). Exceptions from
-    the coroutine propagate to the caller.
+    the coroutine propagate to the caller. The caller's contextvars are copied into the
+    thread (a plain executor thread starts with an empty context), so the per-call
+    upstream request counter still sees the coroutine's requests.
     """
+    ctx = contextvars.copy_context()
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        return pool.submit(asyncio.run, coro).result()
+        return pool.submit(ctx.run, asyncio.run, coro).result()
 
 
 def _redacted_error_text(e: BaseException, kwargs: dict) -> str:
@@ -388,7 +392,8 @@ def install_threaded_tool_calls() -> None:
                 return await anyio.to_thread.run_sync(functools.partial(sync_fn, **kwargs))
             fn_is_async = True
 
-        # count law.go.kr requests of this tool call (worker threads inherit the context) for the HTTP request log
+        # count law.go.kr requests of this tool call for the HTTP request log (anyio worker threads and
+        # run_coroutine_sync copy the context; any other thread a tool spawns must do so too)
         token = start_counter()
         try:
             return await original(self, fn, fn_is_async, arguments_to_validate, arguments_to_pass_directly)

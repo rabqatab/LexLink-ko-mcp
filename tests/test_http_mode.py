@@ -1482,3 +1482,68 @@ def test_http_log_client_info_and_upstream_calls(monkeypatch, tmp_path):
     assert calls[0]["arguments"] == {"query": "upstream-count-probe-xyz"}
     assert "result" not in calls[0]
     assert TOKEN not in json.dumps(entries)
+
+
+# ------------------------------------------------------------ review follow-ups
+
+def test_run_coroutine_sync_keeps_upstream_counter():
+    from lexlink import upstream_count as uc
+    from lexlink._helpers import run_coroutine_sync
+
+    async def two_calls():
+        uc.count_upstream_call()
+        uc.count_upstream_call()
+
+    token = uc.start_counter()
+    try:
+        for _ in range(3):
+            uc.count_upstream_call()
+        run_coroutine_sync(two_calls())
+    finally:
+        assert uc.end_counter(token) == 5
+
+
+def test_redact_values_masks_oc_in_keys_and_numbers(monkeypatch):
+    from lexlink.raw_logger import _redact_values
+    monkeypatch.setenv("OC", "fake-oc-env-1234")
+    out = _redact_values({"fake-oc-env-1234": 1, "n": 1, "ok": ["x fake-oc-env-1234"]})
+    assert "fake-oc-env-1234" not in json.dumps(out) and out["n"] == 1
+    monkeypatch.setenv("OC", "424242")
+    assert _redact_values({"a": 424242, "b": 3.5, "c": [1424242]}) == {"a": "***", "b": 3.5, "c": ["***"]}
+
+
+def test_client_fields_and_user_agent_mask_oc(monkeypatch):
+    from lexlink.raw_logger import _clean_text
+    monkeypatch.setenv("OC", "fake-oc-env-1234")
+    assert "fake-oc-env-1234" not in _clean_text("cli fake-oc-env-1234 OC=fake-oc-env-1234", 100)
+    kw = dict(req_body=tool_call_body(), resp_body=b"", content_type="application/json",
+              http_method="POST", http_status=200, response_bytes=0, duration_ms=1.0,
+              token_id="tid", client_ip=None, truncated_capture=False, log_bodies=False,
+              tool_schemas=SCHEMAS)
+    e = build_entry(**kw, user_agent="ua fake-oc-env-1234")
+    assert "fake-oc-env-1234" not in json.dumps(e)
+
+
+def test_upstream_count_registry_duplicates_and_stale():
+    from lexlink import upstream_count as uc
+    uc.record("s", 1, 4)
+    assert uc.take("s", 1) == 4 and uc.take("s", 1) is None
+    uc.record("s", 2, 4)
+    uc.record("s", 2, 9)  # duplicate in-flight id: ambiguous, both dropped
+    assert uc.take("s", 2) is None
+    uc.record("s", 3, 7)  # stale (cancelled call), never taken
+    uc.discard("s", 3)  # a new call with the same id starts
+    assert uc.take("s", 3) is None
+
+
+def test_middleware_discards_stale_count_when_call_starts(tmp_path):
+    from lexlink import upstream_count as uc
+    uc.record("sess-1", 7, 99)  # left over from an earlier cancelled call with id 7
+    writer = LogWriter(tmp_path / "w")
+    mw = LoggingMiddleware(json_app(tool_result({"status": "success"})), writer=writer,
+                           tool_schemas=SCHEMAS)
+    scope = make_scope(headers=[("authorization", f"Bearer {TOKEN}"), ("mcp-session-id", "sess-1")])
+    asyncio.run(call(mw, scope, tool_call_body()))
+    writer.flush()
+    line = (tmp_path / "w" / f"{datetime.now().date()}.jsonl").read_text().splitlines()[0]
+    assert "upstream_calls" not in json.loads(line)

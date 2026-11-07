@@ -2,8 +2,9 @@
 Per-tool-call count of HTTP requests sent to law.go.kr (for the HTTP request log).
 
 A contextvar set in the tool-call wrapper (``_helpers.install_threaded_tool_calls``) reaches
-``client.py`` even from the worker threads sync tools run in: ``anyio.to_thread.run_sync``
-copies the context, and the counter object is shared by reference. The logging middleware
+``client.py`` from the worker threads sync tools run in (``anyio.to_thread.run_sync`` copies
+the context) and from ``run_coroutine_sync`` (copies it explicitly); the counter object is
+shared by reference. A thread started without copying the context would not be counted. The logging middleware
 runs in a different task (the ASGI request), so the finished count is handed over through a
 small bounded registry keyed by (MCP session id, JSON-RPC request id), taken by
 ``LoggingMiddleware`` once the response is complete. A tool answered from cache sends
@@ -42,12 +43,23 @@ def count_upstream_call() -> None:
 
 
 def record(session_id: Optional[str], request_id: Any, count: int) -> None:
+    """Store a finished call's count. A key already pending (duplicate in-flight id) is
+    ambiguous, so both counts are dropped rather than attributed to the wrong call."""
     if not session_id or request_id is None:
         return
+    key = (session_id, request_id)
     with _lock:
-        _pending[(session_id, request_id)] = count
+        if key in _pending:
+            del _pending[key]
+            return
+        _pending[key] = count
         while len(_pending) > _MAX_PENDING:
             _pending.popitem(last=False)
+
+
+def discard(session_id: Optional[str], request_id: Any) -> None:
+    """Forget a stale count (e.g. a cancelled call) when a new call with the same id starts."""
+    take(session_id, request_id)
 
 
 def take(session_id: Optional[str], request_id: Any) -> Optional[int]:
