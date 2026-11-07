@@ -11,6 +11,7 @@ All notable changes to LexLink are documented here in both English and Korean.
 #### HTTP request log
 - Each entry now carries `user_agent`, `client_name` / `client_version` (from the session's `initialize` `clientInfo`, remembered per `mcp-session-id` in a bounded LRU and dropped on DELETE; values truncated, control chars stripped) and, for `tools/call`, `upstream_calls` (law.go.kr requests that call made; 0 for a cache hit). The count is taken in `client.py` / `citation.py` through a contextvar set in the tool-call wrapper and handed to the logger by (session id, JSON-RPC id).
 - `LEXLINK_LOG_ARGUMENTS=true` logs argument values (OC and oc/token/authorization keys removed) without result bodies; `LEXLINK_LOG_BODIES=true` still logs both. Logged strings also mask the literal `OC` env value.
+- Every `tools/call` result (errors included, HTTP and stdio) carries `result._meta["lexlink/upstream_calls"]`, the same count, so a gateway that only sees MCP traffic can read it. Added by wrapping the lowlevel `CallToolRequest` handler; `content`, `structuredContent` and `tools/list` are unchanged.
 
 #### Status labels and error classification
 - `eflaw_search` `nw` is 1=연혁, 2=시행예정, 3=현행 (measured live; the docs and error text said 2=현행, 3=시행예정, so `nw="2"` returned scheduled rows labelled 현행). `admrul_search` / `ordin_search` `nw` 1=현행, 2=연혁 re-measured and unchanged (3 behaves like 1).
@@ -695,6 +696,7 @@ All notable changes to LexLink are documented here in both English and Korean.
 #### HTTP 요청 로그
 - 각 항목에 `user_agent`, `client_name` / `client_version`(세션 `initialize`의 `clientInfo`를 `mcp-session-id`별 제한된 LRU에 기억, DELETE 시 삭제; 길이 제한, 제어문자 제거), `tools/call`의 `upstream_calls`(그 호출이 law.go.kr로 보낸 요청 수, 캐시 적중이면 0)를 추가. 도구 호출 래퍼가 설정한 contextvar로 `client.py` / `citation.py`에서 세고, (세션 id, JSON-RPC id)로 로거에 넘김.
 - `LEXLINK_LOG_ARGUMENTS=true`는 결과 본문 없이 인자 값만 기록(OC와 oc/token/authorization 키 제거). `LEXLINK_LOG_BODIES=true`는 기존대로 둘 다 기록. 기록되는 문자열에서 환경변수 `OC` 값 자체도 마스킹.
+- 모든 `tools/call` 결과(오류 포함, HTTP·stdio 공통)에 같은 값이 `result._meta["lexlink/upstream_calls"]`로 실려, MCP 트래픽만 보는 게이트웨이가 읽을 수 있음. lowlevel `CallToolRequest` 핸들러를 감싸서 구현했고 `content`, `structuredContent`, `tools/list`는 그대로.
 
 #### 상태 표기와 오류 분류
 - `eflaw_search` `nw`는 1=연혁, 2=시행예정, 3=현행(실측). 문서와 오류 문구가 2=현행, 3=시행예정으로 적혀 있어 `nw="2"`가 시행예정 행을 현행으로 오인하게 했음. `admrul_search` / `ordin_search`의 `nw` 1=현행, 2=연혁은 재측정해 그대로(3은 1과 동일 동작).

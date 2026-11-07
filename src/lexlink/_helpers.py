@@ -367,6 +367,50 @@ def _record_upstream_calls(count: int) -> None:
         pass
 
 
+UPSTREAM_CALLS_META_KEY = "lexlink/upstream_calls"
+
+
+def _install_upstream_call_meta() -> None:
+    """Count law.go.kr requests per tools/call and report the count in-band.
+
+    Wraps the lowlevel server's CallToolRequest handler (registered by ``Server.call_tool``), which
+    builds every CallToolResult including error results. The counter runs around the whole handler,
+    so it sees the tool in anyio worker threads and ``run_coroutine_sync`` (both copy the context;
+    any other thread a tool spawns must do so too). The count goes into ``result._meta`` and, for
+    the HTTP request log, into ``upstream_count`` keyed by (session, JSON-RPC id).
+    """
+    from mcp import types
+    from mcp.server.lowlevel.server import Server
+
+    original_call_tool = Server.call_tool
+
+    def call_tool(self, *, validate_input: bool = True):
+        register = original_call_tool(self, validate_input=validate_input)
+
+        def decorator(func):
+            registered = register(func)
+            inner = self.request_handlers[types.CallToolRequest]
+
+            async def handler(req):
+                token = start_counter()
+                try:
+                    result = await inner(req)
+                finally:
+                    count = end_counter(token)
+                    _record_upstream_calls(count)
+                root = getattr(result, "root", None)
+                if isinstance(root, types.CallToolResult):
+                    root.meta = {**(root.meta or {}), UPSTREAM_CALLS_META_KEY: count}
+                return result
+
+            self.request_handlers[types.CallToolRequest] = handler
+            return registered
+
+        return decorator
+
+    Server.call_tool = call_tool
+
+
 def install_threaded_tool_calls() -> None:
     """Run LexLink's synchronous tool functions in worker threads instead of on the event loop.
 
@@ -392,15 +436,10 @@ def install_threaded_tool_calls() -> None:
                 return await anyio.to_thread.run_sync(functools.partial(sync_fn, **kwargs))
             fn_is_async = True
 
-        # count law.go.kr requests of this tool call for the HTTP request log (anyio worker threads and
-        # run_coroutine_sync copy the context; any other thread a tool spawns must do so too)
-        token = start_counter()
-        try:
-            return await original(self, fn, fn_is_async, arguments_to_validate, arguments_to_pass_directly)
-        finally:
-            _record_upstream_calls(end_counter(token))
+        return await original(self, fn, fn_is_async, arguments_to_validate, arguments_to_pass_directly)
 
     FuncMetadata.call_fn_with_arg_validation = call_fn_with_arg_validation
+    _install_upstream_call_meta()
     _THREADED_CALLS_INSTALLED = True
 
 

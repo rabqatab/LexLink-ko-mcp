@@ -182,6 +182,8 @@
 
 ## 도구 정책 메타데이터
 
+모든 `tools/call` 결과(오류 결과 포함)의 `_meta["lexlink/upstream_calls"]`는 그 호출이 law.go.kr로 보낸 HTTP 요청 수(정수, 캐시 적중이면 0)입니다. `content`/`structuredContent`는 바뀌지 않습니다.
+
 모든 도구는 `tools/list` 항목의 `_meta["lexlink/policy"]`에 정책(계약 v1)을 싣습니다. 클라이언트가 노출할 도구를 고르는 데 쓰라고 있는 값이며 도구 동작·입력 스키마·annotations는 바꾸지 않습니다. 표는 `src/lexlink/tool_policy.py`의 `TOOL_POLICIES` 한 곳에 있고, 서버에서 바로 읽을 수 있습니다:
 
 ```python

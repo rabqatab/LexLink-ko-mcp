@@ -19,7 +19,7 @@ from lexlink.http_security import (
     token_id_for,
 )
 from lexlink.params import resolve_oc, set_ignore_oc_override
-from lexlink.raw_logger import LoggingMiddleware, LogWriter, build_entry
+from lexlink.raw_logger import LoggingMiddleware, LogWriter, build_entry, _parse_response_messages
 
 pytestmark = pytest.mark.unit
 
@@ -1454,7 +1454,11 @@ def test_http_log_client_info_and_upstream_calls(monkeypatch, tmp_path):
                                  "params": {"name": "law_search", "arguments": {"query": query}}},
                    headers=h)
         assert r.status_code == 200, r.text
+        msg = next(m for m in _parse_response_messages(r.content, r.headers["content-type"])
+                   if m.get("id") == rid)
+        metas.append(msg["result"].get("_meta", {}).get("lexlink/upstream_calls"))
 
+    metas = []
     with TestClient(http_server.create_app()) as c:
         info = {"name": "test-cli\n", "version": "9.9"}
         r = c.post("/mcp", json={**INIT, "params": {**INIT["params"], "clientInfo": info}},
@@ -1482,6 +1486,8 @@ def test_http_log_client_info_and_upstream_calls(monkeypatch, tmp_path):
     assert calls[0]["arguments"] == {"query": "upstream-count-probe-xyz"}
     assert "result" not in calls[0]
     assert TOKEN not in json.dumps(entries)
+    # the same count is returned in-band for a gateway that only sees MCP traffic
+    assert metas == [n_first, 0, n_second]
 
 
 # ------------------------------------------------------------ review follow-ups
@@ -1547,3 +1553,49 @@ def test_middleware_discards_stale_count_when_call_starts(tmp_path):
     writer.flush()
     line = (tmp_path / "w" / f"{datetime.now().date()}.jsonl").read_text().splitlines()[0]
     assert "upstream_calls" not in json.loads(line)
+
+
+def test_upstream_calls_meta_in_process_and_errors(monkeypatch):
+    """Lowlevel handler path (also what stdio uses): count in _meta, errors included,
+    content/structuredContent and tools/list untouched."""
+    import httpx
+    from mcp import types
+    from lexlink.client import LawAPIClient
+    from lexlink.server import create_server
+
+    hits = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        hits.append(str(request.url))
+        return httpx.Response(200, text=_law_search_payload(), request=request)
+
+    orig_init = LawAPIClient.__init__
+
+    def init(self, *a, **k):
+        orig_init(self, *a, **k)
+        self.client = httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=True)
+
+    monkeypatch.setattr(LawAPIClient, "__init__", init)
+    low = create_server()._mcp_server
+
+    async def run():
+        out = []
+        for name, args in (("law_search", {"query": "meta-probe-q1"}),
+                           ("law_search", {"query": "meta-probe-q1"}),
+                           ("no_such_tool", {})):
+            req = types.CallToolRequest(method="tools/call",
+                                        params=types.CallToolRequestParams(name=name, arguments=args))
+            res = (await low.request_handlers[types.CallToolRequest](req)).root
+            out.append((res, len(hits)))
+        listed = (await low.request_handlers[types.ListToolsRequest](
+            types.ListToolsRequest(method="tools/list"))).root
+        return out, listed
+
+    out, listed = asyncio.run(run())
+    (r1, h1), (r2, h2), (r3, _) = out
+    assert h1 >= 1 and r1.meta["lexlink/upstream_calls"] == h1
+    assert h2 == h1 and r2.meta["lexlink/upstream_calls"] == 0  # cache hit
+    assert r3.isError and r3.meta["lexlink/upstream_calls"] == 0
+    assert r1.content and not r1.isError
+    assert all("lexlink/upstream_calls" not in (t.meta or {}) for t in listed.tools)
+    assert all("lexlink/policy" in (t.meta or {}) for t in listed.tools)
