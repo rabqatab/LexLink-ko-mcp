@@ -18,6 +18,7 @@ from urllib.parse import urlencode
 import httpx
 
 from .upstream_count import count_upstream_call
+from .oc_context import oc_source, secret_ocs
 from .errors import ErrorCode, create_error_response, get_http_error_hints
 
 
@@ -76,6 +77,18 @@ def _blank_tag(m: "re.Match[str]", ) -> str:
 
 
 def redact_oc(text: str, oc: str | None = None) -> str:
+    """Mask ``oc`` plus the server env OC and the current request OC (see ``oc_context``).
+
+    The generic ``OC=`` patterns are documented on ``_redact_one``.
+    """
+    if not text:
+        return text
+    for secret in dict.fromkeys([*([oc] if oc else []), *secret_ocs()]):
+        text = _redact_one(text, secret)
+    return _redact_one(text, None) if not (oc or secret_ocs()) else text
+
+
+def _redact_one(text: str, oc: str | None = None) -> str:
     """Remove the OC credential from ``text`` (HTML, JSON, JS or URLs).
 
     Structural removal runs first and does not depend on ``oc``:
@@ -141,7 +154,7 @@ class _OCRedactingFilter(logging.Filter):
             message = record.getMessage()
         except Exception:
             return True
-        redacted = redact_oc(message, os.environ.get("OC"))
+        redacted = redact_oc(message)
         if redacted != message:
             record.msg, record.args = redacted, None
         return True
@@ -342,17 +355,28 @@ def detect_upstream_body_error(
             upstream_target=target,
         )
 
-    # 2) Auth failure (existing behaviour, kept as UPSTREAM_ERROR)
+    # 2) Auth failure: law.go.kr checks the OC together with the caller IP (OC_AUTH_FAILED)
     if AUTH_FAILURE_MARKER in text:
+        source = oc_source()
+        hints = [
+            "서버 IP가 open.law.go.kr에 등록되어 있는지 확인하세요",
+            "OC 값이 올바른지 확인하세요 (이메일 ID 부분만 사용)",
+            "Register your server IP at open.law.go.kr",
+        ]
+        if source == "header":
+            hints = [
+                "X-LexLink-OC로 보낸 본인 OC 계정에 이 서버의 공인 IP가 open.law.go.kr에 등록되어 있어야 합니다 "
+                "(OC와 IP는 짝으로 검증됩니다)",
+                "OC 값이 올바른지 확인하세요 (이메일 ID 부분만 사용)",
+                "The caller's own OC account (sent in X-LexLink-OC) must have this server's public IP "
+                "registered at open.law.go.kr",
+            ]
         return create_error_response(
-            error_code=ErrorCode.UPSTREAM_ERROR,
+            error_code=ErrorCode.OC_AUTH_FAILED,
             message="법제처 API 인증 실패: 사용자 정보 검증에 실패하였습니다",
             request_id=request_id,
-            hints=[
-                "서버 IP가 open.law.go.kr에 등록되어 있는지 확인하세요",
-                "OC 값이 올바른지 확인하세요 (이메일 ID 부분만 사용)",
-                "Register your server IP at open.law.go.kr",
-            ],
+            hints=hints,
+            oc_source=source,
         )
 
     # 3) "미신청" page: OC account has not applied for this API

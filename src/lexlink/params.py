@@ -11,6 +11,8 @@ import os
 from typing import Optional
 from urllib.parse import quote
 
+from .oc_context import get_request_oc, request_oc_invalid
+
 
 _IGNORE_OC_OVERRIDE = False
 
@@ -53,6 +55,19 @@ def resolve_oc(override_oc: Optional[str] = None) -> str:
     # Priority 1: Tool argument override
     if override_oc and override_oc.strip() and not _IGNORE_OC_OVERRIDE:
         return override_oc.strip()
+
+    # HTTP mode: per-request OC from the X-LexLink-OC header (LEXLINK_ACCEPT_OC_HEADER=true)
+    if _IGNORE_OC_OVERRIDE:
+        if request_oc_invalid():
+            from ._helpers import ToolValidationError  # lazy: _helpers imports this module
+            raise ToolValidationError(
+                "Invalid X-LexLink-OC header (allowed: A-Z a-z 0-9 . _ - , 1-64 characters). "
+                "X-LexLink-OC 헤더 형식이 올바르지 않습니다.",
+                hints=["OC는 영문·숫자·. _ - 1~64자만 허용합니다 (이메일 ID 부분)"],
+            )
+        header_oc = get_request_oc()
+        if header_oc:
+            return header_oc
 
     # Priority 2: Environment variable
     env_oc = os.getenv("OC", "").strip()

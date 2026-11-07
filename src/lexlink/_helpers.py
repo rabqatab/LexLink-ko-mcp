@@ -21,7 +21,7 @@ from typing import Optional, Union
 from mcp.types import ToolAnnotations
 
 from .client import redact_oc
-from . import upstream_count
+from . import upstream_count, oc_context
 from .errors import ErrorCode, create_error_response
 from .upstream_count import end_counter, start_counter
 
@@ -67,7 +67,7 @@ def run_coroutine_sync(coro):
 
 def _redacted_error_text(e: BaseException, kwargs: dict) -> str:
     """str(e) with the OC credential removed (argument or OC env var)."""
-    return redact_oc(str(e), kwargs.get("oc") or os.getenv("OC"))
+    return redact_oc(str(e), kwargs.get("oc"))  # env OC and request OC are added by redact_oc
 
 
 def handle_tool_error(func):
@@ -367,6 +367,16 @@ def _record_upstream_calls(count: int) -> None:
         pass
 
 
+def _request_headers():
+    """Starlette headers of the HTTP request carrying this tools/call (None for stdio)."""
+    try:
+        from mcp.server.lowlevel.server import request_ctx
+        request = getattr(request_ctx.get(), "request", None)
+        return request.headers if request is not None else None
+    except Exception:  # LookupError outside a request
+        return None
+
+
 UPSTREAM_CALLS_META_KEY = "lexlink/upstream_calls"
 
 
@@ -393,9 +403,11 @@ def _install_upstream_call_meta() -> None:
 
             async def handler(req):
                 token = start_counter()
+                oc_token = oc_context.begin_request_oc(_request_headers())
                 try:
                     result = await inner(req)
                 finally:
+                    oc_context.end_request_oc(oc_token)
                     count = end_counter(token)
                     _record_upstream_calls(count)
                 root = getattr(result, "root", None)

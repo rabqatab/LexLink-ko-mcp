@@ -38,7 +38,8 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .client import redact_oc
-from . import upstream_count
+from . import upstream_count, oc_context
+from .oc_context import secret_ocs
 from .http_security import NO_AUTH_TOKEN_ID, resolve_client_ip
 
 logger = logging.getLogger(__name__)
@@ -211,15 +212,14 @@ def _is_sensitive_key(key: Any) -> bool:
 def _redact_key(key: Any) -> Any:
     """Dict key with the OC masked (a client may put it in a key)."""
     if isinstance(key, str):
-        return redact_oc(key, os.environ.get("OC"))
+        return redact_oc(key)
     return key
 
 
 def _redact_values(obj: Any) -> Any:
     """Redact OC in strings and drop oc/token/authorization-like keys, recursively."""
     if isinstance(obj, (int, float)) and not isinstance(obj, bool):
-        oc = os.environ.get("OC")
-        return "***" if oc and oc in str(obj) else obj
+        return "***" if any(oc in str(obj) for oc in secret_ocs()) else obj
     if isinstance(obj, str):
         stripped = obj.lstrip()
         if stripped[:1] in ("{", "["):  # JSON embedded in a string (MCP text content)
@@ -229,7 +229,7 @@ def _redact_values(obj: Any) -> Any:
                 parsed = None
             if isinstance(parsed, (dict, list)):
                 return json.dumps(_redact_values(parsed), ensure_ascii=False)
-        return redact_oc(obj, os.environ.get("OC"))
+        return redact_oc(obj)
     if isinstance(obj, dict):
         return {
             _redact_key(k): _redact_values(v) for k, v in obj.items() if not _is_sensitive_key(k)
@@ -245,7 +245,7 @@ def _clean_text(value: Any, max_len: int) -> Optional[str]:
         return None
     value = _CONTROL_RE.sub("", value)
     # mask OC before truncating so a cut cannot leave half a credential recognisable
-    value = redact_oc(value, os.environ.get("OC"))
+    value = redact_oc(value)
     return value[:max_len].strip() or None
 
 
@@ -361,6 +361,7 @@ def build_entry(
     client_name: Optional[str] = None,
     client_version: Optional[str] = None,
     upstream_calls: Optional[int] = None,
+    oc_source: Optional[str] = None,
 ) -> Optional[dict]:
     """Build one log entry, or None if this request should not be logged.
 
@@ -453,6 +454,7 @@ def build_entry(
         "client_name": client_name,
         "client_version": client_version,
         "upstream_calls": upstream_calls if method == "tools/call" else None,
+        "oc_source": oc_source if method == "tools/call" else None,
         "truncated_capture": True if truncated_capture else None,
     }
     if log_bodies or log_arguments:
@@ -545,6 +547,11 @@ class LoggingMiddleware:
                 self._capture(resp_buf, body, info)
             await send(message)
 
+        # mask the per-request OC (and report its source) in everything this middleware logs
+        oc_headers = {k.decode("latin-1").lower(): v.decode("latin-1")
+                      for k, v in scope.get("headers", []) if k.lower() == oc_context.OC_HEADER.encode()}
+        oc_token = oc_context.begin_request_oc(oc_headers)
+        request_oc_source = oc_context.oc_source()
         try:
             await self.app(scope, wrapped_receive, wrapped_send)
         finally:
@@ -583,11 +590,14 @@ class LoggingMiddleware:
                     client_name=client_name,
                     client_version=client_version,
                     upstream_calls=upstream_calls,
+                    oc_source=request_oc_source,
                 )
                 if entry is not None:
                     self.writer.write(entry)
             except Exception as e:  # logging must never break a request
                 logger.warning("log build failed: %s", type(e).__name__)
+            finally:
+                oc_context.end_request_oc(oc_token)
 
     def _capture(self, buf: bytearray, chunk: bytes, info: dict) -> None:
         room = self.capture_max - len(buf)

@@ -1665,7 +1665,8 @@ article_citation(
 |------------|------|------|
 | `VALIDATION_ERROR` | 인자 형식·범위·조합 오류 (잘못된 `jo`, `ordinLsCon_search` 모드 인자 0/2개 이상, 목록 전용 부처의 `cgm_expc_service` 등) | 힌트의 유효값 확인 |
 | `TIMEOUT` | law.go.kr 요청 시간 초과 | 재시도 |
-| `UPSTREAM_ERROR` | law.go.kr가 오류 응답 반환 | 메시지 확인 (IP/OC 등록 등) |
+| `UPSTREAM_ERROR` | law.go.kr가 오류 응답 반환 | 메시지 확인 |
+| `OC_AUTH_FAILED` | law.go.kr가 "사용자 정보 검증에 실패"로 답함: OC가 틀렸거나 서버 공인 IP가 그 OC에 등록되지 않음. `oc_source`(`"header"`=`X-LexLink-OC`, `"server"`=서버 `OC`) 필드가 있음. 오류는 캐시되지 않음 (이전에는 `UPSTREAM_ERROR`) | open.law.go.kr에서 IP 등록 확인 (docs/OPERATIONS.md 7·7-1장) |
 | `INTERNAL_ERROR` | 예상치 못한 서버 오류 | 정상 운영에서는 발생하지 않아야 함 |
 | `ARTICLE_NOT_FOUND` | 요청한 조문(`jo`)이 응답에 없음 | 조문 번호·법령 버전 확인 |
 | `NOT_FOUND` | 업스트림이 "일치하는 … 없습니다"로 답했거나 본문이 비어 있음 (`prec_service`/`detc_service`/`expc_service`의 없는 ID, `lawService.do`의 빈 본문 등). 오류는 캐시되지 않음 | ID·검색어 확인 |

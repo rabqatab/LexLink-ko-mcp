@@ -2386,6 +2386,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (ë
         warnings: list[str] = []
         try:
             resolved_oc = resolve_oc(override_oc=oc)
+        except ToolValidationError:
+            raise  # invalid X-LexLink-OC header: report it instead of "no OC"
         except ValueError:
             resolved_oc = None
         if resolved_oc:
