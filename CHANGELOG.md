@@ -8,6 +8,11 @@ All notable changes to LexLink are documented here in both English and Korean.
 
 ### Unreleased
 
+#### Per-request OC (HTTP mode, opt-in)
+- `LEXLINK_ACCEPT_OC_HEADER=true` (default off): a `tools/call` whose HTTP request carries a valid `X-LexLink-OC` (`^[A-Za-z0-9._-]{1,64}$`) uses that OC for every law.go.kr request of the call (composite/chain tools and citation verification included); otherwise the server `OC`. An invalid value is a `VALIDATION_ERROR` (value not echoed). The `oc` tool argument stays ignored in HTTP mode; stdio is unchanged. The value is carried in a contextvar set in the per-call wrapper (`oc_context.py`).
+- The per-request OC is masked wherever the env OC is (`redact_oc` now also masks the env OC and the current request OC; request log incl. `LOG_ARGUMENTS`/`LOG_BODIES`, errors, hints, `OC=` links, exception text). `tools/call` log entries carry `oc_source` (`"header"` / `"server"`, never the value). Cache keys never contain the OC, errors are never cached, successes are shared between callers (public data). The user OC works only if the user registered the server IP at open.law.go.kr.
+- New error code `OC_AUTH_FAILED` (was `UPSTREAM_ERROR`) for "사용자 정보 검증에 실패", with `oc_source` and, for a header OC, a hint that the caller's own OC needs the server's public IP registered.
+
 #### HTTP request log
 - Each entry now carries `user_agent`, `client_name` / `client_version` (from the session's `initialize` `clientInfo`, remembered per `mcp-session-id` in a bounded LRU and dropped on DELETE; values truncated, control chars stripped) and, for `tools/call`, `upstream_calls` (law.go.kr requests that call made; 0 for a cache hit). The count is taken in `client.py` / `citation.py` through a contextvar set in the tool-call wrapper and handed to the logger by (session id, JSON-RPC id).
 - `LEXLINK_LOG_ARGUMENTS=true` logs argument values (OC and oc/token/authorization keys removed) without result bodies; `LEXLINK_LOG_BODIES=true` still logs both. Logged strings also mask the literal `OC` env value.
@@ -692,6 +697,11 @@ All notable changes to LexLink are documented here in both English and Korean.
 ## 한국어 (Korean)
 
 ### 미배포 (Unreleased)
+
+#### 요청별 OC (HTTP 모드, 선택)
+- `LEXLINK_ACCEPT_OC_HEADER=true`(기본 꺼짐): 유효한 `X-LexLink-OC`(`^[A-Za-z0-9._-]{1,64}$`) 헤더가 있는 `tools/call`은 그 호출의 모든 law.go.kr 요청(복합·chain 도구, 인용 검증 포함)에 그 OC를 쓰고, 없으면 서버 `OC`를 씁니다. 형식 오류는 `VALIDATION_ERROR`(값은 되돌려 주지 않음). 도구 인자 `oc`는 HTTP 모드에서 계속 무시되고 stdio는 그대로입니다. 값은 호출별 래퍼가 설정하는 contextvar로 전달됩니다(`oc_context.py`).
+- 요청별 OC는 서버 OC와 같은 곳에서 마스킹됩니다(`redact_oc`가 서버 OC와 현재 요청 OC를 함께 마스킹: 요청 로그(`LOG_ARGUMENTS`/`LOG_BODIES` 포함), 오류·힌트, `OC=` 링크, 예외 문자열). `tools/call` 로그에 `oc_source`(`"header"`/`"server"`, 값은 기록하지 않음)가 추가됩니다. 캐시 키에 OC는 없고 오류는 캐시하지 않으며 성공 응답은 공개 데이터이므로 호출자 사이에 공유합니다. 사용자 OC는 그 사용자가 서버 IP를 open.law.go.kr에 등록한 경우에만 동작합니다.
+- "사용자 정보 검증에 실패"는 새 오류 코드 `OC_AUTH_FAILED`(이전 `UPSTREAM_ERROR`)로 돌려주며 `oc_source`가 붙고, 헤더 OC일 때는 호출자 본인 OC에 서버 공인 IP 등록이 필요하다는 힌트를 줍니다.
 
 #### HTTP 요청 로그
 - 각 항목에 `user_agent`, `client_name` / `client_version`(세션 `initialize`의 `clientInfo`를 `mcp-session-id`별 제한된 LRU에 기억, DELETE 시 삭제; 길이 제한, 제어문자 제거), `tools/call`의 `upstream_calls`(그 호출이 law.go.kr로 보낸 요청 수, 캐시 적중이면 0)를 추가. 도구 호출 래퍼가 설정한 contextvar로 `client.py` / `citation.py`에서 세고, (세션 id, JSON-RPC id)로 로거에 넘김.
