@@ -22,6 +22,7 @@ dependencies = [
 [project.scripts]
 stdio = "lexlink.stdio_server:main" # Run MCP server over stdio transport
 serve = "lexlink.http_server:main" # Run HTTP/SSE server for Kakao PlayMCP
+lexlink-admin = "lexlink.admin_cli:main" # Operator CLI for the HTTP admin API (tokens, logs)
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -2,7 +2,7 @@
 
 HTTP/SSE 모드(`uv run serve`)를 외부에 노출할 때의 배포, 인증, 로깅, 제한, 프록시 설정을 설명합니다. stdio 모드는 이 문서의 영향을 받지 않습니다.
 
-목차: 1 기본 원칙 / 2 환경변수 / 3 로그와 개인정보 / 4 TLS 프록시 / 5 systemd / 6 PlayMCP 등록 / 7 OC와 IP 등록 / 8 EC2 배포 절차 / 9 문제 해결
+목차: 1 기본 원칙 / 2 환경변수 / 3 로그와 개인정보 / 4 TLS 프록시 / 5 systemd / 6 PlayMCP 등록 / 7 OC와 IP 등록 / 8 EC2 배포 절차 / 9 문제 해결 / 10 운영자 관리 API(토큰 발급·폐기, 로그 조회)
 
 로컬 시험:
 
@@ -17,7 +17,7 @@ OC=<OC> LEXLINK_AUTH_TOKENS=local:<TOKEN> TRANSPORT=http uv run serve
 - **`TRANSPORT=http`(Streamable HTTP, `/mcp`)를 권장합니다.** SSE(`/sse`)는 레거시입니다.
 - 인증 없이는 시작되지 않습니다(fail closed). `LEXLINK_AUTH_TOKENS`가 없고 `LEXLINK_ALLOW_NO_AUTH=true`도 아니면 기동 시 `RuntimeError`가 발생합니다.
 - HTTP 모드에서는 도구의 `oc` 인자를 **무시**하고 항상 서버 환경변수 `OC`를 사용합니다. (stdio 모드는 기존대로 `oc` 인자를 허용합니다.)
-- 미들웨어 순서: 인증 > 로깅 > 속도 제한 > 앱.
+- 미들웨어 순서: 인증 > 로깅 > 속도 제한 > 관리 API(`/admin/*`) > 세션 바인딩 > 앱.
 - ASGI 팩토리로도 실행할 수 있습니다: `uvicorn --factory --no-proxy-headers lexlink.http_server:create_app --host 127.0.0.1 --port 8000` (워커 1개). 팩토리는 **항상 Streamable HTTP(`/mcp`)만, TLS 없는 평문 HTTP로** 서비스하며 `TRANSPORT`/`HOST`/`PORT`는 무시합니다(주소는 uvicorn 옵션 사용). `--no-proxy-headers`를 반드시 붙여 `LEXLINK_TRUSTED_PROXIES`가 `X-Forwarded-For`의 유일한 판단 기준이 되게 하세요(`uv run serve`는 코드에서 `proxy_headers=False`로 실행).
 - HTTP 모드의 "`oc` 인자 무시" 스위치는 **프로세스 단위**입니다. `create_app()`을 호출하면 같은 프로세스의 모든 도구 호출이 서버 `OC`를 사용합니다.
 - **SSE 전송(`TRANSPORT=sse`, 현재 기본값)의 한계**: 도구 결과가 `GET /sse` 스트림으로 전달되고 `POST /messages/`는 즉시 202를 반환합니다. 따라서 요청별 로그의 `status`/`error_code`는 항상 `ok`/없음으로 남고(스트림은 연결 종료 시 `method: GET`으로 한 번만 기록), 동시성 제한은 업스트림 부하를 제한하지 못합니다(분당 제한은 동작). 시작 시 경고를 출력합니다. 의미 있는 로그/제한이 필요하면 `TRANSPORT=http`를 사용하세요.
@@ -33,7 +33,10 @@ OC=<OC> LEXLINK_AUTH_TOKENS=local:<TOKEN> TRANSPORT=http uv run serve
 | `TRANSPORT` | `sse` | `http`(Streamable HTTP, `/mcp`) 권장. `sse`는 `/sse` |
 | `HOST` / `PORT` | `0.0.0.0` / `8000` | 바인드 주소. 리버스 프록시 뒤에서는 `HOST=127.0.0.1` 권장 |
 | `LEXLINK_AUTH_TOKENS` | - | `이름:토큰,이름2:토큰2`. 클라이언트는 `Authorization: Bearer <토큰>` 전송. 형식 오류/중복이면 기동 실패 |
-| `LEXLINK_ALLOW_NO_AUTH` | - | 정확히 `true`일 때만 토큰 없이 기동 (PlayMCP 인증 없음 등록 전용). 기동 시 강한 경고 로그 출력 |
+| `LEXLINK_ADMIN_TOKENS` | - | `이름:토큰,...` 운영자(관리자) 토큰. `/admin/*` 사용 권한이 있고 일반 MCP 토큰으로도 쓸 수 있음. 환경변수로만 지정(API로 발급·폐기 불가). 10장 |
+| `LEXLINK_TOKEN_STORE` | `<LEXLINK_DATA_DIR>/tokens.json` | 런타임에 발급한 토큰의 해시 저장 파일. 서비스 계정이 쓸 수 있는 영속 경로로 지정(예: `/var/lib/lexlink/tokens.json`) |
+| `LEXLINK_DATA_DIR` | `<repo>/data` | `LEXLINK_TOKEN_STORE` 기본 경로의 디렉터리 |
+| `LEXLINK_ALLOW_NO_AUTH` | - | 정확히 `true`일 때만 토큰 없이 기동 (PlayMCP 인증 없음 등록 전용). 기동 시 강한 경고 로그 출력. 토큰(`LEXLINK_AUTH_TOKENS`/`LEXLINK_ADMIN_TOKENS`)이 설정되어 있으면 무시됨 |
 | `LEXLINK_ALLOWED_HOSTS` | - | 허용 Host 헤더 목록(쉼표 구분, 예: `mcp.example.com`). 설정 시 DNS 리바인딩 보호가 해당 호스트 기준으로 켜짐 |
 | `LEXLINK_ALLOWED_ORIGINS` | - | 허용 Origin 목록(쉼표 구분, 예: `https://mcp.example.com`). `LEXLINK_ALLOWED_HOSTS` 없이 설정하면 기동 시 `RuntimeError` |
 | `LEXLINK_TRUSTED_PROXIES` | - | `X-Forwarded-For`를 신뢰할 직접 접속 피어 IP 목록(정확히 일치, 쉼표 구분) |
@@ -72,7 +75,7 @@ OC=<OC> LEXLINK_AUTH_TOKENS=local:<TOKEN> TRANSPORT=http uv run serve
 - 알려진 한계: SSE 스트림이 끝난 뒤에도 mcp의 `SseServerTransport._read_stream_writers` 항목은 mcp가 제거하지 않고(비공개 속성이라 접근하지 않음) 세션당 작은 객체 하나가 남습니다. Host 검증 실패(421)로 끝난 세션 없는 요청은 mcp 안에 id를 알 수 없는 transport를 하나 남길 수 있습니다(인증된 토큰·속도 제한 안에서만 가능). 두 경우 모두 프로세스 재시작으로 정리됩니다. `LEXLINK_SESSION_IDLE_TTL_SEC=0`이면 유휴 만료는 없고 종료 실패한 비정상 세션만 스위퍼가 재시도합니다.
 - `mcp`는 `>=1.26.0,<1.27`로 고정되어 있습니다. 세션 해제가 비공개 속성 `_server_instances`와 내부 DELETE 동작에 의존하므로, 상한을 올릴 때는 이 두 동작을 다시 확인하세요.
 - 인증 없음 모드(`LEXLINK_ALLOW_NO_AUTH=true`)에서는 모든 요청의 token_id가 `noauth`로 같으므로 세션 바인딩은 아무 효과가 없습니다(세션 ID를 아는 누구나 사용 가능).
-- 401 응답은 로그에 남지 않고(인증이 가장 바깥 미들웨어) 속도 제한도 받지 않습니다. uvicorn 액세스 로그에서만 확인할 수 있습니다.
+- 401 응답은 로그에 남지 않고(인증이 가장 바깥 미들웨어; `/admin/*`의 401도 마찬가지) 속도 제한도 받지 않습니다. uvicorn 액세스 로그에서만 확인할 수 있습니다.
 - 동기 도구 함수는 워커 스레드(`anyio.to_thread`, 기본 최대 40개)에서 실행되어 느린 업스트림 호출이 이벤트 루프를 막지 않습니다(측정: `lsDelegated_service` 건축법 4.4~5.1초 동안 `cache_stats` 지연 1.56~4.07초 -> 0.00~0.02초). 업스트림 부하는 여전히 토큰별 `LEXLINK_MAX_CONCURRENCY`가 제한합니다. 한계: 워커는 최대 40개라, 40개 이상의 호출이 업스트림에서 멈춰 있으면 대기 중인 동기 도구(`cache_stats` 포함)가 그 뒤에 줄을 섭니다(측정: 12초짜리 호출 45개를 동시에 보내자 `cache_stats`가 10.56초 대기). 클라이언트가 호출을 취소해도 워커 스레드의 업스트림 요청은 응답이 돌아오거나 타임아웃(`LEXLINK_TIMEOUT`, 기본 60초)이 될 때까지 계속 실행됩니다. 타임아웃을 짧게 두면 멈춘 호출이 워커를 점유하는 시간이 줄어듭니다.
 - 이전 형식(요청/응답 병합 로그)을 읽는 `log_processor.py`는 새 형식을 처리하지 않습니다.
 
@@ -256,3 +259,52 @@ PlayMCP처럼 응답 크기 제한이 있는 곳에 붙일 때는 환경 파일�
 | "사용자 정보 검증에 실패하였습니다" | 서버 공인 IP가 OC에 등록되지 않음 (7장) |
 | PlayMCP "Endpoint URL의 도메인이 유효하지 않습니다" | IP 대신 도메인(sslip.io 등) 사용 |
 | PlayMCP "MCP Server 연결 확인에 실패했습니다" | `TRANSPORT=http`, 경로 `/mcp`, 인증 설정, Host 허용 목록 확인 후 8장의 curl로 직접 시험 |
+
+## 10. 운영자 관리 API (토큰 발급·폐기, 로그 조회)
+
+서버를 재시작하면 살아 있는 MCP 세션이 끊기므로, 토큰 추가·폐기와 로그 조회는 HTTP 엔드포인트 `/admin/...`로 재시작 없이 합니다. MCP 도구가 아니므로 도구 목록과 `_meta["lexlink/policy"]`는 바뀌지 않습니다. 구현은 `src/lexlink/admin.py`(라우트), `src/lexlink/tokens.py`(토큰 저장소), `src/lexlink/admin_cli.py`(CLI)입니다.
+
+### 설정과 인증
+
+- `/etc/lexlink.env`에 `LEXLINK_ADMIN_TOKENS=ops:<ADMIN_TOKEN>`을 추가하고(`openssl rand -hex 32`), 운영자만 이 값을 가집니다. 관리자 토큰은 **환경변수로만** 지정하며 API로 발급·폐기할 수 없습니다(바꾸려면 env 수정 후 재시작). 일반 MCP 토큰으로도 쓸 수 있습니다.
+- `LEXLINK_TOKEN_STORE`는 영속 경로로 지정합니다(예: `/var/lib/lexlink/tokens.json`, 서비스 계정이 쓸 수 있어야 함). 파일은 `0600`, 새로 만드는 디렉터리는 `0700`, 쓰기는 임시 파일 후 교체(원자적)입니다. 저장되는 것은 토큰의 sha256 해시, 이름, 시각뿐이며 토큰 값은 남지 않습니다. 파일이 깨졌으면 폐기된 토큰이 되살아날 수 있으므로 기동을 거부합니다.
+- `Authorization: Bearer <관리자 토큰>` 필요. 없음/무효는 401, 관리자가 아닌 일반 토큰은 403. 토큰 비교는 해시 상수 시간 비교입니다. Host/Origin 검증(`LEXLINK_ALLOWED_HOSTS`)은 MCP와 같고, 속도 제한은 `LEXLINK_RATE_LIMIT_PER_MIN`/`LEXLINK_MAX_CONCURRENCY`가 `/admin/*`의 모든 메서드에 토큰별 별도 버킷으로 적용됩니다.
+- `LEXLINK_ALLOW_NO_AUTH=true`(인증 없음) 모드에서는 관리 API가 없습니다(404).
+
+### 엔드포인트
+
+| 요청 | 설명 |
+|---|---|
+| `GET /admin/tokens` | 토큰 목록: `name`, `token_id`, `source`(`env`/`issued`), `created_at`, `revoked_at`(관리자 토큰은 `admin: true`). 토큰 값은 절대 포함되지 않음 |
+| `POST /admin/tokens` | 본문 `{"name": "lawyer-kim"}`. 이름은 `[a-z0-9][a-z0-9_-]{0,62}`, 환경변수·발급·폐기된 이름 전체에서 유일(400 `invalid_name`, 409 `name_taken`). 201과 함께 `token`을 **이번 한 번만** 돌려줌 |
+| `DELETE /admin/tokens/<이름>` | 발급 토큰 폐기. 즉시 401이 되고, 그 토큰에 묶인 세션을 종료/해제하고 `sessions_ended`를 돌려줌. 이미 폐기됐으면 `already_revoked: true`. 환경변수 토큰은 409 `env_token_not_revocable`, 없는 이름은 404 |
+| `GET /admin/logs` | 요청 로그 JSON(최신순). 쿼리: `date=YYYY-MM-DD` 또는 `from`/`to`(포함, 기본 오늘, 최대 366일), `limit`(1-1000, 기본 100), 일치 필터 `token`(이름), `token_id`, `tool_name`, `status`, `client_name`, `method`. 응답 `rows`의 각 행에 `token_name`이 `token_id` 옆에 붙고, `matched`는 일치한 전체 건수, `returned`는 돌려준 건수 |
+
+관리 요청도 요청 로그에 `method: "admin:logs"`, `"admin:issue_token"`, `"admin:revoke_token"`, `"admin:list_tokens"`, 알 수 없는 경로는 `"admin:unknown"`으로 남고, 토큰 이름은 `admin_target`에 들어갑니다. 본문, 쿼리, 헤더, 토큰 값은 기록되지 않습니다. 403 시도도 기록됩니다.
+
+### CLI
+
+```bash
+export LEXLINK_ADMIN_URL=https://mcp.example.com
+export LEXLINK_ADMIN_TOKEN=<ADMIN_TOKEN>      # 셸 기록에 남기지 않도록 주의
+uv run lexlink-admin tokens list
+uv run lexlink-admin tokens issue lawyer-kim   # 토큰만 stdout, 안내는 stderr
+uv run lexlink-admin tokens revoke lawyer-kim
+uv run lexlink-admin logs --token lawyer-kim --date 2026-11-07 --limit 50
+uv run lexlink-admin logs --from 2026-11-01 --to 2026-11-07 --status error --tool prec_search
+```
+
+### 변호사(사용자) 토큰 추가 절차
+
+1. 운영자가 `uv run lexlink-admin tokens issue lawyer-kim`을 실행합니다. 출력된 토큰은 이때 한 번만 볼 수 있으므로 바로 안전한 채널로 전달합니다(복구 불가, 분실 시 폐기 후 새 이름으로 재발급).
+2. 변호사는 MCP 클라이언트에 `https://<도메인>/mcp`와 `Authorization: Bearer <토큰>`을 설정합니다.
+3. 사용 내역은 `logs --token lawyer-kim`으로 봅니다(`client_name`, `tool_name`, `upstream_calls` 등).
+4. 그만둘 때는 `tokens revoke lawyer-kim`. 즉시 401이 됩니다. 이름은 로그 해석을 위해 폐기 후에도 예약되어 재사용할 수 없습니다.
+
+### 한계
+
+- 폐기 시점에 이미 처리 중이던 요청은 끝까지 실행됩니다. 이후 요청은 401입니다. Streamable HTTP 세션은 서버가 종료하고(종료 실패 시 스위퍼가 재시도), SSE 세션은 바인딩을 제거해 `/messages/` POST를 404로 만들지만 이미 열린 SSE 스트림 자체를 끊지는 않습니다.
+- `LEXLINK_AUTH_TOKENS`/`LEXLINK_ADMIN_TOKENS`의 변경은 여전히 env 수정 후 재시작이 필요합니다. 사용자 토큰을 런타임에 다루려면 `tokens issue`로 발급한 토큰을 쓰세요.
+- 저장소 파일은 단일 프로세스(단일 워커) 가정입니다. 여러 인스턴스가 같은 파일을 공유하면 서로의 변경을 모릅니다.
+- 로그 조회는 일별 파일을 순차로 읽습니다(최대 366일 범위, 최대 1000행). `LEXLINK_LOG_BODIES=true`이면 행에 이미 기록된 인자/결과가 그대로 보입니다.
+- 사용자 토큰은 모두 동등하며 토큰별 권한이나 만료일은 없습니다.

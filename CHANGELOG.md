@@ -8,6 +8,13 @@ All notable changes to LexLink are documented here in both English and Korean.
 
 ### Unreleased
 
+#### Operator admin API (tokens and logs without restart)
+- New env `LEXLINK_ADMIN_TOKENS="name:token,..."` (operator only, env only: never issued or revoked through the API; an admin token also works as a normal MCP token). `Authorization: Bearer <admin token>` unlocks HTTP endpoints `GET /admin/logs`, `GET|POST /admin/tokens`, `DELETE /admin/tokens/<name>` (`src/lexlink/admin.py`, a small route table: new admin functions are one decorated handler). Non-admin tokens get 403, missing/invalid 401; Host/Origin validation and rate limits (separate per-token bucket, all methods) apply. They are not MCP tools: the tool list and `_meta["lexlink/policy"]` are unchanged.
+- Tokens issued at runtime (`[a-z0-9][a-z0-9_-]{0,62}`, unique across env and issued names, shown once) work immediately; revoking one gives 401 immediately and terminates the sessions bound to it. Only sha256 digests are stored, in `LEXLINK_TOKEN_STORE` (default `<LEXLINK_DATA_DIR or ./data>/tokens.json`; file 0600, dir 0700, atomic write; a malformed store stops startup). `src/lexlink/tokens.py`.
+- `GET /admin/logs` filters by `date` or `from`/`to`, `limit`, `token` (name), `token_id`, `tool_name`, `status`, `client_name`, `method`, and adds `token_name` next to `token_id`. Admin requests are logged as `method: "admin:<action>"` (plus `admin_target` = token name) without bodies or secrets.
+- `uv run lexlink-admin tokens list|issue NAME|revoke NAME` and `logs ...` (env `LEXLINK_ADMIN_URL`, `LEXLINK_ADMIN_TOKEN`); `issue` prints the token alone on stdout.
+- With tokens configured, `LEXLINK_ALLOW_NO_AUTH=true` is ignored (warning). `LEXLINK_ADMIN_TOKENS` alone is enough to start.
+
 #### HTTP request log
 - Each entry now carries `user_agent`, `client_name` / `client_version` (from the session's `initialize` `clientInfo`, remembered per `mcp-session-id` in a bounded LRU and dropped on DELETE; values truncated, control chars stripped) and, for `tools/call`, `upstream_calls` (law.go.kr requests that call made; 0 for a cache hit). The count is taken in `client.py` / `citation.py` through a contextvar set in the tool-call wrapper and handed to the logger by (session id, JSON-RPC id).
 - `LEXLINK_LOG_ARGUMENTS=true` logs argument values (OC and oc/token/authorization keys removed) without result bodies; `LEXLINK_LOG_BODIES=true` still logs both. Logged strings also mask the literal `OC` env value.
@@ -691,6 +698,13 @@ All notable changes to LexLink are documented here in both English and Korean.
 ## 한국어 (Korean)
 
 ### 미배포 (Unreleased)
+
+#### 운영자 관리 API (재시작 없이 토큰·로그)
+- 새 환경변수 `LEXLINK_ADMIN_TOKENS="이름:토큰,..."`(운영자 전용, 환경변수로만 지정; API로 발급·폐기 불가; 관리자 토큰은 일반 MCP 토큰으로도 사용 가능). `Authorization: Bearer <관리자 토큰>`으로 HTTP 엔드포인트 `GET /admin/logs`, `GET|POST /admin/tokens`, `DELETE /admin/tokens/<이름>` 사용(`src/lexlink/admin.py`의 작은 라우트 표; 새 관리 기능은 데코레이터를 붙인 핸들러 하나로 추가). 관리자가 아닌 토큰은 403, 없음/무효는 401이며 Host/Origin 검증과 속도 제한(토큰별 별도 버킷, 모든 메서드)이 적용됩니다. MCP 도구가 아니므로 도구 목록과 `_meta["lexlink/policy"]`는 바뀌지 않습니다.
+- 런타임에 발급한 토큰(`[a-z0-9][a-z0-9_-]{0,62}`, 환경변수·발급 이름 전체에서 유일, 한 번만 표시)은 즉시 사용 가능하고, 폐기하면 즉시 401이 되며 그 토큰에 묶인 세션도 종료됩니다. 저장소에는 sha256 해시만 `LEXLINK_TOKEN_STORE`(기본 `<LEXLINK_DATA_DIR 또는 ./data>/tokens.json`; 파일 0600, 디렉터리 0700, 원자적 쓰기; 형식이 깨졌으면 기동 실패)에 남습니다. `src/lexlink/tokens.py`.
+- `GET /admin/logs`는 `date` 또는 `from`/`to`, `limit`, `token`(이름), `token_id`, `tool_name`, `status`, `client_name`, `method`로 거르고 `token_id` 옆에 `token_name`을 붙입니다. 관리 요청은 본문·비밀 없이 `method: "admin:<action>"`(+ `admin_target`=토큰 이름)로 기록됩니다.
+- `uv run lexlink-admin tokens list|issue 이름|revoke 이름`, `logs ...`(환경변수 `LEXLINK_ADMIN_URL`, `LEXLINK_ADMIN_TOKEN`). `issue`는 토큰만 stdout에 출력합니다.
+- 토큰이 설정되어 있으면 `LEXLINK_ALLOW_NO_AUTH=true`는 무시됩니다(경고). `LEXLINK_ADMIN_TOKENS`만으로도 기동할 수 있습니다.
 
 #### HTTP 요청 로그
 - 각 항목에 `user_agent`, `client_name` / `client_version`(세션 `initialize`의 `clientInfo`를 `mcp-session-id`별 제한된 LRU에 기억, DELETE 시 삭제; 길이 제한, 제어문자 제거), `tools/call`의 `upstream_calls`(그 호출이 law.go.kr로 보낸 요청 수, 캐시 적중이면 0)를 추가. 도구 호출 래퍼가 설정한 contextvar로 `client.py` / `citation.py`에서 세고, (세션 id, JSON-RPC id)로 로거에 넘김.

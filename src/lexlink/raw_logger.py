@@ -39,7 +39,7 @@ from typing import Any, Optional
 
 from .client import redact_oc
 from . import upstream_count
-from .http_security import NO_AUTH_TOKEN_ID, resolve_client_ip
+from .http_security import NO_AUTH_TOKEN_ID, is_admin_path, resolve_client_ip
 
 logger = logging.getLogger(__name__)
 
@@ -466,6 +466,35 @@ def build_entry(
     return {k: v for k, v in entry.items() if v is not None}
 
 
+def build_admin_entry(
+    *,
+    state: dict,
+    http_status: int,
+    response_bytes: int,
+    duration_ms: float,
+    client_ip: Optional[str],
+    user_agent: str = "",
+) -> dict:
+    """Log entry for an /admin/* request: ``method`` is ``admin:<action>``.
+
+    The action and target are set by admin.py in ``scope["state"]`` from fixed
+    vocabularies / validated names; no request body, query or header is logged.
+    """
+    entry = {
+        "timestamp": datetime.now().isoformat(),
+        "token_id": state.get("token_id", NO_AUTH_TOKEN_ID),
+        "method": "admin:" + str(state.get("admin_action") or "unknown"),
+        "admin_target": state.get("admin_target"),
+        "status": "error" if http_status >= 400 else "ok",
+        "http_status": http_status,
+        "response_bytes": response_bytes,
+        "duration_ms": round(duration_ms, 2),
+        "client_ip": client_ip,
+        "user_agent": _clean_text(user_agent, USER_AGENT_MAX),
+    }
+    return {k: v for k, v in entry.items() if v is not None}
+
+
 # ---------------------------------------------------------------------------
 # ASGI middleware
 # ---------------------------------------------------------------------------
@@ -513,6 +542,7 @@ class LoggingMiddleware:
             return
 
         start = time.perf_counter()
+        admin_req = is_admin_path(scope)  # logged by build_admin_entry, bodies never captured
         http_method = scope.get("method", "")
         req_buf = bytearray()
         resp_buf = bytearray()
@@ -523,7 +553,7 @@ class LoggingMiddleware:
 
         async def wrapped_receive():
             message = await receive()
-            if message["type"] == "http.request" and http_method == "POST":
+            if message["type"] == "http.request" and http_method == "POST" and not admin_req:
                 self._capture(req_buf, message.get("body", b""), info)
                 if not message.get("more_body"):  # request complete: forget a stale count for this id
                     started = _parse_request(bytes(req_buf))
@@ -542,7 +572,8 @@ class LoggingMiddleware:
             elif message["type"] == "http.response.body":
                 body = message.get("body", b"")
                 info["total"] += len(body)
-                self._capture(resp_buf, body, info)
+                if not admin_req:
+                    self._capture(resp_buf, body, info)
             await send(message)
 
         try:
@@ -553,7 +584,9 @@ class LoggingMiddleware:
                 req_bytes = bytes(req_buf)
                 client_name = client_version = upstream_calls = None
                 session = req_session or info["session"]
-                if http_method == "DELETE" and info["status"] < 400:
+                if admin_req:
+                    pass
+                elif http_method == "DELETE" and info["status"] < 400:
                     self.sessions.drop(req_session)
                 elif http_method == "POST":
                     parsed = _parse_request(req_bytes)
@@ -565,25 +598,33 @@ class LoggingMiddleware:
                         client_name, client_version = self.sessions.get(session, token_id)
                     if parsed is not None and parsed.get("method") == "tools/call":
                         upstream_calls = upstream_count.take(session, parsed.get("id"))
-                entry = build_entry(
-                    req_body=req_bytes,
-                    resp_body=bytes(resp_buf),
-                    content_type=info["ctype"],
-                    http_method=http_method,
-                    http_status=info["status"],
-                    response_bytes=info["total"],
-                    duration_ms=(time.perf_counter() - start) * 1000,
-                    token_id=token_id,
-                    client_ip=resolve_client_ip(scope, self.trusted_proxies),
-                    truncated_capture=info["truncated"],
-                    log_bodies=self.log_bodies,
-                    tool_schemas=self.tool_schemas,
-                    log_arguments=self.log_arguments,
-                    user_agent=user_agent,
-                    client_name=client_name,
-                    client_version=client_version,
-                    upstream_calls=upstream_calls,
-                )
+                if admin_req:
+                    entry = build_admin_entry(
+                        state=scope.get("state", {}), http_status=info["status"],
+                        response_bytes=info["total"],
+                        duration_ms=(time.perf_counter() - start) * 1000,
+                        client_ip=resolve_client_ip(scope, self.trusted_proxies),
+                        user_agent=user_agent)
+                else:
+                    entry = build_entry(
+                        req_body=req_bytes,
+                        resp_body=bytes(resp_buf),
+                        content_type=info["ctype"],
+                        http_method=http_method,
+                        http_status=info["status"],
+                        response_bytes=info["total"],
+                        duration_ms=(time.perf_counter() - start) * 1000,
+                        token_id=token_id,
+                        client_ip=resolve_client_ip(scope, self.trusted_proxies),
+                        truncated_capture=info["truncated"],
+                        log_bodies=self.log_bodies,
+                        tool_schemas=self.tool_schemas,
+                        log_arguments=self.log_arguments,
+                        user_agent=user_agent,
+                        client_name=client_name,
+                        client_version=client_version,
+                        upstream_calls=upstream_calls,
+                    )
                 if entry is not None:
                     self.writer.write(entry)
             except Exception as e:  # logging must never break a request
