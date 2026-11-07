@@ -8,13 +8,17 @@ blocks on disk I/O and streams are never buffered.
 
 Default entry fields: timestamp, token_id, method, tool_name, declared argument
 key names (no values; unknown ones only as a count), status, error_code, http_status, response_bytes,
-duration_ms, client_ip. With LEXLINK_LOG_BODIES=true, argument values (minus
-oc/token/authorization keys) and the result body are logged too, with the OC
-credential redacted.
+duration_ms, client_ip, user_agent, client_name/client_version (from the session's initialize
+clientInfo, remembered per mcp-session-id in a bounded LRU and dropped on DELETE) and, for
+tools/call, upstream_calls (law.go.kr requests that call made; cache hit = 0; see upstream_count.py).
+Client-controlled strings are control-char-stripped and truncated. With LEXLINK_LOG_ARGUMENTS=true,
+argument values (minus oc/token/authorization keys, OC redacted) are logged without result bodies.
+With LEXLINK_LOG_BODIES=true, argument values and the result body are logged.
 
 Environment variables:
     LEXLINK_LOG_DIR             log directory (default: <repo>/logs/playmcp)
     LEXLINK_LOG_RETENTION_DAYS  delete YYYY-MM-DD.jsonl older than N days (default 30; 0 = keep)
+    LEXLINK_LOG_ARGUMENTS       "true" to log argument values (no result bodies)
     LEXLINK_LOG_BODIES          "true" to log argument values and result bodies
     LEXLINK_LOG_CAPTURE_MAX_BYTES  per-direction capture cap (default 1048576)
     LEXLINK_TRUSTED_PROXIES     exact peer IPs allowed to set X-Forwarded-For
@@ -28,11 +32,13 @@ import queue
 import re
 import threading
 import time
+from collections import OrderedDict
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
 from .client import redact_oc
+from . import upstream_count
 from .http_security import NO_AUTH_TOKEN_ID, resolve_client_ip
 
 logger = logging.getLogger(__name__)
@@ -55,6 +61,10 @@ KNOWN_METHODS = frozenset({
     "notifications/roots/list_changed",
 })
 _DROP_WARN_INTERVAL = 60.0
+_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
+CLIENT_FIELD_MAX = 100
+USER_AGENT_MAX = 200
+MAX_TRACKED_SESSIONS = 4096
 _RESPONSE_KEY_RE = re.compile(r'error_code\\*"\s*:\s*\\*"([A-Za-z0-9_]+)')
 
 
@@ -198,8 +208,18 @@ def _is_sensitive_key(key: Any) -> bool:
     return k in _SENSITIVE_KEYS or any(sub in k for sub in _SENSITIVE_SUBSTRINGS)
 
 
+def _redact_key(key: Any) -> Any:
+    """Dict key with the OC masked (a client may put it in a key)."""
+    if isinstance(key, str):
+        return redact_oc(key, os.environ.get("OC"))
+    return key
+
+
 def _redact_values(obj: Any) -> Any:
     """Redact OC in strings and drop oc/token/authorization-like keys, recursively."""
+    if isinstance(obj, (int, float)) and not isinstance(obj, bool):
+        oc = os.environ.get("OC")
+        return "***" if oc and oc in str(obj) else obj
     if isinstance(obj, str):
         stripped = obj.lstrip()
         if stripped[:1] in ("{", "["):  # JSON embedded in a string (MCP text content)
@@ -209,14 +229,65 @@ def _redact_values(obj: Any) -> Any:
                 parsed = None
             if isinstance(parsed, (dict, list)):
                 return json.dumps(_redact_values(parsed), ensure_ascii=False)
-        return redact_oc(obj)
+        return redact_oc(obj, os.environ.get("OC"))
     if isinstance(obj, dict):
         return {
-            k: _redact_values(v) for k, v in obj.items() if not _is_sensitive_key(k)
+            _redact_key(k): _redact_values(v) for k, v in obj.items() if not _is_sensitive_key(k)
         }
     if isinstance(obj, list):
         return [_redact_values(v) for v in obj]
     return obj
+
+
+def _clean_text(value: Any, max_len: int) -> Optional[str]:
+    """Client-controlled value -> str without control chars, truncated; None if not a usable string."""
+    if not isinstance(value, str):
+        return None
+    value = _CONTROL_RE.sub("", value)
+    # mask OC before truncating so a cut cannot leave half a credential recognisable
+    value = redact_oc(value, os.environ.get("OC"))
+    return value[:max_len].strip() or None
+
+
+def _client_info(req: Optional[dict]) -> tuple[Optional[str], Optional[str]]:
+    """(name, version) from an initialize request's params.clientInfo."""
+    params = req.get("params") if isinstance(req, dict) else None
+    info = params.get("clientInfo") if isinstance(params, dict) else None
+    if not isinstance(info, dict):
+        return None, None
+    return (_clean_text(info.get("name"), CLIENT_FIELD_MAX),
+            _clean_text(info.get("version"), CLIENT_FIELD_MAX))
+
+
+class SessionClients:
+    """Bounded LRU: mcp-session-id -> (token_id, client_name, client_version)."""
+
+    def __init__(self, maxsize: int = MAX_TRACKED_SESSIONS):
+        self.maxsize = maxsize
+        self._data: "OrderedDict[str, tuple]" = OrderedDict()
+        self._lock = threading.Lock()
+
+    def put(self, session_id: str, token_id: str, name: Optional[str], version: Optional[str]) -> None:
+        with self._lock:
+            self._data[session_id] = (token_id, name, version)
+            self._data.move_to_end(session_id)
+            while len(self._data) > self.maxsize:
+                self._data.popitem(last=False)
+
+    def get(self, session_id: Optional[str], token_id: str) -> tuple[Optional[str], Optional[str]]:
+        """Client of this session, only for the token that created it."""
+        if not session_id:
+            return None, None
+        with self._lock:
+            rec = self._data.get(session_id)
+            if rec is None or rec[0] != token_id:
+                return None, None
+            self._data.move_to_end(session_id)
+            return rec[1], rec[2]
+
+    def drop(self, session_id: Optional[str]) -> None:
+        with self._lock:
+            self._data.pop(session_id, None)
 
 
 def _parse_request(body: bytes) -> Optional[dict]:
@@ -285,6 +356,11 @@ def build_entry(
     truncated_capture: bool,
     log_bodies: bool,
     tool_schemas: Optional[dict] = None,
+    log_arguments: bool = False,
+    user_agent: Optional[str] = None,
+    client_name: Optional[str] = None,
+    client_version: Optional[str] = None,
+    upstream_calls: Optional[int] = None,
 ) -> Optional[dict]:
     """Build one log entry, or None if this request should not be logged.
 
@@ -373,11 +449,16 @@ def build_entry(
         "response_bytes": response_bytes,
         "duration_ms": round(duration_ms, 2),
         "client_ip": client_ip,
+        "user_agent": _clean_text(user_agent, USER_AGENT_MAX),
+        "client_name": client_name,
+        "client_version": client_version,
+        "upstream_calls": upstream_calls if method == "tools/call" else None,
         "truncated_capture": True if truncated_capture else None,
     }
-    if log_bodies:
+    if log_bodies or log_arguments:
         if isinstance(arguments, dict):
             entry["arguments"] = _redact_values(arguments)
+    if log_bodies:
         if result is not None:
             entry["result"] = _redact_values(result)
         elif error is not None:
@@ -400,8 +481,14 @@ class LoggingMiddleware:
         capture_max_bytes: Optional[int] = None,
         trusted_proxies: Optional[frozenset] = None,
         tool_schemas: Optional[dict] = None,
+        log_arguments: Optional[bool] = None,
     ):
         self.app = app
+        self.sessions = SessionClients()
+        self.log_arguments = (
+            os.getenv("LEXLINK_LOG_ARGUMENTS", "").strip().lower() == "true"
+            if log_arguments is None else log_arguments
+        )
         self.tool_schemas = tool_schemas or {}
         self.writer = writer if writer is not None else get_writer()
         self.log_bodies = (
@@ -429,12 +516,19 @@ class LoggingMiddleware:
         http_method = scope.get("method", "")
         req_buf = bytearray()
         resp_buf = bytearray()
-        info = {"status": 500, "ctype": "", "total": 0, "truncated": False}
+        info = {"status": 500, "ctype": "", "total": 0, "truncated": False, "session": None}
+        req_headers = {k.lower(): v for k, v in scope.get("headers", [])}
+        req_session = _clean_text(req_headers.get(b"mcp-session-id", b"").decode("latin-1"), 100)
+        user_agent = req_headers.get(b"user-agent", b"").decode("utf-8", "replace")
 
         async def wrapped_receive():
             message = await receive()
             if message["type"] == "http.request" and http_method == "POST":
                 self._capture(req_buf, message.get("body", b""), info)
+                if not message.get("more_body"):  # request complete: forget a stale count for this id
+                    started = _parse_request(bytes(req_buf))
+                    if started is not None and started.get("method") == "tools/call":
+                        upstream_count.discard(req_session, started.get("id"))
             return message
 
         async def wrapped_send(message):
@@ -443,6 +537,8 @@ class LoggingMiddleware:
                 for k, v in message.get("headers", []):
                     if k.lower() == b"content-type":
                         info["ctype"] = v.decode("latin-1").lower()
+                    elif k.lower() == b"mcp-session-id":
+                        info["session"] = _clean_text(v.decode("latin-1"), 100)
             elif message["type"] == "http.response.body":
                 body = message.get("body", b"")
                 info["total"] += len(body)
@@ -453,19 +549,40 @@ class LoggingMiddleware:
             await self.app(scope, wrapped_receive, wrapped_send)
         finally:
             try:
+                token_id = scope.get("state", {}).get("token_id", NO_AUTH_TOKEN_ID)
+                req_bytes = bytes(req_buf)
+                client_name = client_version = upstream_calls = None
+                session = req_session or info["session"]
+                if http_method == "DELETE" and info["status"] < 400:
+                    self.sessions.drop(req_session)
+                elif http_method == "POST":
+                    parsed = _parse_request(req_bytes)
+                    if parsed is not None and parsed.get("method") == "initialize":
+                        client_name, client_version = _client_info(parsed)
+                        if info["session"] and info["status"] < 400:
+                            self.sessions.put(info["session"], token_id, client_name, client_version)
+                    else:
+                        client_name, client_version = self.sessions.get(session, token_id)
+                    if parsed is not None and parsed.get("method") == "tools/call":
+                        upstream_calls = upstream_count.take(session, parsed.get("id"))
                 entry = build_entry(
-                    req_body=bytes(req_buf),
+                    req_body=req_bytes,
                     resp_body=bytes(resp_buf),
                     content_type=info["ctype"],
                     http_method=http_method,
                     http_status=info["status"],
                     response_bytes=info["total"],
                     duration_ms=(time.perf_counter() - start) * 1000,
-                    token_id=scope.get("state", {}).get("token_id", NO_AUTH_TOKEN_ID),
+                    token_id=token_id,
                     client_ip=resolve_client_ip(scope, self.trusted_proxies),
                     truncated_capture=info["truncated"],
                     log_bodies=self.log_bodies,
                     tool_schemas=self.tool_schemas,
+                    log_arguments=self.log_arguments,
+                    user_agent=user_agent,
+                    client_name=client_name,
+                    client_version=client_version,
+                    upstream_calls=upstream_calls,
                 )
                 if entry is not None:
                     self.writer.write(entry)

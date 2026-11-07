@@ -1365,3 +1365,185 @@ def test_log_ip_untrusted_peer_ignores_xff_trusted_peer_uses_it():
     scope = make_scope(headers=[("x-forwarded-for", "198.51.100.7")], client=("10.0.0.3", 1))
     assert resolve_client_ip(scope, frozenset()) == "10.0.0.3"
     assert resolve_client_ip(scope, frozenset({"10.0.0.3"})) == "198.51.100.7"
+
+
+# ------------------------------------- client identity, user agent, upstream_calls
+
+def _read_log(tmp_path):
+    from lexlink.raw_logger import flush_all
+    flush_all()
+    files = sorted((tmp_path / "logs").glob("*.jsonl"))
+    return [json.loads(x) for f in files for x in f.read_text().splitlines()]
+
+
+def test_build_entry_user_agent_upstream_calls_and_arguments_opt_in():
+    kw = dict(req_body=tool_call_body(), resp_body=b"", content_type="application/json",
+              http_method="POST", http_status=200, response_bytes=0, duration_ms=1.0,
+              token_id="tid", client_ip=None, truncated_capture=False, log_bodies=False,
+              tool_schemas=SCHEMAS)
+    e = build_entry(**kw, user_agent="UA\r\n" + "x" * 500, client_name="cli", upstream_calls=3)
+    assert e["user_agent"] == "UA" + "x" * 198
+    assert e["client_name"] == "cli" and "client_version" not in e
+    assert e["upstream_calls"] == 3 and "arguments" not in e
+    e = build_entry(**kw, log_arguments=True)
+    assert e["arguments"] == {"query": "SECRET-QUERY"}  # oc key removed
+    assert "result" not in e
+    assert "fake-oc-arg-9999" not in json.dumps(e) and "fake-oc-env-1234" not in json.dumps(e)
+
+
+def test_log_arguments_masks_oc_inside_values(tmp_path):
+    body = tool_call_body({"query": "find fake-oc-env-1234 here OC=fake-oc-env-1234"})
+    entries, raw = run_logged(json_app(tool_result({"status": "success"})), body, tmp_path,
+                              log_arguments=True)
+    assert "fake-oc-env-1234" not in raw
+    assert "arguments" in entries[0] and "result" not in entries[0]
+
+
+def test_clean_text_rules():
+    from lexlink.raw_logger import _clean_text
+    assert _clean_text("a\x00b\nc d", 100) == "abcd"
+    assert _clean_text("x" * 500, 100) == "x" * 100
+    assert _clean_text(123, 100) is None and _clean_text({"a": 1}, 100) is None
+    assert _clean_text("\n\x00", 100) is None
+
+
+def test_session_clients_lru_token_binding_and_drop():
+    from lexlink.raw_logger import SessionClients
+    s = SessionClients(maxsize=2)
+    s.put("a", "t1", "A", "1")
+    s.put("b", "t1", "B", "1")
+    s.put("c", "t1", "C", "1")  # evicts a
+    assert s.get("a", "t1") == (None, None)
+    assert s.get("b", "t1") == ("B", "1")
+    assert s.get("b", "t2") == (None, None)  # another token never sees it
+    s.drop("b")
+    assert s.get("b", "t1") == (None, None)
+
+
+def _law_search_payload():
+    return json.dumps({"LawSearch": {"target": "law", "totalCnt": "1", "law": [{
+        "법령일련번호": "1", "법령명한글": "테스트법", "법령ID": "000001", "법령구분명": "법률",
+        "현행연혁코드": "현행", "공포일자": "20200101", "시행일자": "20200101"}]}})
+
+
+def test_http_log_client_info_and_upstream_calls(monkeypatch, tmp_path):
+    """Real HTTP app: client identity follows the session; upstream_calls counts the law.go.kr
+    requests of the tool call (session task + worker thread), 0 for a cache hit."""
+    import httpx
+    from lexlink.client import LawAPIClient
+
+    monkeypatch.setenv("LEXLINK_AUTH_TOKENS", f"a:{TOKEN}")
+    monkeypatch.setenv("LEXLINK_ALLOWED_HOSTS", "testserver")
+    monkeypatch.setenv("LEXLINK_LOG_ARGUMENTS", "true")
+    hits = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        hits.append(str(request.url))
+        return httpx.Response(200, text=_law_search_payload(), request=request)
+
+    orig_init = LawAPIClient.__init__
+
+    def init(self, *a, **k):
+        orig_init(self, *a, **k)
+        self.client = httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=True)
+
+    monkeypatch.setattr(LawAPIClient, "__init__", init)
+
+    def call_tool(c, h, rid, query):
+        r = c.post("/mcp", json={"jsonrpc": "2.0", "id": rid, "method": "tools/call",
+                                 "params": {"name": "law_search", "arguments": {"query": query}}},
+                   headers=h)
+        assert r.status_code == 200, r.text
+
+    with TestClient(http_server.create_app()) as c:
+        info = {"name": "test-cli\n", "version": "9.9"}
+        r = c.post("/mcp", json={**INIT, "params": {**INIT["params"], "clientInfo": info}},
+                   headers={**auth_headers(), "user-agent": "ua-test/1"})
+        sid = r.headers["mcp-session-id"]
+        h = {**auth_headers(), "mcp-session-id": sid, "user-agent": "ua-test/1"}
+        c.post("/mcp", json={"jsonrpc": "2.0", "method": "notifications/initialized"}, headers=h)
+        call_tool(c, h, 11, "upstream-count-probe-xyz")
+        n_first = len(hits)
+        assert n_first >= 1
+        call_tool(c, h, 12, "upstream-count-probe-xyz")  # cached
+        assert len(hits) == n_first
+        call_tool(c, h, 13, "upstream-count-probe-abc")
+        n_second = len(hits) - n_first
+        assert n_second >= 1
+        c.delete("/mcp", headers=h)
+
+    entries = _read_log(tmp_path)
+    inits = [e for e in entries if e["method"] == "initialize"]
+    calls = [e for e in entries if e["method"] == "tools/call"]
+    assert inits[0]["client_name"] == "test-cli" and inits[0]["client_version"] == "9.9"
+    assert inits[0]["user_agent"] == "ua-test/1" and "upstream_calls" not in inits[0]
+    assert [e["client_name"] for e in calls] == ["test-cli"] * 3
+    assert [e["upstream_calls"] for e in calls] == [n_first, 0, n_second]
+    assert calls[0]["arguments"] == {"query": "upstream-count-probe-xyz"}
+    assert "result" not in calls[0]
+    assert TOKEN not in json.dumps(entries)
+
+
+# ------------------------------------------------------------ review follow-ups
+
+def test_run_coroutine_sync_keeps_upstream_counter():
+    from lexlink import upstream_count as uc
+    from lexlink._helpers import run_coroutine_sync
+
+    async def two_calls():
+        uc.count_upstream_call()
+        uc.count_upstream_call()
+
+    token = uc.start_counter()
+    try:
+        for _ in range(3):
+            uc.count_upstream_call()
+        run_coroutine_sync(two_calls())
+    finally:
+        assert uc.end_counter(token) == 5
+
+
+def test_redact_values_masks_oc_in_keys_and_numbers(monkeypatch):
+    from lexlink.raw_logger import _redact_values
+    monkeypatch.setenv("OC", "fake-oc-env-1234")
+    out = _redact_values({"fake-oc-env-1234": 1, "n": 1, "ok": ["x fake-oc-env-1234"]})
+    assert "fake-oc-env-1234" not in json.dumps(out) and out["n"] == 1
+    monkeypatch.setenv("OC", "424242")
+    assert _redact_values({"a": 424242, "b": 3.5, "c": [1424242]}) == {"a": "***", "b": 3.5, "c": ["***"]}
+
+
+def test_client_fields_and_user_agent_mask_oc(monkeypatch):
+    from lexlink.raw_logger import _clean_text
+    monkeypatch.setenv("OC", "fake-oc-env-1234")
+    assert "fake-oc-env-1234" not in _clean_text("cli fake-oc-env-1234 OC=fake-oc-env-1234", 100)
+    kw = dict(req_body=tool_call_body(), resp_body=b"", content_type="application/json",
+              http_method="POST", http_status=200, response_bytes=0, duration_ms=1.0,
+              token_id="tid", client_ip=None, truncated_capture=False, log_bodies=False,
+              tool_schemas=SCHEMAS)
+    e = build_entry(**kw, user_agent="ua fake-oc-env-1234")
+    assert "fake-oc-env-1234" not in json.dumps(e)
+
+
+def test_upstream_count_registry_duplicates_and_stale():
+    from lexlink import upstream_count as uc
+    uc.record("s", 1, 4)
+    assert uc.take("s", 1) == 4 and uc.take("s", 1) is None
+    uc.record("s", 2, 4)
+    uc.record("s", 2, 9)  # duplicate in-flight id: ambiguous, both dropped
+    assert uc.take("s", 2) is None
+    uc.record("s", 3, 7)  # stale (cancelled call), never taken
+    uc.discard("s", 3)  # a new call with the same id starts
+    assert uc.take("s", 3) is None
+
+
+def test_middleware_discards_stale_count_when_call_starts(tmp_path):
+    from lexlink import upstream_count as uc
+    uc.record("sess-1", 7, 99)  # left over from an earlier cancelled call with id 7
+    writer = LogWriter(tmp_path / "w")
+    mw = LoggingMiddleware(json_app(tool_result({"status": "success"})), writer=writer,
+                           tool_schemas=SCHEMAS)
+    scope = make_scope(headers=[("authorization", f"Bearer {TOKEN}"), ("mcp-session-id", "sess-1")])
+    asyncio.run(call(mw, scope, tool_call_body()))
+    writer.flush()
+    line = (tmp_path / "w" / f"{datetime.now().date()}.jsonl").read_text().splitlines()[0]
+    assert "upstream_calls" not in json.loads(line)

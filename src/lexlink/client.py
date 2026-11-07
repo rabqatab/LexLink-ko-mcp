@@ -17,6 +17,7 @@ from urllib.parse import urlencode
 
 import httpx
 
+from .upstream_count import count_upstream_call
 from .errors import ErrorCode, create_error_response, get_http_error_hints
 
 
@@ -495,6 +496,11 @@ class LawAPIClient:
         self.timeout = timeout
         self.client = httpx.Client(timeout=timeout, follow_redirects=True)
 
+    def _get(self, url: str, **kwargs) -> httpx.Response:
+        """One counted HTTP GET to law.go.kr (per-tool-call count for the request log)."""
+        count_upstream_call()
+        return self.client.get(url, **kwargs)
+
     def build_url(self, endpoint: str, params: dict) -> str:
         """
         Build complete URL with query parameters.
@@ -583,7 +589,7 @@ class LawAPIClient:
         )
 
         try:
-            response = self.client.get(url)
+            response = self._get(url)
             response.raise_for_status()
             response = self._follow_antibot(response)
 
@@ -683,11 +689,11 @@ class LawAPIClient:
                 return response
 
             logger.info(f"Following anti-bot redirect (hop {i+1})")
-            response = self.client.get(f"{self.base_url}{path}")
+            response = self._get(f"{self.base_url}{path}")
 
             if response.status_code == 404:
                 logger.info("Anti-bot redirect got 404, retrying original URL")
-                response = self.client.get(original_url)
+                response = self._get(original_url)
                 response.raise_for_status()
                 return response
 
@@ -733,7 +739,7 @@ class LawAPIClient:
         """
         try:
             probe_params = {"OC": oc, "target": target, "type": "JSON", "display": 1, "query": "법"}
-            probe = self.client.get(self.build_url("/DRF/lawSearch.do", probe_params),
+            probe = self._get(self.build_url("/DRF/lawSearch.do", probe_params),
                                     timeout=min(self.timeout, 10))
             probe.raise_for_status()
             probe = self._follow_antibot(probe)
