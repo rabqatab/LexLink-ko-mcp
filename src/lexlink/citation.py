@@ -19,6 +19,8 @@ from typing import List, Optional, Dict, Any, Tuple
 from urllib.parse import quote
 
 import httpx
+
+from .upstream_count import count_upstream_call
 from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
@@ -185,6 +187,7 @@ class CitationExtractor:
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
+                count_upstream_call()
                 response = await client.get(url, follow_redirects=True)
 
                 if response.status_code != 200:
@@ -237,6 +240,7 @@ class CitationExtractor:
             await asyncio.sleep(self.request_delay)
 
             async with httpx.AsyncClient(timeout=self.timeout) as client:
+                count_upstream_call()
                 response = await client.get(self.ARTICLE_HTML_URL, params=params)
 
                 if response.status_code == 200:

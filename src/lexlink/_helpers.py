@@ -20,7 +20,9 @@ from typing import Optional, Union
 from mcp.types import ToolAnnotations
 
 from .client import redact_oc
+from . import upstream_count
 from .errors import ErrorCode, create_error_response
+from .upstream_count import end_counter, start_counter
 
 logger = logging.getLogger(__name__)
 
@@ -349,6 +351,18 @@ def slim_limited(func):
 _THREADED_CALLS_INSTALLED = False
 
 
+def _record_upstream_calls(count: int) -> None:
+    """Hand the call's upstream request count to the HTTP logger (HTTP requests only)."""
+    try:
+        from mcp.server.lowlevel.server import request_ctx
+        ctx = request_ctx.get()
+        request = getattr(ctx, "request", None)
+        session_id = request.headers.get("mcp-session-id") if request is not None else None
+        upstream_count.record(session_id, ctx.request_id, count)
+    except Exception:  # LookupError outside a request, or no HTTP request (stdio)
+        pass
+
+
 def install_threaded_tool_calls() -> None:
     """Run LexLink's synchronous tool functions in worker threads instead of on the event loop.
 
@@ -367,13 +381,19 @@ def install_threaded_tool_calls() -> None:
     original = FuncMetadata.call_fn_with_arg_validation
 
     async def call_fn_with_arg_validation(self, fn, fn_is_async, arguments_to_validate, arguments_to_pass_directly):
-        if fn_is_async or not getattr(fn, "_lexlink_threaded", False):
+        if not fn_is_async and getattr(fn, "_lexlink_threaded", False):
+            sync_fn = fn
+
+            async def fn(**kwargs):
+                return await anyio.to_thread.run_sync(functools.partial(sync_fn, **kwargs))
+            fn_is_async = True
+
+        # count law.go.kr requests of this tool call (worker threads inherit the context) for the HTTP request log
+        token = start_counter()
+        try:
             return await original(self, fn, fn_is_async, arguments_to_validate, arguments_to_pass_directly)
-
-        async def in_worker(**kwargs):
-            return await anyio.to_thread.run_sync(functools.partial(fn, **kwargs))
-
-        return await original(self, in_worker, True, arguments_to_validate, arguments_to_pass_directly)
+        finally:
+            _record_upstream_calls(end_counter(token))
 
     FuncMetadata.call_fn_with_arg_validation = call_fn_with_arg_validation
     _THREADED_CALLS_INSTALLED = True
