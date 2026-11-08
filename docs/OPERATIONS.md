@@ -43,6 +43,7 @@ OC=<OC> LEXLINK_AUTH_TOKENS=local:<TOKEN> TRANSPORT=http uv run serve
 | `LEXLINK_SESSION_IDLE_TTL_SEC` | `3600` | Streamable HTTP 세션이 이 시간(초) 동안 활동이 없으면 서버가 세션을 종료하고 슬롯을 반환 (`0`이면 만료 없음) |
 | `LEXLINK_LOG_DIR` | `<repo>/logs/playmcp` | 로그 디렉터리 |
 | `LEXLINK_LOG_RETENTION_DAYS` | `30` | 이 일수보다 오래된 `YYYY-MM-DD.jsonl`만 삭제 (`0`이면 삭제 안 함) |
+| `LEXLINK_LOG_ARGUMENTS` | - | `true`면 `tools/call`의 인자 값(`arguments`)만 기록, 결과 본문은 기록하지 않음 (OC는 제거/마스킹) |
 | `LEXLINK_LOG_BODIES` | - | `true`면 인자 값과 결과 본문도 기록 (OC는 제거/마스킹) |
 | `LEXLINK_LOG_CAPTURE_MAX_BYTES` | `1048576` | 요청/응답 각각 로그용으로 보관하는 최대 바이트 (스트림 전달에는 영향 없음) |
 
@@ -54,9 +55,10 @@ OC=<OC> LEXLINK_AUTH_TOKENS=local:<TOKEN> TRANSPORT=http uv run serve
 
 기본 로그(JSONL, 하루 한 파일)에는 다음만 남습니다.
 
-`timestamp`, `token_id`(토큰 SHA-256 앞 12자; 토큰/이름 아님), `method`(알려진 MCP 메서드만, 그 외 `<unknown>`), `tool_name`(등록된 도구만, 그 외 `<unknown>`), 해당 도구 스키마에 선언된 인자 **키 이름**(값 없음; 선언되지 않은 키는 개수만 `unknown_arg_keys`), `status`(ok/error), `error_code`, `http_status`, `response_bytes`(상한을 넘어도 전체 크기), `duration_ms`, `client_ip`. 캡처 상한을 넘으면 `truncated_capture: true`가 붙습니다.
+`timestamp`, `token_id`(토큰 SHA-256 앞 12자; 토큰/이름 아님), `method`(알려진 MCP 메서드만, 그 외 `<unknown>`), `tool_name`(등록된 도구만, 그 외 `<unknown>`), 해당 도구 스키마에 선언된 인자 **키 이름**(값 없음; 선언되지 않은 키는 개수만 `unknown_arg_keys`), `status`(ok/error), `error_code`, `http_status`, `response_bytes`(상한을 넘어도 전체 크기), `duration_ms`, `client_ip`, `user_agent`(헤더, 200자 제한), `client_name`/`client_version`(세션의 `initialize` 요청 `clientInfo`; `mcp-session-id`별로 메모리에 기억하고 DELETE 시 삭제, 값은 100자 제한, 해당 세션을 만든 토큰의 요청에만 붙음; Streamable HTTP만), `tools/call`의 `upstream_calls`(그 도구 호출이 law.go.kr로 보낸 HTTP 요청 수, 캐시 적중이면 0, 301/302 리다이렉트는 1회로 셈). 같은 값이 `tools/call` 응답 `result._meta["lexlink/upstream_calls"]`(정수, 오류 결과 포함)로도 나가므로 MCP 트래픽만 보는 게이트웨이가 읽을 수 있습니다(HTTP와 stdio 공통; `content`/`structuredContent`는 그대로). 클라이언트가 보낸 문자열은 제어문자를 제거하고 길이를 제한합니다. 캡처 상한을 넘으면 `truncated_capture: true`가 붙습니다.
 
 - 인자 값, 결과 본문, `Authorization` 헤더, 토큰은 기본으로 기록되지 않습니다.
+- `LEXLINK_LOG_ARGUMENTS=true`는 질의 내용(인자 값)만 남기고 결과 본문은 남기지 않습니다. 마찬가지로 개인정보 처리 방침을 확인한 뒤 사용하세요. `oc`/`token`/`authorization` 계열 키 제거와 OC 마스킹은 `LEXLINK_LOG_BODIES`와 같습니다.
 - `LEXLINK_LOG_BODIES=true`는 사용자의 법률 질의 내용이 로그에 남을 수 있으므로 개인정보 처리 방침을 확인한 뒤 사용하세요. 이때도 `oc`/`token`/`authorization` 계열 키는 중첩된 dict/list 및 `result` 안에서도 재귀적으로 제거되고 OC는 마스킹됩니다.
 - 쓰기는 별도 백그라운드 스레드가 큐로 처리하며(이벤트 루프 비차단), 종료 시 flush 됩니다.
 - 보존 기간 정리는 기록 스레드 시작 시(첫 기록을 기다리지 않음)와 날짜가 바뀔 때 실행됩니다.

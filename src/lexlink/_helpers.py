@@ -7,6 +7,7 @@ All helpers preserve exact existing behavior.
 
 import asyncio
 import concurrent.futures
+import contextvars
 import copy
 import functools
 import inspect
@@ -20,7 +21,9 @@ from typing import Optional, Union
 from mcp.types import ToolAnnotations
 
 from .client import redact_oc
+from . import upstream_count
 from .errors import ErrorCode, create_error_response
+from .upstream_count import end_counter, start_counter
 
 logger = logging.getLogger(__name__)
 
@@ -53,10 +56,13 @@ def run_coroutine_sync(coro):
     Uses ``asyncio.run`` inside a dedicated worker thread, so it works both
     with and without an already running event loop (FastMCP runs sync tools on
     its loop; ``run_until_complete`` there raises RuntimeError). Exceptions from
-    the coroutine propagate to the caller.
+    the coroutine propagate to the caller. The caller's contextvars are copied into the
+    thread (a plain executor thread starts with an empty context), so the per-call
+    upstream request counter still sees the coroutine's requests.
     """
+    ctx = contextvars.copy_context()
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        return pool.submit(asyncio.run, coro).result()
+        return pool.submit(ctx.run, asyncio.run, coro).result()
 
 
 def _redacted_error_text(e: BaseException, kwargs: dict) -> str:
@@ -349,6 +355,62 @@ def slim_limited(func):
 _THREADED_CALLS_INSTALLED = False
 
 
+def _record_upstream_calls(count: int) -> None:
+    """Hand the call's upstream request count to the HTTP logger (HTTP requests only)."""
+    try:
+        from mcp.server.lowlevel.server import request_ctx
+        ctx = request_ctx.get()
+        request = getattr(ctx, "request", None)
+        session_id = request.headers.get("mcp-session-id") if request is not None else None
+        upstream_count.record(session_id, ctx.request_id, count)
+    except Exception:  # LookupError outside a request, or no HTTP request (stdio)
+        pass
+
+
+UPSTREAM_CALLS_META_KEY = "lexlink/upstream_calls"
+
+
+def _install_upstream_call_meta() -> None:
+    """Count law.go.kr requests per tools/call and report the count in-band.
+
+    Wraps the lowlevel server's CallToolRequest handler (registered by ``Server.call_tool``), which
+    builds every CallToolResult including error results. The counter runs around the whole handler,
+    so it sees the tool in anyio worker threads and ``run_coroutine_sync`` (both copy the context;
+    any other thread a tool spawns must do so too). The count goes into ``result._meta`` and, for
+    the HTTP request log, into ``upstream_count`` keyed by (session, JSON-RPC id).
+    """
+    from mcp import types
+    from mcp.server.lowlevel.server import Server
+
+    original_call_tool = Server.call_tool
+
+    def call_tool(self, *, validate_input: bool = True):
+        register = original_call_tool(self, validate_input=validate_input)
+
+        def decorator(func):
+            registered = register(func)
+            inner = self.request_handlers[types.CallToolRequest]
+
+            async def handler(req):
+                token = start_counter()
+                try:
+                    result = await inner(req)
+                finally:
+                    count = end_counter(token)
+                    _record_upstream_calls(count)
+                root = getattr(result, "root", None)
+                if isinstance(root, types.CallToolResult):
+                    root.meta = {**(root.meta or {}), UPSTREAM_CALLS_META_KEY: count}
+                return result
+
+            self.request_handlers[types.CallToolRequest] = handler
+            return registered
+
+        return decorator
+
+    Server.call_tool = call_tool
+
+
 def install_threaded_tool_calls() -> None:
     """Run LexLink's synchronous tool functions in worker threads instead of on the event loop.
 
@@ -367,15 +429,17 @@ def install_threaded_tool_calls() -> None:
     original = FuncMetadata.call_fn_with_arg_validation
 
     async def call_fn_with_arg_validation(self, fn, fn_is_async, arguments_to_validate, arguments_to_pass_directly):
-        if fn_is_async or not getattr(fn, "_lexlink_threaded", False):
-            return await original(self, fn, fn_is_async, arguments_to_validate, arguments_to_pass_directly)
+        if not fn_is_async and getattr(fn, "_lexlink_threaded", False):
+            sync_fn = fn
 
-        async def in_worker(**kwargs):
-            return await anyio.to_thread.run_sync(functools.partial(fn, **kwargs))
+            async def fn(**kwargs):
+                return await anyio.to_thread.run_sync(functools.partial(sync_fn, **kwargs))
+            fn_is_async = True
 
-        return await original(self, in_worker, True, arguments_to_validate, arguments_to_pass_directly)
+        return await original(self, fn, fn_is_async, arguments_to_validate, arguments_to_pass_directly)
 
     FuncMetadata.call_fn_with_arg_validation = call_fn_with_arg_validation
+    _install_upstream_call_meta()
     _THREADED_CALLS_INSTALLED = True
 
 
