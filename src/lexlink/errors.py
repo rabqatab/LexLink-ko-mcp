@@ -23,6 +23,11 @@ class ErrorCode:
     INTERNAL_ERROR = "INTERNAL_ERROR"
     """Unexpected server error (should not occur in normal operation)."""
 
+    OC_AUTH_FAILED = "OC_AUTH_FAILED"
+    """law.go.kr answered '사용자 정보 검증에 실패': the OC (server env or the caller's
+    X-LexLink-OC header) is wrong or the server's public IP is not registered for that OC at
+    open.law.go.kr. The error dict carries ``oc_source`` ("header" | "server"), never the value."""
+
     API_NOT_SUBSCRIBED = "API_NOT_SUBSCRIBED"
     """law.go.kr returned the '미신청된 목록/본문' page: the OC account has not
     applied for this API (target) at open.law.go.kr."""

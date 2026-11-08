@@ -101,7 +101,7 @@ def test_empty_body_is_structured_error():
 @pytest.mark.unit
 def test_auth_failure_still_detected():
     err = detect_upstream_body_error(AUTH_FAIL_XML, "XML")
-    assert err["error_code"] == ErrorCode.UPSTREAM_ERROR
+    assert err["error_code"] == ErrorCode.OC_AUTH_FAILED
     assert "인증 실패" in err["message"]
 
 

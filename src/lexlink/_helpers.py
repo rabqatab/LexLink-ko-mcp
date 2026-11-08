@@ -21,7 +21,7 @@ from typing import Optional, Union
 from mcp.types import ToolAnnotations
 
 from .client import redact_oc
-from . import upstream_count
+from . import upstream_count, oc_context
 from .errors import ErrorCode, create_error_response
 from .upstream_count import end_counter, start_counter
 
@@ -67,7 +67,7 @@ def run_coroutine_sync(coro):
 
 def _redacted_error_text(e: BaseException, kwargs: dict) -> str:
     """str(e) with the OC credential removed (argument or OC env var)."""
-    return redact_oc(str(e), kwargs.get("oc") or os.getenv("OC"))
+    return redact_oc(str(e), kwargs.get("oc"))  # env OC and request OC are added by redact_oc
 
 
 def handle_tool_error(func):
@@ -367,6 +367,68 @@ def _record_upstream_calls(count: int) -> None:
         pass
 
 
+def _request_headers():
+    """Starlette headers of the HTTP request carrying this tools/call (None for stdio)."""
+    try:
+        from mcp.server.lowlevel.server import request_ctx
+        request = getattr(request_ctx.get(), "request", None)
+        return request.headers if request is not None else None
+    except Exception:  # LookupError outside a request
+        return None
+
+
+def _mask_request_oc_in_result(root) -> None:
+    """Mask the caller's own OC literally in the CallToolResult returned to that caller.
+
+    Cached/shared bodies are only masked structurally (``redact_oc(shared=True)``); the literal
+    caller OC is removed here, from this caller's copy only.
+    """
+    from mcp import types
+    if not oc_context.get_request_oc() or not isinstance(root, types.CallToolResult):
+        return
+
+    def mask(obj):
+        if isinstance(obj, str):
+            return redact_oc(obj)
+        if isinstance(obj, dict):
+            return {mask(k): mask(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [mask(v) for v in obj]
+        return obj
+
+    for item in root.content or []:
+        text = getattr(item, "text", None)
+        if isinstance(text, str):
+            item.text = redact_oc(text)
+    if root.structuredContent is not None:
+        root.structuredContent = mask(root.structuredContent)
+
+
+def _wrap_request_oc(server_cls, method_name: str, req_type) -> None:
+    original = getattr(server_cls, method_name)
+
+    def patched(self, *args, **kwargs):
+        decorator = original(self, *args, **kwargs)
+
+        def register(func):
+            registered = decorator(func)
+            inner = self.request_handlers[req_type]
+
+            async def handler(req):
+                token = oc_context.begin_request_oc(_request_headers())
+                try:
+                    return await inner(req)
+                finally:
+                    oc_context.end_request_oc(token)
+
+            self.request_handlers[req_type] = handler
+            return registered
+
+        return register
+
+    setattr(server_cls, method_name, patched)
+
+
 UPSTREAM_CALLS_META_KEY = "lexlink/upstream_calls"
 
 
@@ -393,9 +455,12 @@ def _install_upstream_call_meta() -> None:
 
             async def handler(req):
                 token = start_counter()
+                oc_token = oc_context.begin_request_oc(_request_headers())
                 try:
                     result = await inner(req)
+                    _mask_request_oc_in_result(getattr(result, "root", None))
                 finally:
+                    oc_context.end_request_oc(oc_token)
                     count = end_counter(token)
                     _record_upstream_calls(count)
                 root = getattr(result, "root", None)
@@ -409,6 +474,12 @@ def _install_upstream_call_meta() -> None:
         return decorator
 
     Server.call_tool = call_tool
+
+    # resources/read and prompts/get can call resolve_oc too (e.g. lexlink://law/{name}): they get
+    # the OC of their own request, never one inherited from the session-creating request.
+    for method_name, req_type in (("read_resource", types.ReadResourceRequest),
+                                  ("get_prompt", types.GetPromptRequest)):
+        _wrap_request_oc(Server, method_name, req_type)
 
 
 def install_threaded_tool_calls() -> None:

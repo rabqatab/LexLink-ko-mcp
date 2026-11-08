@@ -16,7 +16,7 @@ OC=<OC> LEXLINK_AUTH_TOKENS=local:<TOKEN> TRANSPORT=http uv run serve
 - **단일 프로세스, 단일 워커로만 실행합니다.** 속도 제한(rate limit)과 로그 기록 스레드는 프로세스 메모리 안에서 동작하므로 `uvicorn --workers N`(N>1)이나 다중 인스턴스에서는 제한이 정확하지 않습니다.
 - **`TRANSPORT=http`(Streamable HTTP, `/mcp`)를 권장합니다.** SSE(`/sse`)는 레거시입니다.
 - 인증 없이는 시작되지 않습니다(fail closed). `LEXLINK_AUTH_TOKENS`가 없고 `LEXLINK_ALLOW_NO_AUTH=true`도 아니면 기동 시 `RuntimeError`가 발생합니다.
-- HTTP 모드에서는 도구의 `oc` 인자를 **무시**하고 항상 서버 환경변수 `OC`를 사용합니다. (stdio 모드는 기존대로 `oc` 인자를 허용합니다.)
+- HTTP 모드에서는 도구의 `oc` 인자를 **무시**하고 서버 환경변수 `OC`를 사용합니다(`LEXLINK_ACCEPT_OC_HEADER=true`이면 `X-LexLink-OC` 헤더 OC가 우선, 7-1장). (stdio 모드는 기존대로 `oc` 인자를 허용합니다.)
 - 미들웨어 순서: 인증 > 로깅 > 속도 제한 > 앱.
 - ASGI 팩토리로도 실행할 수 있습니다: `uvicorn --factory --no-proxy-headers lexlink.http_server:create_app --host 127.0.0.1 --port 8000` (워커 1개). 팩토리는 **항상 Streamable HTTP(`/mcp`)만, TLS 없는 평문 HTTP로** 서비스하며 `TRANSPORT`/`HOST`/`PORT`는 무시합니다(주소는 uvicorn 옵션 사용). `--no-proxy-headers`를 반드시 붙여 `LEXLINK_TRUSTED_PROXIES`가 `X-Forwarded-For`의 유일한 판단 기준이 되게 하세요(`uv run serve`는 코드에서 `proxy_headers=False`로 실행).
 - HTTP 모드의 "`oc` 인자 무시" 스위치는 **프로세스 단위**입니다. `create_app()`을 호출하면 같은 프로세스의 모든 도구 호출이 서버 `OC`를 사용합니다.
@@ -27,6 +27,7 @@ OC=<OC> LEXLINK_AUTH_TOKENS=local:<TOKEN> TRANSPORT=http uv run serve
 | 변수 | 기본값 | 설명 |
 |------|--------|------|
 | `OC` | - | law.go.kr API용 서버 OC (서버 IP가 등록되어 있어야 함) |
+| `LEXLINK_ACCEPT_OC_HEADER` | 꺼짐 | `true`면 `tools/call`의 `X-LexLink-OC` 헤더 OC를 그 호출의 모든 업스트림 요청에 사용 (아래 "요청별 OC") |
 | `LEXLINK_BASE_URL` | `http://www.law.go.kr` | 업스트림 기본 URL |
 | `LEXLINK_TIMEOUT` | `60` | 업스트림 요청 타임아웃(초) |
 | `SLIM_RESPONSE` | - | `1`/`true`/`yes`/`on`이면 크기 제한 환경(PlayMCP 등)용 압축 모드: `ranked_data`가 있으면 `raw_content` 제거, 압축 상한 유지(발췌 500자, 상위 10/3건, 위임 항목 80건), 20,000바이트 초과 결과는 줄이고 `truncated`/`truncated_notes` 표시. 없으면 이미 가져온 내용은 자르지 않음 |
@@ -191,6 +192,15 @@ law.go.kr의 일일 호출 한도(quota)는 이 저장소에 문서화되어 있
 
 계정에 따라 일부 API(예: 현행법령 시행일 본문 `eflaw`)를 open.law.go.kr에서 별도로 신청해야 합니다. 신청하지 않은 OC는 `API_NOT_SUBSCRIBED` 오류를 받으며, 이때는 `law_service`나 `eflaw_josub`을 쓰거나 해당 API를 신청하세요. 사용 중인 OC의 신청 상태는 이 문서로 알 수 없습니다.
 
+## 7-1. 요청별 OC (`X-LexLink-OC`, 선택)
+
+- `LEXLINK_ACCEPT_OC_HEADER=true`(기본 꺼짐)일 때, `tools/call`을 실은 HTTP 요청의 `X-LexLink-OC: <oc>` 헤더가 유효하면 그 호출이 만드는 **모든** law.go.kr 요청(복합·chain 도구, 인용 검증 포함)이 그 OC를 씁니다. 헤더가 없으면 서버 `OC`를 씁니다. 꺼져 있으면 헤더는 무시됩니다. 도구 인자 `oc`는 HTTP 모드에서 여전히 무시됩니다. stdio 모드는 바뀌지 않습니다.
+- 형식은 `^[A-Za-z0-9._-]{1,64}$`입니다. 위반하면 업스트림을 부르지 않고 `VALIDATION_ERROR` 도구 오류를 돌려줍니다(값은 되돌려 보여 주지 않음).
+- **IP 등록 필요**: law.go.kr은 OC와 호출 서버의 IP를 짝으로 검증합니다. 사용자 OC는 그 사용자가 이 서버의 공인 IP를 open.law.go.kr에 등록했을 때만 동작합니다. 아니면 `error_code: OC_AUTH_FAILED`(+ `oc_source: "header"`)이며 힌트가 이를 설명합니다. 서버 `OC` 실패는 `oc_source: "server"`입니다. 이전에는 `UPSTREAM_ERROR`였습니다.
+- **캐시**: 법령·판례 내용은 공개 데이터이고 OC와 무관하게 같으므로 성공 응답은 호출자 사이에 공유합니다(캐시 키에는 OC가 없고 응답 본문의 OC는 이미 마스킹됨). 캐시에 들어가는 본문은 서버 `OC`와 구조적 패턴(`OC=` 파라미터·라벨)만 마스킹하고, 호출자 본인의 OC 문자열은 그 호출자에게 돌려주는 사본과 로그에서만 마스킹합니다(OC가 `totalCnt` 같은 JSON 키여도 공유 캐시가 오염되지 않음). `X-LexLink-OC` 헤더가 둘 이상이면 형식 오류로 처리하고, 리소스·프롬프트 요청도 자기 요청의 헤더를 씁니다. 오류 응답은 캐시하지 않으므로(OC/IP 검증 실패 포함) 한 사용자의 실패가 다른 사용자에게 전달되지 않습니다. 대신 한 사용자의 OC로 받은 성공 응답을 다른 사용자가 캐시로 받을 수 있으므로, OC별 권한(예: API 신청 여부) 구분은 캐시 적중 시 적용되지 않습니다.
+- **비밀 처리**: 요청별 OC는 서버 `OC`와 같은 곳에서 마스킹됩니다. 요청 로그(`LOG_ARGUMENTS`/`LOG_BODIES` 포함), 오류 메시지·힌트, 응답에 들어 있는 `OC=` 링크, 예외 문자열, 라이브러리 로그. 값은 캐시 키·로그 줄에 들어가지 않습니다. 대신 `tools/call` 로그 항목에 `oc_source`(`"header"` 또는 `"server"`)만 남습니다(형식이 틀린 헤더는 `"server"`로 기록).
+- 헤더를 보내는 게이트웨이(예: LexAgent)는 TLS 구간에서만 보내고 자체 로그에 헤더를 남기지 마세요. 토큰 인증은 그대로 필요합니다.
+
 ## 8. EC2 배포 절차 (Ubuntu 기준)
 
 Amazon Linux는 `apt` 대신 `yum`, 사용자 `ec2-user`, Nginx 설정 위치 `/etc/nginx/conf.d/`만 다릅니다.
@@ -253,6 +263,6 @@ PlayMCP처럼 응답 크기 제한이 있는 곳에 붙일 때는 환경 파일�
 | systemd `status=217/USER` | 유닛의 `User=`가 잘못됨 |
 | systemd `status=203/EXEC` | `ExecStart=`의 `uv` 경로 또는 프로젝트 경로가 잘못됨 (`which uv`) |
 | 포트 8000 사용 중 | `sudo lsof -i :8000`으로 확인 후 정리 |
-| "사용자 정보 검증에 실패하였습니다" | 서버 공인 IP가 OC에 등록되지 않음 (7장) |
+| "사용자 정보 검증에 실패하였습니다" (`error_code: OC_AUTH_FAILED`) | 해당 OC(서버 `OC` 또는 `X-LexLink-OC`)에 서버 공인 IP가 등록되지 않음 (7장) |
 | PlayMCP "Endpoint URL의 도메인이 유효하지 않습니다" | IP 대신 도메인(sslip.io 등) 사용 |
 | PlayMCP "MCP Server 연결 확인에 실패했습니다" | `TRANSPORT=http`, 경로 `/mcp`, 인증 설정, Host 허용 목록 확인 후 8장의 curl로 직접 시험 |
