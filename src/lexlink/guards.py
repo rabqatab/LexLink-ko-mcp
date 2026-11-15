@@ -42,7 +42,8 @@ DATE_RANGE_PARAM = {
     "decc": "rsl_yd",        # 의결일자
     "special_decc": "rsl_yd",
 }
-SECTIONS_VALUES = {"summary", "full"}
+SECTIONS_VALUES = {"summary", "brief", "full"}
+LAW_SECTIONS_VALUES = {"brief", "full"}  # no "summary" for laws
 
 DISPLAY_CAPPED_WARNING = (
     "display_capped: 업스트림 최대값(100)을 넘는 display={d}는 100으로 제한했습니다. "
@@ -251,11 +252,53 @@ def validate_inq(value) -> Optional[str]:
     return s
 
 
-def validate_sections(sections) -> Optional[str]:
-    """``None`` / ``"summary"`` / ``"full"``; anything else would silently behave like full."""
+def validate_sections(sections, allowed=None) -> Optional[str]:
+    """``None`` / ``"summary"`` / ``"brief"`` / ``"full"`` (``allowed`` narrows it);
+    anything else would silently behave like full."""
     if sections is None or str(sections).strip() == "":
         return None
-    return validate_choice(str(sections).strip().lower(), "sections", SECTIONS_VALUES)
+    return validate_choice(str(sections).strip().lower(), "sections", allowed or SECTIONS_VALUES)
+
+
+def _int_arg(value, name: str) -> int:
+    if isinstance(value, bool):
+        raise ToolValidationError(f"{name}는 정수여야 합니다 ({name}={value!r})")
+    try:
+        if isinstance(value, float) and value != int(value):
+            raise ValueError
+        return int(str(value).strip()) if not isinstance(value, (int, float)) else int(value)
+    except (TypeError, ValueError):
+        raise ToolValidationError(f"{name}는 정수여야 합니다 ({name}={value!r})")
+
+
+def validate_size_args(sections, offset, max_chars, response_type: str, kind: str):
+    """Validate sections/offset/max_chars of a size-aware tool. ``kind``: "case" or "law".
+
+    Returns ``(sections, offset, max_chars)``. offset >= 0, max_chars 1000..24000 (characters).
+    brief/summary combined with paging is refused for case law (law brief pages its TOC);
+    brief and paging need type="JSON".
+    """
+    from .sizing import MAX_PAGE_CHARS, MIN_PAGE_CHARS
+    sections = validate_sections(sections, LAW_SECTIONS_VALUES if kind == "law" else None)
+    if offset is not None:
+        offset = _int_arg(offset, "offset")
+        if offset < 0:
+            raise ToolValidationError(f"offset은 0 이상이어야 합니다 (offset={offset})")
+    if max_chars is not None:
+        max_chars = _int_arg(max_chars, "max_chars")
+        if not MIN_PAGE_CHARS <= max_chars <= MAX_PAGE_CHARS:
+            raise ToolValidationError(
+                f"max_chars는 {MIN_PAGE_CHARS}~{MAX_PAGE_CHARS} 사이여야 합니다 (max_chars={max_chars}, 단위: 글자)")
+    paging = offset is not None or max_chars is not None
+    if kind == "case" and paging and sections in ("summary", "brief"):
+        raise ToolValidationError(
+            f'offset/max_chars는 sections="{sections}"와 함께 쓸 수 없습니다',
+            hints=['본문을 나누어 받으려면 sections="full"(또는 생략)과 offset/max_chars를 쓰세요'])
+    if (paging or sections == "brief") and str(response_type).upper() != "JSON":
+        raise ToolValidationError(
+            'sections="brief"와 offset/max_chars는 type="JSON"에서만 쓸 수 있습니다',
+            hints=['type="JSON"(기본값)으로 호출하세요'])
+    return sections, offset, max_chars
 
 
 def require_id(value, name: str = "id") -> str:

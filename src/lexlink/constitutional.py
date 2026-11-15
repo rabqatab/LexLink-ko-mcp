@@ -364,7 +364,7 @@ def run_constitutional_check(*, get_client, oc: str, law_name: str, article, art
 
     def service(detc_id: str) -> Optional[dict]:
         res = run_service(get_client=client, target="detc", response_type="JSON",
-                          snake_params={"oc": oc, "target": "detc", "id": detc_id, "type": "JSON"})
+                          snake_params={"oc": oc, "target": "detc", "id": detc_id, "type": "JSON"}, sections="full")
         calls["n"] += 1
         if res.get("status") != "ok":
             if res.get("error_code") == ErrorCode.NOT_FOUND:

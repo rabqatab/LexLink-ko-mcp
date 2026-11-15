@@ -118,11 +118,14 @@ renames it to `rank`. Never pass it to a *_service call. Use the real key per fa
 법령해석=법령해석례일련번호, 행정심판=행정심판재결례일련번호, 행정규칙=행정규칙일련번호,
 자치법규=자치법규ID, 조약=조약일련번호.
 
-**⚠️ Response Size — sections parameter:**
-For case law full text (prec_service, detc_service, expc_service, decc_service),
-use `sections="summary"` to get key sections only (판시사항, 판결요지, etc.)
-without the verbose full text (판례내용/전문/이유). This keeps responses under 20KB.
-Use `sections="full"` only when the complete judgment text is specifically needed.
+**⚠️ Response Size — sections, offset, max_chars:**
+Case-law tools (prec_service, detc_service, expc_service, decc_service) and law_service/eflaw_service
+choose the size themselves when `sections` is omitted: a body of 20,000 characters or less comes back
+whole, a longer one comes back as a brief view (`truncated: true`, `full_body_chars`, `truncated_note`).
+`sections="summary"` (case law only) returns the key sections without the body; `sections="brief"` forces
+the brief view. `sections="full"` returns everything exactly as sent; add `offset`/`max_chars` (characters,
+1000..24000) to read a long text page by page, following `next_offset`. Laws: omit `jo` and a long law
+returns a table of contents (`lexlink_toc`); use `jo` for one article.
 
 **Knowledge Base (AI-powered search):**
 - aiSearch: Semantic search for law articles - returns FULL article text
@@ -325,8 +328,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         params = {"oc": resolved_oc, "target": "law", "type": "JSON", "mst": mst, "jo": jo_code}
         response = run_service(
             get_client=_get_client, target="law",
-            snake_params=params, response_type="JSON",
-        )
+            snake_params=params, response_type="JSON", sections="full")
         if response.get("status") != "ok":
             code = response.get("error_code") or ErrorCode.UPSTREAM_ERROR
             if code in HARD_VERIFY_ERRORS:
@@ -727,6 +729,9 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         mst: Annotated[Optional[Union[str, int]], Field(description="법령일련번호(MST; eflaw_search / law_amendment_summary / law_as_of 결과의 mst). 특정 개정본을 지정한다. Revision serial number.")] = None,
         ef_yd: Annotated[Optional[Union[str, int]], Field(description="시행일자 YYYYMMDD. 사건일/기준일이 아니다. 반드시 mst와 함께 쓰고 그 MST 자신의 시행일자 중 하나와 정확히 일치해야 한다(불일치 시 오류). id와 함께 주면 upstream이 무시하거나 빈 응답을 주므로 이 도구는 VALIDATION_ERROR를 돌려준다. 'D일 당시 본문'은 law_as_of(law_name, as_of=D). NOT the incident date; must equal the MST's own 시행일.")] = None,
         jo: Optional[Union[str, int]] = None,
+        sections: Optional[str] = None,
+        offset: Optional[int] = None,
+        max_chars: Optional[int] = None,
         chr_cls_cd: Optional[str] = None,
         lm: Optional[str] = None,
         oc: Optional[str] = None,
@@ -756,6 +761,18 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 Examples: "017400" (제174조), "000300" (제3조), "001502" (제15조의2), "15의2" (제15조의2)
                 If the article does not exist, a structured ARTICLE_NOT_FOUND error is returned.
             chr_cls_cd: Language code - "010202" (Korean, default) or "010201" (Original)
+            sections: "brief" or "full" (other values, including "summary", are rejected). Omitted = automatic by size:
+                when jo is given, the article exactly as before; without jo, a law whose article text
+                (all 조문단위) is 20,000 characters or less comes back whole, a longer one comes back as
+                기본정보 + a table of contents (`lexlink_toc`: 조문번호, 조문가지번호, 조문제목, 조문여부; chapter
+                headings included) with a `notice`, the same notice repeated inside raw_content as
+                `lexlink_notice`, and no article bodies. "brief" forces that view (with jo: the TOC plus the
+                requested article). "full" without offset/max_chars returns everything exactly as the upstream sent it.
+            offset: Paging start (non-negative int; units are 조문단위 index with sections="full", TOC entry index
+                with "brief"). Response `next_offset` is the value for the next call; absent on the last page.
+            max_chars: Page size in characters (Unicode code points), 1000..24000, default 20000 when paging.
+                A page holds whole 조문단위 that fit (at least one). All size fields (`full_chars`,
+                `full_body_chars`) and limits count characters, not bytes.
             oc: Optional OC override (defaults to env var)
             type: Response format - "JSON" (default), "XML", or "HTML"
 
@@ -768,6 +785,10 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
 
             Retrieve full law (WARNING: large response for some laws):
             >>> eflaw_service(id="1747", type="XML")
+
+            Page through a long law (units are characters, 조문단위 are never split):
+            >>> eflaw_service(mst="279823", sections="full", max_chars=20000)   # first page, see next_offset
+            >>> eflaw_service(mst="279823", sections="full", offset=57, max_chars=20000)
         """
         (id, mst, jo) = stringify_id(id, mst, jo)
         resolved_oc = resolve_oc(override_oc=oc)
@@ -788,6 +809,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             )
         if id and mst and ef_yd:
             id = None  # with ID present upstream ignores MST/efYd (returns {} or the current text)
+        sections, offset, max_chars = guards.validate_size_args(sections, offset, max_chars, type, "law")
         jo = _normalize_jo_arg(jo)
         snake_params = {"oc": resolved_oc, "target": "eflaw", "type": type}
         if id: snake_params["id"] = id
@@ -797,7 +819,9 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         if jo: snake_params["jo"] = jo
         if chr_cls_cd: snake_params["chr_cls_cd"] = chr_cls_cd
         response = run_service(get_client=_get_client, target="eflaw",
-                               snake_params=snake_params, response_type=type)
+                               snake_params=snake_params, response_type=type,
+                               sections=sections, size_mode="law", offset=offset, max_chars=max_chars,
+                               has_jo=bool(jo))
         return _check_article_present(response, jo, type)
 
     # ==================== TOOL 4: law_service ====================
@@ -810,6 +834,9 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         ld: Annotated[Optional[int], Field(description="공포일자 YYYYMMDD(ln과 함께). 날짜 시점 선택용이 아니며 id와 함께 쓰면 upstream이 무시한다(현재본 반환). 'D일 당시 본문'은 law_as_of. NOT an as-of-date selector.")] = None,
         ln: Annotated[Optional[int], Field(description="공포번호(ld와 함께). 날짜 시점 선택용이 아님. Announcement number, not a date selector.")] = None,
         jo: Optional[Union[str, int]] = None,
+        sections: Optional[str] = None,
+        offset: Optional[int] = None,
+        max_chars: Optional[int] = None,
         lang: Optional[str] = None,
         oc: Optional[str] = None,
         type: str = "JSON",
@@ -836,6 +863,18 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 Examples: "017400" (제174조), "000300" (제3조), "001502" (제15조의2), "15의2" (제15조의2)
                 If the article does not exist, a structured ARTICLE_NOT_FOUND error is returned.
             lang: Language - "KO" (Korean) or "ORI" (Original)
+            sections: "brief" or "full" (other values, including "summary", are rejected). Omitted = automatic by size:
+                when jo is given, the article exactly as before; without jo, a law whose article text
+                (all 조문단위) is 20,000 characters or less comes back whole, a longer one comes back as
+                기본정보 + a table of contents (`lexlink_toc`: 조문번호, 조문가지번호, 조문제목, 조문여부; chapter
+                headings included) with a `notice`, the same notice repeated inside raw_content as
+                `lexlink_notice`, and no article bodies. "brief" forces that view (with jo: the TOC plus the
+                requested article). "full" without offset/max_chars returns everything exactly as the upstream sent it.
+            offset: Paging start (non-negative int; units are 조문단위 index with sections="full", TOC entry index
+                with "brief"). Response `next_offset` is the value for the next call; absent on the last page.
+            max_chars: Page size in characters (Unicode code points), 1000..24000, default 20000 when paging.
+                A page holds whole 조문단위 that fit (at least one). All size fields (`full_chars`,
+                `full_body_chars`) and limits count characters, not bytes.
             oc: Optional OC override (defaults to env var)
             type: Response format - "JSON" (default), "XML", or "HTML"
 
@@ -848,11 +887,16 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
 
             Retrieve full law (WARNING: large response for some laws):
             >>> law_service(id="009682", type="XML")
+
+            Page through a long law (units are characters, 조문단위 are never split):
+            >>> law_service(mst="279823", sections="full", max_chars=20000)   # first page, see next_offset
+            >>> law_service(mst="279823", sections="full", offset=57, max_chars=20000)
         """
         (id, mst, jo) = stringify_id(id, mst, jo)
         resolved_oc = resolve_oc(override_oc=oc)
         if not id and not mst and not lm:
             raise ValueError("One of 'id', 'mst' or 'lm' parameter is required")
+        sections, offset, max_chars = guards.validate_size_args(sections, offset, max_chars, type, "law")
         jo = _normalize_jo_arg(jo)
         snake_params = {"oc": resolved_oc, "target": "law", "type": type}
         if id: snake_params["id"] = id
@@ -863,7 +907,9 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         if jo: snake_params["jo"] = jo
         if lang: snake_params["lang"] = lang
         response = run_service(get_client=_get_client, target="law",
-                               snake_params=snake_params, response_type=type)
+                               snake_params=snake_params, response_type=type,
+                               sections=sections, size_mode="law", offset=offset, max_chars=max_chars,
+                               has_jo=bool(jo))
         return _check_article_present(response, jo, type)
 
     # ==================== TOOL 5: eflaw_josub ====================
@@ -1753,6 +1799,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         id: Union[str, int],
         lm: Optional[str] = None,
         sections: Optional[str] = None,
+        offset: Optional[int] = None,
+        max_chars: Optional[int] = None,
         oc: Optional[str] = None,
         type: str = "JSON",
         ctx: Context = None,
@@ -1765,11 +1813,23 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 name-only lookup)
             lm: Precedent name. Not sent when id is given (the upstream answers a title that is not exact
                 with "일치하는 판례가 없습니다" even for a valid id); the response carries a neutral `notes` entry `lm_not_sent`.
-            sections: Response detail level ("summary" or "full"; other values are rejected):
-                - "summary": Returns 판시사항, 판결요지, 참조조문, 참조판례 only (~5KB).
-                  Excludes 판례내용 (full judgment text, often 15-25KB).
-                  **Recommended for PlayMCP** to stay under 20KB limit.
-                - "full" or None: Returns everything including 판례내용 (default).
+            sections: "summary", "brief" or "full" (other values are rejected):
+                - Omitted: a body of 20,000 characters or less comes back whole, exactly as before; a longer
+                  body comes back as "brief". Check `full_body_chars` and `truncated` in the result.
+                - "summary": every field except the body (판례내용), with the size fields below.
+                - "brief": all other fields, the 주문 block, the first 6,000 characters of the body, `[…중략 N자…]`,
+                  and the last 3,000 characters of the majority opinion. Separate opinions (반대/별개/보충의견)
+                  are left out and counted in `full_opinions`.
+                - "full": everything exactly as the upstream sent it (no paging parameters). Use it for
+                  citation checks that need the whole text.
+            offset: Start of a body page, in characters (Unicode code points; non-negative int). With sections "full" or
+                omitted, offset and/or max_chars return one page of 판례내용 (cut back to a paragraph break) under a
+                `[판례내용 시작~끝자 / 전체 N자 · 다수의견|반대의견|…|불명]` line; other fields only on the first page;
+                `next_offset` is the value for the next call and is absent on the last page.
+            max_chars: Page size in characters (Unicode code points), 1000..24000, default 20000 when paging.
+            Size fields (summary, brief, paged results): `full_chars` (all text), `full_body_chars` (판례내용),
+                `full_opinions` (absent: no separate opinions; object: counts and `chars` after the majority
+                end; null: mentioned but not mappable) - all in characters, not bytes.
             oc: Optional OC override
             type: Response format - "JSON" (default), "XML", or "HTML"
 
@@ -1782,10 +1842,13 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         Examples:
             >>> prec_service(id="228541")
             >>> prec_service(id="228541", sections="summary")  # PlayMCP-safe
+            Page through a long judgment (units are characters):
+            >>> prec_service(id="228541", sections="full", max_chars=20000)             # page 1, see next_offset
+            >>> prec_service(id="228541", sections="full", offset=19873, max_chars=20000)  # next page
         """
         resolved_oc = resolve_oc(override_oc=oc)
         id = guards.require_id(id)
-        sections = guards.validate_sections(sections)
+        sections, offset, max_chars = guards.validate_size_args(sections, offset, max_chars, type, "case")
         snake_params = {
             "oc": resolved_oc, "target": "prec",
             "id": id, "type": type,
@@ -1793,6 +1856,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         response = run_service(get_client=_get_client, target="prec",
                           snake_params=snake_params, response_type=type,
                           sections=sections,
+                          size_mode="case", offset=offset, max_chars=max_chars,
+                          body_field="판례내용", page_drop_fields=("판시사항", "판결요지", "참조조문", "참조판례"),
                           full_text_fields=["판례내용"],
                           summary_required_fields=["판시사항", "판결요지"],
                           body_fields=["판시사항", "판결요지", "판례내용"])
@@ -1981,6 +2046,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         id: Union[str, int],
         lm: Optional[str] = None,
         sections: Optional[str] = None,
+        offset: Optional[int] = None,
+        max_chars: Optional[int] = None,
         oc: Optional[str] = None,
         type: str = "JSON",
         ctx: Context = None,
@@ -1992,8 +2059,23 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             id: Constitutional Court decision sequence number (헌재결정례일련번호, not the search row number)
             lm: Decision name. Not sent when id is given (the upstream answers a title that is not exact
                 with "일치하는 헌재결정례가 없습니다" even for a valid id); the response carries a neutral `notes` entry `lm_not_sent`.
-            sections: "summary" to exclude 전문 (full text), or "full"/None for everything (other values are rejected).
-                **Recommended: "summary" for PlayMCP** to stay under 20KB.
+            sections: "summary", "brief" or "full" (other values are rejected):
+                - Omitted: a body of 20,000 characters or less comes back whole, exactly as before; a longer
+                  body comes back as "brief". Check `full_body_chars` and `truncated` in the result.
+                - "summary": every field except the body (전문), with the size fields below.
+                - "brief": all other fields, the 주문 block, the first 6,000 characters of the body, `[…중략 N자…]`,
+                  and the last 3,000 characters of the majority opinion. Separate opinions (반대/별개/보충의견)
+                  are left out and counted in `full_opinions`.
+                - "full": everything exactly as the upstream sent it (no paging parameters). Use it for
+                  citation checks that need the whole text.
+            offset: Start of a body page, in characters (Unicode code points; non-negative int). With sections "full" or
+                omitted, offset and/or max_chars return one page of 전문 (cut back to a paragraph break) under a
+                `[전문 시작~끝자 / 전체 N자 · 다수의견|반대의견|…|불명]` line; other fields only on the first page;
+                `next_offset` is the value for the next call and is absent on the last page.
+            max_chars: Page size in characters (Unicode code points), 1000..24000, default 20000 when paging.
+            Size fields (summary, brief, paged results): `full_chars` (all text), `full_body_chars` (전문),
+                `full_opinions` (absent: no separate opinions; object: counts and `chars` after the majority
+                end; null: mentioned but not mappable) - all in characters, not bytes.
             oc: Optional OC override
             type: Response format - "JSON" (default), "XML", or "HTML"
 
@@ -2003,10 +2085,11 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         Examples:
             >>> detc_service(id="58386")
             >>> detc_service(id="58386", sections="summary")
+            >>> detc_service(id="58386", sections="full", max_chars=20000)  # paged; follow next_offset
         """
         resolved_oc = resolve_oc(override_oc=oc)
         id = guards.require_id(id)
-        sections = guards.validate_sections(sections)
+        sections, offset, max_chars = guards.validate_size_args(sections, offset, max_chars, type, "case")
         snake_params = {
             "oc": resolved_oc, "target": "detc",
             "id": id, "type": type,
@@ -2014,6 +2097,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         response = run_service(get_client=_get_client, target="detc",
                           snake_params=snake_params, response_type=type,
                           sections=sections,
+                          size_mode="case", offset=offset, max_chars=max_chars,
+                          body_field="전문", page_drop_fields=("판시사항", "결정요지", "참조조문", "참조판례", "심판대상조문", "심판대상조문내용"),
                           full_text_fields=["전문"],
                           body_fields=["판시사항", "결정요지", "전문"])
         return guards.add_notes(dict(response), guards.LM_NOT_SENT_NOTE if lm else None)
@@ -2115,6 +2200,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         id: Union[str, int],
         lm: Optional[str] = None,
         sections: Optional[str] = None,
+        offset: Optional[int] = None,
+        max_chars: Optional[int] = None,
         oc: Optional[str] = None,
         type: str = "JSON",
         ctx: Context = None,
@@ -2129,8 +2216,23 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             id: Legal interpretation sequence number (법령해석례일련번호, required; not the search row number)
             lm: Legal interpretation name. Not sent when id is given (the upstream answers a title that is not
                 exact with "일치하는 법령해석례가 없습니다" even for a valid id); the response carries a neutral `notes` entry `lm_not_sent`.
-            sections: "summary" to exclude 이유 (detailed reasoning), or "full"/None for everything (other values are rejected).
-                Returns 안건명, 질의요지, 회답 in summary mode (~2KB vs ~5KB full).
+            sections: "summary", "brief" or "full" (other values are rejected):
+                - Omitted: a body of 20,000 characters or less comes back whole, exactly as before; a longer
+                  body comes back as "brief". Check `full_body_chars` and `truncated` in the result.
+                - "summary": every field except the body (이유), with the size fields below.
+                - "brief": all other fields, the 주문 block, the first 6,000 characters of the body, `[…중략 N자…]`,
+                  and the last 3,000 characters of the majority opinion. Separate opinions (반대/별개/보충의견)
+                  are left out and counted in `full_opinions`.
+                - "full": everything exactly as the upstream sent it (no paging parameters). Use it for
+                  citation checks that need the whole text.
+            offset: Start of a body page, in characters (Unicode code points; non-negative int). With sections "full" or
+                omitted, offset and/or max_chars return one page of 이유 (cut back to a paragraph break) under a
+                `[이유 시작~끝자 / 전체 N자 · 다수의견|반대의견|…|불명]` line; other fields only on the first page;
+                `next_offset` is the value for the next call and is absent on the last page.
+            max_chars: Page size in characters (Unicode code points), 1000..24000, default 20000 when paging.
+            Size fields (summary, brief, paged results): `full_chars` (all text), `full_body_chars` (이유),
+                `full_opinions` (absent: no separate opinions; object: counts and `chars` after the majority
+                end; null: mentioned but not mappable) - all in characters, not bytes.
             oc: Optional OC override (defaults to env var)
             type: Response format - "JSON" (default), "XML", or "HTML"
             ctx: MCP context (injected automatically)
@@ -2147,7 +2249,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         """
         resolved_oc = resolve_oc(override_oc=oc)
         id = guards.require_id(id)
-        sections = guards.validate_sections(sections)
+        sections, offset, max_chars = guards.validate_size_args(sections, offset, max_chars, type, "case")
         snake_params = {
             "oc": resolved_oc, "target": "expc",
             "id": id, "type": type,
@@ -2155,6 +2257,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         response = run_service(get_client=_get_client, target="expc",
                           snake_params=snake_params, response_type=type,
                           sections=sections,
+                          size_mode="case", offset=offset, max_chars=max_chars,
+                          body_field="이유", page_drop_fields=("질의요지", "회답"),
                           full_text_fields=["이유"],
                           body_fields=["질의요지", "회답", "이유"])
         return guards.add_notes(dict(response), guards.LM_NOT_SENT_NOTE if lm else None)
@@ -2252,6 +2356,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         id: Union[str, int],
         lm: Optional[str] = None,
         sections: Optional[str] = None,
+        offset: Optional[int] = None,
+        max_chars: Optional[int] = None,
         oc: Optional[str] = None,
         type: str = "JSON",
         ctx: Context = None,
@@ -2266,8 +2372,23 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             id: Administrative appeal decision sequence number (행정심판재결례일련번호, required; not the search row number)
             lm: Decision name. Not sent when id is given (the upstream answers a title that is not exact
                 with "일치하는 행정심판례가 없습니다" even for a valid id); the response carries a neutral `notes` entry `lm_not_sent`.
-            sections: "summary" to exclude 이유 (detailed reasoning), or "full"/None for everything (other values are rejected).
-                Returns 사건명, 청구취지, 재결요지, 주문 in summary mode.
+            sections: "summary", "brief" or "full" (other values are rejected):
+                - Omitted: a body of 20,000 characters or less comes back whole, exactly as before; a longer
+                  body comes back as "brief". Check `full_body_chars` and `truncated` in the result.
+                - "summary": every field except the body (이유), with the size fields below.
+                - "brief": all other fields, the 주문 block, the first 6,000 characters of the body, `[…중략 N자…]`,
+                  and the last 3,000 characters of the majority opinion. Separate opinions (반대/별개/보충의견)
+                  are left out and counted in `full_opinions`.
+                - "full": everything exactly as the upstream sent it (no paging parameters). Use it for
+                  citation checks that need the whole text.
+            offset: Start of a body page, in characters (Unicode code points; non-negative int). With sections "full" or
+                omitted, offset and/or max_chars return one page of 이유 (cut back to a paragraph break) under a
+                `[이유 시작~끝자 / 전체 N자 · 다수의견|반대의견|…|불명]` line; other fields only on the first page;
+                `next_offset` is the value for the next call and is absent on the last page.
+            max_chars: Page size in characters (Unicode code points), 1000..24000, default 20000 when paging.
+            Size fields (summary, brief, paged results): `full_chars` (all text), `full_body_chars` (이유),
+                `full_opinions` (absent: no separate opinions; object: counts and `chars` after the majority
+                end; null: mentioned but not mappable) - all in characters, not bytes.
             oc: Optional OC override (defaults to env var)
             type: Response format - "JSON" (default), "XML", or "HTML"
             ctx: MCP context (injected automatically)
@@ -2284,7 +2405,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         """
         resolved_oc = resolve_oc(override_oc=oc)
         id = guards.require_id(id)
-        sections = guards.validate_sections(sections)
+        sections, offset, max_chars = guards.validate_size_args(sections, offset, max_chars, type, "case")
         snake_params = {
             "oc": resolved_oc, "target": "decc",
             "id": id, "type": type,
@@ -2292,6 +2413,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         response = run_service(get_client=_get_client, target="decc",
                           snake_params=snake_params, response_type=type,
                           sections=sections,
+                          size_mode="case", offset=offset, max_chars=max_chars,
+                          body_field="이유", page_drop_fields=("청구취지", "재결요지", "주문"),
                           full_text_fields=["이유"],
                           body_fields=["주문", "청구취지", "재결요지", "이유"])
         return guards.add_notes(dict(response), guards.LM_NOT_SENT_NOTE if lm else None)
@@ -3892,8 +4015,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         }
         result = run_service(
             get_client=_get_client, target="law",
-            snake_params=svc_params, response_type=response_type,
-        )
+            snake_params=svc_params, response_type=response_type, sections="full")
         if result.get("error_code") == ErrorCode.NOT_FOUND:
             # 일치하는 법령 없음/빈 본문: callers (e.g. _try_fetch) treat it as a missing version
             raise VersionNotFoundError(
@@ -4019,8 +4141,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             fetches += 1
             svc_result = run_service(
                 get_client=_get_client, target="prec",
-                snake_params=svc_params, response_type=fmt,
-            )
+                snake_params=svc_params, response_type=fmt, sections="full")
 
             # Body unavailable (NOT_FOUND etc.): skip, try the next candidate
             if svc_result.get("status") != "ok":
@@ -5613,14 +5734,12 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             res = run_service(
                 get_client=_get_client, target="eflaw", response_type=fmt,
                 snake_params={"oc": resolved_oc, "target": "eflaw", "type": fmt,
-                              "mst": c["mst"], "ef_yd": c["effective_date"], "jo": jo},
-            )
+                              "mst": c["mst"], "ef_yd": c["effective_date"], "jo": jo}, sections="full")
             if res.get("error_code") == ErrorCode.API_NOT_SUBSCRIBED:
                 res = run_service(
                     get_client=_get_client, target="law", response_type=fmt,
                     snake_params={"oc": resolved_oc, "target": "law", "type": fmt,
-                                  "mst": c["mst"], "jo": jo},
-                )
+                                  "mst": c["mst"], "jo": jo}, sections="full")
                 if res.get("status") == "ok" and not fallback_used:
                     fallback_used.append(True)
                     caveats.append("eflaw 본문 API 미신청으로 target=law(MST 단위)로 조회했습니다. "
@@ -5827,8 +5946,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                         full = run_service(
                             get_client=_get_client, target="eflaw", response_type=fmt,
                             snake_params={"oc": resolved_oc, "target": "eflaw", "type": fmt,
-                                          "mst": mst, "ef_yd": eff},
-                        )
+                                          "mst": mst, "ef_yd": eff}, sections="full")
                         if full.get("status") == "ok":
                             staged_all = scan_bupchik(
                                 bupchik_units(parse_law_payload(full.get("raw_content", ""), fmt)),

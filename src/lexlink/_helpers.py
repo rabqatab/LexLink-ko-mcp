@@ -312,9 +312,11 @@ def enforce_slim_limit(result, limit: int = SLIM_MAX_BYTES, note: str = SLIM_NOT
     out = materialize()
     if isinstance(out.get("raw_content"), str) and not as_data and any(e[0] == "raw_content" for e in log):
         out["raw_content_partial"] = True
-    out["truncated"] = True
-    out["truncated_fields"] = [f"{w}: {b}{u} 중 {a}{u}만 표시" for w, b, a, u in log[-8:]]
-    out["truncated_note"] = note
+    earlier = result.get("truncated_fields") if isinstance(result.get("truncated_fields"), list) else []
+    earlier_note = result.get("truncated_note") if isinstance(result.get("truncated_note"), str) else ""
+    out["truncated"] = True  # a brief/page cut made before this one is kept (truncated_detail stays as it was)
+    out["truncated_fields"] = earlier + [f"{w}: {b}{u} 중 {a}{u}만 표시" for w, b, a, u in log[-8:]]
+    out["truncated_note"] = (earlier_note + " " + note) if earlier_note else note
     if _json_size(out) > limit:  # still too big (protected keys): keep only the identifiers
         out = {k: v for k, v in out.items() if k in SLIM_KEEP_KEYS and not isinstance(v, (dict, list))}
         out["truncated"] = True
@@ -1090,12 +1092,27 @@ def run_service(
     full_text_fields: Optional[list[str]] = None,
     summary_required_fields: Optional[list[str]] = None,
     body_fields: Optional[list[str]] = None,
+    size_mode: Optional[str] = None,
+    offset: Optional[int] = None,
+    max_chars: Optional[int] = None,
+    body_field: Optional[str] = None,
+    page_drop_fields: tuple = (),
+    has_jo: bool = False,
 ) -> dict:
     """Common service tool logic. Handles: param mapping, API call, section filtering.
 
     Args:
         sections: "summary" to exclude full-text fields (reduces response size for
-                  PlayMCP 20KB limit), "full" or None for complete response.
+                  PlayMCP 20KB limit), "full" for the complete response. None is the
+                  complete response too, unless ``size_mode`` is set (see below).
+        size_mode: "case" (prec/detc/expc/decc) or "law" (law/eflaw) turns on the size-aware
+                  modes of ``sizing``: sections=None gives the full body up to
+                  ``sizing.AUTO_BRIEF_THRESHOLD`` characters and a brief view above it;
+                  "brief"; ``offset``/``max_chars`` character paging. Only the six public
+                  tools pass it: every other caller keeps getting the full body.
+        body_field: the case-law body field to size/page (``size_mode="case"``).
+        page_drop_fields: fields only the first page carries (``size_mode="case"``).
+        has_jo: the request names one article (law brief keeps it whole, adds the TOC).
         full_text_fields: List of field names to strip when sections="summary".
                          These are the verbose prose fields (판례내용, 전문, 이유, etc.)
         summary_required_fields: Fields that make a summary useful (e.g. 판시사항,
@@ -1117,26 +1134,36 @@ def run_service(
     response_type = str(response_type).upper()  # "xml"/"json" must behave like "XML"/"JSON"
     upstream_params = map_params_to_upstream(snake_params)
 
-    # Check cache (only for full responses — summary mode always fetches fresh then strips)
+    # The cache always holds the FULL upstream response; brief/summary/pages are derived from a copy.
     cache = get_cache()
-    if sections != "summary":
-        cached = cache.get(target, upstream_params)
-        if cached is not None:
-            return _annotate_empty_body(dict(cached), cached, body_fields, response_type)
+    cached_full = cache.get(target, upstream_params)
+    if cached_full is None:
+        client = get_client()
+        cached_full = client.get("/DRF/lawService.do", upstream_params, response_type)
+        cache.put(target, upstream_params, cached_full)
+    response = dict(cached_full)  # section filtering must not mutate the cached full response
 
-    client = get_client()
-    response = client.get("/DRF/lawService.do", upstream_params, response_type)
-
-    # Cache the full response before section filtering
-    cache.put(target, upstream_params, response)
-
-    # Section filtering must not mutate the cached full response
-    cached_full = response
-    response = dict(response)
+    if size_mode and response.get("status") == "ok":
+        response = _apply_size_mode(
+            response, get_client=get_client, target=target, snake_params=snake_params,
+            response_type=response_type, sections=sections, size_mode=size_mode, offset=offset,
+            max_chars=max_chars, body_field=body_field, page_drop_fields=page_drop_fields,
+            has_jo=has_jo)
+        if sections != "summary":
+            return _annotate_empty_body(response, cached_full, body_fields, response_type)
 
     # Section filtering: strip full-text fields when sections="summary"
     if sections == "summary" and full_text_fields and response.get("status") == "ok":
         raw = response.get("raw_content", "")
+        if size_mode == "case" and body_field and raw:
+            from . import sizing
+            if response_type == "JSON":
+                data = sizing._parse_json(raw)
+                body = sizing.body_of(raw, body_field)
+                if data is not None and body is not None:
+                    response.update(sizing.size_fields(data, body_field, body))
+            elif response_type == "XML":
+                response.update(sizing.case_size_fields_xml(raw, body_field))
         if (
             raw and summary_required_fields
             and _fields_empty(raw, response_type, summary_required_fields)
@@ -1180,6 +1207,49 @@ def run_service(
                 pass  # If JSON parsing fails, return unmodified
 
     return _annotate_empty_body(response, cached_full, body_fields, response_type)
+
+
+def _apply_size_mode(response: dict, *, get_client, target: str, snake_params: dict, response_type: str,
+                     sections: Optional[str], size_mode: str, offset: Optional[int],
+                     max_chars: Optional[int], body_field: Optional[str], page_drop_fields: tuple,
+                     has_jo: bool) -> dict:
+    """Derive the brief/paged view from a full response (never mutates ``response``'s raw_content)."""
+    from . import sizing
+    paging = offset is not None or max_chars is not None
+    is_json = response_type == "JSON"
+    raw = response.get("raw_content", "")
+    if size_mode == "case":
+        if sections == "summary" or not is_json:
+            return response
+        if sections == "brief":
+            return sizing.brief_case(response, body_field)
+        if paging:
+            return sizing.page_case(response, body_field, offset, max_chars, tuple(page_drop_fields))
+        if sections is None:
+            body = sizing.body_of(raw, body_field)
+            if body is not None and len(body) > sizing.AUTO_BRIEF_THRESHOLD:
+                return sizing.brief_case(response, body_field)
+        return response  # explicit "full": exactly what the upstream sent
+    # law / eflaw
+    if not is_json:
+        return response
+    if sections == "brief":
+        if has_jo:
+            whole_params = {k: v for k, v in snake_params.items() if k != "jo"}
+            whole = run_service(get_client=get_client, target=target, snake_params=whole_params,
+                                response_type=response_type, sections="full")
+            if whole.get("status") != "ok":
+                return response
+            return sizing.brief_law(response, offset, max_chars, with_article=True,
+                                    toc_source_raw=whole.get("raw_content"))
+        return sizing.brief_law(response, offset, max_chars)
+    if paging:
+        return sizing.page_law(response, offset, max_chars)
+    if sections is None and not has_jo:
+        chars = sizing.law_article_chars(raw)
+        if chars is not None and chars > sizing.AUTO_BRIEF_THRESHOLD:
+            return sizing.brief_law(response, offset, max_chars)
+    return response
 
 
 # ============================================================
