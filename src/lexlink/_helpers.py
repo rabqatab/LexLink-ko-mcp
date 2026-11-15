@@ -1098,6 +1098,7 @@ def run_service(
     body_field: Optional[str] = None,
     page_drop_fields: tuple = (),
     has_jo: bool = False,
+    opinion_kind: str = "supreme",
 ) -> dict:
     """Common service tool logic. Handles: param mapping, API call, section filtering.
 
@@ -1113,6 +1114,7 @@ def run_service(
         body_field: the case-law body field to size/page (``size_mode="case"``).
         page_drop_fields: fields only the first page carries (``size_mode="case"``).
         has_jo: the request names one article (law brief keeps it whole, adds the TOC).
+        opinion_kind: "supreme" (prec), "detc" (헌재: opinions detected, never mapped) or "plain" (expc/decc).
         full_text_fields: List of field names to strip when sections="summary".
                          These are the verbose prose fields (판례내용, 전문, 이유, etc.)
         summary_required_fields: Fields that make a summary useful (e.g. 판시사항,
@@ -1148,7 +1150,7 @@ def run_service(
             response, get_client=get_client, target=target, snake_params=snake_params,
             response_type=response_type, sections=sections, size_mode=size_mode, offset=offset,
             max_chars=max_chars, body_field=body_field, page_drop_fields=page_drop_fields,
-            has_jo=has_jo)
+            has_jo=has_jo, opinion_kind=opinion_kind)
         if sections != "summary":
             return _annotate_empty_body(response, cached_full, body_fields, response_type)
 
@@ -1161,7 +1163,7 @@ def run_service(
                 data = sizing._parse_json(raw)
                 body = sizing.body_of(raw, body_field)
                 if data is not None and body is not None:
-                    response.update(sizing.size_fields(data, body_field, body))
+                    response.update(sizing.size_fields(data, body_field, body, opinion_kind))
             elif response_type == "XML":
                 response.update(sizing.case_size_fields_xml(raw, body_field))
         if (
@@ -1212,7 +1214,7 @@ def run_service(
 def _apply_size_mode(response: dict, *, get_client, target: str, snake_params: dict, response_type: str,
                      sections: Optional[str], size_mode: str, offset: Optional[int],
                      max_chars: Optional[int], body_field: Optional[str], page_drop_fields: tuple,
-                     has_jo: bool) -> dict:
+                     has_jo: bool, opinion_kind: str = "supreme") -> dict:
     """Derive the brief/paged view from a full response (never mutates ``response``'s raw_content)."""
     from . import sizing
     paging = offset is not None or max_chars is not None
@@ -1222,13 +1224,13 @@ def _apply_size_mode(response: dict, *, get_client, target: str, snake_params: d
         if sections == "summary" or not is_json:
             return response
         if sections == "brief":
-            return sizing.brief_case(response, body_field)
+            return sizing.brief_case(response, body_field, opinion_kind)
         if paging:
-            return sizing.page_case(response, body_field, offset, max_chars, tuple(page_drop_fields))
+            return sizing.page_case(response, body_field, offset, max_chars, tuple(page_drop_fields), opinion_kind)
         if sections is None:
             body = sizing.body_of(raw, body_field)
             if body is not None and len(body) > sizing.AUTO_BRIEF_THRESHOLD:
-                return sizing.brief_case(response, body_field)
+                return sizing.brief_case(response, body_field, opinion_kind)
         return response  # explicit "full": exactly what the upstream sent
     # law / eflaw
     if not is_json:

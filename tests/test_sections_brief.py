@@ -390,8 +390,8 @@ def test_law_large_without_jo_is_toc_brief_with_notice_in_raw_content(call):
     out = call("law_service", mst="1")
     toc = out["lexlink_toc"]
     assert len(toc) == 44 and out["toc_total"] == 44 and "next_offset" not in out
-    assert {"조문번호", "조문가지번호", "조문제목", "조문여부"} == set(toc[0])
-    assert toc[0]["조문여부"] == "전문" and toc[1]["조문제목"] == "제목1"
+    assert all(isinstance(t, str) for t in toc)
+    assert toc[0] == "제1장 총칙1" and toc[1] == "제1조(제목1)" and toc[3] == "제3조의2(제목3)"
     assert out["notice"] and out["truncated"] is True and out["full_body_chars"] > 20000
     data = json.loads(out["raw_content"])                       # still valid JSON
     law = data["법령"]
@@ -401,8 +401,6 @@ def test_law_large_without_jo_is_toc_brief_with_notice_in_raw_content(call):
     assert law["lexlink_notice"] == out["notice"] and 'sections="full"' in law["lexlink_notice"]
     assert "offset" in law["lexlink_notice"]
     assert out["truncated_detail"][0]["field"] == "조문단위"
-    assert sizing.toc_line(toc[3]) == "제3조의2 제목3"
-    assert sizing.toc_line(toc[0]).startswith("제1장")
 
 
 def test_law_toc_paging_and_explicit_brief(call):
@@ -413,7 +411,7 @@ def test_law_toc_paging_and_explicit_brief(call):
     while "next_offset" in res:
         res = call("law_service", mst="1", sections="brief", max_chars=1000, offset=res["next_offset"])
         seen += res["lexlink_toc"]
-    assert [t["조문번호"] for t in seen] == [str(i) for i in range(1, 301)]
+    assert seen == [f"제{i}조{'의2' if i == 3 else ''}(제목{i})" for i in range(1, 301)]
 
 
 def test_law_brief_with_jo_adds_toc_and_keeps_article(call):
@@ -558,3 +556,141 @@ def test_brief_budget_shrinks_head_then_tail(call):
     out = call("prec_service", id="1", sections="brief")
     inner = json.loads(out["raw_content"])["PrecService"]
     assert sum(len(v) for v in inner.values() if isinstance(v, str)) <= 24000
+
+
+# ---------------------------------------------------------------- round 3: detc, SLIM paging, laws, 주문
+
+def detc_body(unanimous=False, headers=True, short=False):
+    parts = ["【주    문】", "  청구를 기각한다.", "", "【이    유】"] + [_para("법", i) for i in range(2 if short else 14)]
+    if unanimous:
+        parts.append("  3. 결론 : 그러므로 재판관 전원의 일치된 의견으로 주문과 같이 결정한다.")
+        return BR.join(parts)
+    parts.append("  3. 결론 : 이 결정은 아래 4.와 같은 재판관 김가나의 반대의견, 5.와 같은 재판관 이다라의 보충의견이 있는 외에는 일치된 의견에 따른 것이다.")
+    if headers:
+        parts += ["  4. 재판관 김가나의 반대의견", _para("반", 0, 3000), "  5. 재판관 이다라의 보충의견", _para("보", 0, 3000)]
+    parts += [_para("끝", i) for i in range(4)] if not headers else []
+    return BR.join(parts)
+
+
+def test_detc_mention_is_unmapped_no_tail_and_labelled(call):
+    body = detc_body()
+    info = sizing.analyze_opinions(body, "detc")
+    assert info["state"] == "unknown" and info["majority_end"] is None
+    assert info["limit"] == body.index("  4. 재판관 김가나의 반대의견")
+    StubClient.payload["detc"] = json.dumps({"DetcService": {"사건명": "합성", "전문": body}}, ensure_ascii=False)
+    out = call("detc_service", id="1", sections="brief")
+    shown = json.loads(out["raw_content"])["DetcService"]["전문"]
+    assert "재판관 의견 구간을 나누지 않음 · 뒤 조각 생략" in shown.split("\n")[0]
+    assert "4. 재판관 김가나" not in shown and "[…중략" not in shown and "반" * 3 not in shown.split("\n", 1)[1][-200:]
+    assert out["full_opinions"] is None and out["truncated_detail"][0]["separate_opinions_omitted"] is True
+    page = call("detc_service", id="1", sections="full", max_chars=1000)
+    assert json.loads(page["raw_content"])["DetcService"]["전문"].split("\n")[0].endswith("· 의견 미구분]")
+
+
+def test_detc_without_mention_is_plain_and_glued_header_cuts_head():
+    assert sizing.analyze_opinions(detc_body(unanimous=True), "detc")["state"] == "absent"
+    glued = "가" * 7000 + "주문과 같이 결정한다." + "4. 재판관 김가나의 별개의견나는 " + "나" * 500
+    info = sizing.analyze_opinions(glued, "detc")
+    assert info["state"] == "unknown" and info["limit"] == glued.index("4. 재판관")
+
+
+def test_expc_decc_pages_are_labelled_bonmun(call):
+    body = make_body(opinions=False, closing=False, decoys=False, majority_paras=18)
+    for name, target in (("expc_service", "expc"), ("decc_service", "decc")):
+        StubClient.payload[target] = json.dumps({"X": {"사건명": "합성", "이유": body}}, ensure_ascii=False)
+        page = call(name, id="1", sections="full", max_chars=2000)
+        assert json.loads(page["raw_content"])["X"]["이유"].split("\n")[0].endswith("· 본문]")
+        assert "full_opinions" not in page
+
+
+def test_supreme_loose_header_without_closing_is_null_and_labels_after_it_buneung():
+    body = ("가" * 3000 + BR + "  3. 대법관 김가나, 대법관 이다라의 별개의견" + BR + "나" * 3000)
+    info = sizing.analyze_opinions(body)
+    assert info["state"] == "unknown" and sizing.opinions_field(info) == (True, None)
+    cut = body.index("3. 대법관")
+    assert info["segments"][-1][2] == "불명" and info["segments"][-1][0] <= cut + 3
+    assert sizing._segment_label(info, cut + 100, cut + 200) == "불명"
+
+
+def test_slim_paging_next_offset_never_skips(call, monkeypatch):
+    body = make_body()
+    StubClient.payload["prec"] = case_json(body)
+    monkeypatch.setenv("SLIM_RESPONSE", "true")
+    from lexlink._helpers import enforce_slim_limit
+    rebuilt, off = "", None
+    for _ in range(100):
+        res = call("prec_service", id="1", sections="full", max_chars=20000, **({"offset": off} if off is not None else {}))
+        res = enforce_slim_limit(res)            # what the slim_limited decorator applies on the wire
+        text = json.loads(res["raw_content"])["PrecService"]["판례내용"]
+        header, chunk = text.split("\n", 1)
+        a, b = header.split("판례내용 ")[1].split("자 /")[0].split("~")
+        assert len(chunk) == int(b) - int(a) + 1 and int(a) - 1 == len(rebuilt)
+        rebuilt += chunk
+        off = res.get("next_offset")
+        if off is None:
+            break
+    assert rebuilt == body
+
+
+def test_page_note_when_other_fields_exceed_max_chars(call):
+    StubClient.payload["prec"] = case_json(make_body(), extra={"판결요지": "요" * 3000})
+    res = call("prec_service", id="1", sections="full", max_chars=1000)
+    assert "첫 쪽이 max_chars=1000" in res["truncated_note"]
+
+
+def test_law_first_page_leaves_out_large_non_article_keys(call):
+    raw = json.loads(law_json(n_units=10, per=500, chapters=False))
+    raw["법령"]["부칙"] = {"부칙단위": [{"부칙내용": "부" * 9000}]}
+    StubClient.payload["law"] = json.dumps(raw, ensure_ascii=False)
+    out = call("law_service", mst="1", sections="full", max_chars=5000)
+    law = json.loads(out["raw_content"])["법령"]
+    assert "부칙" not in law and out["truncated_detail"][1]["field"] == "부칙"
+    assert "sections=\"full\"" in out["truncated_detail"][1]["note"]
+    StubClient.payload["law"] = json.dumps(dict(raw, 법령=dict(raw["법령"], 부칙={"부칙단위": [{"부칙내용": "부" * 500}]})), ensure_ascii=False)
+    get_cache().invalidate()
+    out = call("law_service", mst="1", sections="full", max_chars=5000)
+    law = json.loads(out["raw_content"])["법령"]
+    assert "부칙" in law
+    assert sum(len(sizing.article_unit_text(u)) for u in law["조문"]["조문단위"]) + 500 <= 5000 + 20
+
+
+def test_law_toc_offset_past_end_is_validation_error(call):
+    StubClient.payload["law"] = law_json(n_units=40)
+    assert call("law_service", mst="1", sections="brief", offset=44)["error_code"] == "VALIDATION_ERROR"
+    assert call("law_service", mst="1", sections="brief", offset=43)["status"] == "ok"
+
+
+def test_law_toc_is_strings_paged_by_serialized_size_for_civil_code_scale(call):
+    units = []
+    for i in range(1, 1301):
+        if i % 100 == 1:
+            units.append({"조문번호": str(i), "조문여부": "전문", "조문내용": f"제{i // 100 + 1}편 채권"})
+        if i == 7:
+            units.append({"조문번호": "7", "조문여부": "조문", "조문제목": "", "조문내용": "제7조 삭제 <2005. 3. 31.>"})
+        units.append({"조문번호": str(i), "조문가지번호": "2" if i == 3 else "", "조문여부": "조문",
+                      "조문제목": f"불법행위의 내용{i}", "조문내용": f"제{i}조 " + "가" * 40})
+    StubClient.payload["law"] = json.dumps({"법령": {"기본정보": {"법령명_한글": "민법"}, "조문": {"조문단위": units}}}, ensure_ascii=False)
+    first = call("law_service", mst="1")
+    assert first["lexlink_toc"][0] == "제2편 채권" or first["lexlink_toc"][0].startswith("제")
+    assert len(json.dumps(first["lexlink_toc"], ensure_ascii=False)) <= 20000
+    assert "제7조 삭제 <2005. 3. 31.>" in first["lexlink_toc"]
+    pages, res = [first], first
+    while "next_offset" in res:
+        res = call("law_service", mst="1", sections="brief", offset=res["next_offset"])
+        assert len(json.dumps(res["lexlink_toc"], ensure_ascii=False)) <= 20000
+        pages.append(res)
+    assert 1 < len(pages) <= 3 and sum(len(p["lexlink_toc"]) for p in pages) == len(units)
+    assert any(d["field"] == "lexlink_toc" for d in first["truncated_detail"])
+    assert "제3조의2(불법행위의 내용3)" in first["lexlink_toc"]
+
+
+def test_huge_jumun_is_cut_with_marker_and_accurate_banner(call):
+    body = make_body().replace("  상고를 기각한다.", "  주문 " + "갑" * 30000)
+    StubClient.payload["prec"] = case_json(body)
+    out = call("prec_service", id="1", sections="brief")
+    inner = json.loads(out["raw_content"])["PrecService"]
+    assert sum(len(v) for v in inner.values() if isinstance(v, str)) <= 24000
+    shown = inner["판례내용"]
+    assert "[…주문 중략 " in shown and "주문 일부 생략" in shown.split("\n")[0]
+    kept = out["truncated_detail"][0]["shown_chars"]
+    assert f"전문 {len(body)}자 중 {kept}자" in shown.split("\n")[0]

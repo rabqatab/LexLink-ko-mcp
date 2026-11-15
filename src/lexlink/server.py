@@ -1857,7 +1857,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                           snake_params=snake_params, response_type=type,
                           sections=sections,
                           size_mode="case", offset=offset, max_chars=max_chars,
-                          body_field="판례내용", page_drop_fields=("판시사항", "판결요지", "참조조문", "참조판례"),
+                          opinion_kind="supreme", body_field="판례내용", page_drop_fields=("판시사항", "판결요지", "참조조문", "참조판례"),
                           full_text_fields=["판례내용"],
                           summary_required_fields=["판시사항", "판결요지"],
                           body_fields=["판시사항", "판결요지", "판례내용"])
@@ -2098,7 +2098,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                           snake_params=snake_params, response_type=type,
                           sections=sections,
                           size_mode="case", offset=offset, max_chars=max_chars,
-                          body_field="전문", page_drop_fields=("판시사항", "결정요지", "참조조문", "참조판례", "심판대상조문", "심판대상조문내용"),
+                          opinion_kind="detc", body_field="전문", page_drop_fields=("판시사항", "결정요지", "참조조문", "참조판례", "심판대상조문", "심판대상조문내용"),
                           full_text_fields=["전문"],
                           body_fields=["판시사항", "결정요지", "전문"])
         return guards.add_notes(dict(response), guards.LM_NOT_SENT_NOTE if lm else None)
@@ -2258,7 +2258,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                           snake_params=snake_params, response_type=type,
                           sections=sections,
                           size_mode="case", offset=offset, max_chars=max_chars,
-                          body_field="이유", page_drop_fields=("질의요지", "회답"),
+                          opinion_kind="plain", body_field="이유", page_drop_fields=("질의요지", "회답"),
                           full_text_fields=["이유"],
                           body_fields=["질의요지", "회답", "이유"])
         return guards.add_notes(dict(response), guards.LM_NOT_SENT_NOTE if lm else None)
@@ -2414,7 +2414,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                           snake_params=snake_params, response_type=type,
                           sections=sections,
                           size_mode="case", offset=offset, max_chars=max_chars,
-                          body_field="이유", page_drop_fields=("청구취지", "재결요지", "주문"),
+                          opinion_kind="plain", body_field="이유", page_drop_fields=("청구취지", "재결요지", "주문"),
                           full_text_fields=["이유"],
                           body_fields=["주문", "청구취지", "재결요지", "이유"])
         return guards.add_notes(dict(response), guards.LM_NOT_SENT_NOTE if lm else None)
