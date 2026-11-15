@@ -18,8 +18,8 @@
 |---|---|---|
 | `eflaw_search` | query | display=20, page=1, type=JSON, sort, ef_yd, org, knd, nw |
 | `law_search` | query | display=20, page=1, type=JSON, sort, date, org, knd |
-| `eflaw_service` | - | id, mst, ef_yd, jo, chr_cls_cd, lm, type=JSON |
-| `law_service` | - | id, mst, lm, ld, ln, jo, lang, type=JSON |
+| `eflaw_service` | - | id, mst, ef_yd, jo, sections, offset, max_chars, chr_cls_cd, lm, type=JSON |
+| `law_service` | - | id, mst, lm, ld, ln, jo, sections, offset, max_chars, lang, type=JSON |
 | `eflaw_josub` | - | id, mst, ef_yd, jo, hang, ho, mok, type=JSON |
 | `law_josub` | - | id, mst, jo, hang, ho, mok, type=JSON |
 | `law_as_of` | law_name, as_of | article, article_branch=0, as_of_end, type=JSON |
@@ -46,15 +46,15 @@
 | Tool | 필수 인자 | 선택 인자 (기본값) |
 |---|---|---|
 | `prec_search` | - | query=*, display=20, page=1, type=JSON, search, sort, org, curt, jo, gana, date, prnc_yd, nb, dat_src_nm, pop_yn |
-| `prec_service` | id | lm, sections, type=JSON |
+| `prec_service` | id | lm, sections, offset, max_chars, type=JSON |
 | `prec_status` | - (case_number 또는 id 중 하나) | case_number, id, max_scan=5 |
 | `law_constitutional_check` | law_name, article | article_branch=0, max_scan=6 |
 | `detc_search` | - | query=*, display=20, page=1, type=JSON, search, gana, sort, date, ed_yd, nb (문자열), pop_yn |
-| `detc_service` | id | lm, sections, type=JSON |
+| `detc_service` | id | lm, sections, offset, max_chars, type=JSON |
 | `expc_search` | - | query=*, display=20, page=1, type=JSON, search=1, inq, rpl, gana, itmno, reg_yd, expl_yd, sort, pop_yn |
-| `expc_service` | id | lm, sections, type=JSON |
+| `expc_service` | id | lm, sections, offset, max_chars, type=JSON |
 | `decc_search` | - | query=*, display=20, page=1, type=JSON, search=1, cls, gana, date, dpa_yd, rsl_yd, sort, pop_yn |
-| `decc_service` | id | lm, sections, type=JSON |
+| `decc_service` | id | lm, sections, offset, max_chars, type=JSON |
 | `committee_search` | committee | query=*, display=20, page=1, type=JSON, search, sort, gana |
 | `committee_service` | committee, id | type=JSON |
 | `cgm_expc_search` | ministry | query=*, display=20, page=1, type=JSON, search, sort, gana |
@@ -983,6 +983,25 @@ http://www.law.go.kr/DRF/lawSearch.do?OC=test&target=prec&type=HTML&query=담보
 http://www.law.go.kr/DRF/lawService.do?OC=test&target=prec&ID=228541&type=HTML
 http://www.law.go.kr/DRF/lawService.do?OC=test&target=prec&ID=228541&type=XML
 ```
+
+### 크기 인식 응답 (`sections`, `offset`, `max_chars`)
+
+대상: `prec_service`(본문 필드 판례내용), `detc_service`(전문), `expc_service`(이유), `decc_service`(이유), `law_service`, `eflaw_service`. 모든 길이는 **글자(유니코드 코드포인트)** 단위이며 바이트가 아니다. LexAgent는 도구 결과를 24,000자로 제한하므로 긴 판결(30k~110k자)은 나누어 받는다.
+
+| `sections` | 판례 도구 | 법령 도구 |
+|---|---|---|
+| 생략 | 본문 20,000자 이하: 전문(종전과 동일). 초과: brief | `jo` 지정: 종전과 동일. `jo` 없음: 조문 전체 글자 수 20,000자 이하면 전체, 초과면 brief(목차) |
+| `summary` | 본문 제외 + 크기 필드 | `VALIDATION_ERROR` |
+| `brief` | 축약본 | 기본정보 + 목차(`jo`가 있으면 목차 + 그 조문) |
+| `full` | 종전과 동일한 전문(쪽 나누기 인자 없을 때) | 종전과 동일 |
+
+- `offset`(0 이상 정수), `max_chars`(1000~24000, 기본 20000): 범위 밖은 `VALIDATION_ERROR`. 판례는 `sections`가 `full`/생략일 때만(`summary`/`brief`와는 오류), `type=JSON`에서만 쓴다. 한 쪽은 `offset`부터 최대 `max_chars`자를 문단 경계(`<br/>`, 줄바꿈, 문장 끝 순)에서 끊고, 본문 필드 맨 앞에 `[판례내용 {시작}~{끝}자 / 전체 {T}자 · {구간}]` 줄을 붙인다. `구간`은 다수의견/반대의견/별개의견/보충의견(필요하면 이름)/불명. 다른 필드(판시사항 등)는 첫 쪽에만 있고, 마지막 쪽이 아니면 최상위 `next_offset`(다음 `offset`)이 있다. 법령은 `offset`이 조문단위 순번이고 `brief`에서는 목차 항목 순번이다.
+- brief(판례): 본문 외 필드 전부 + 배너(`[축약본 · 전문 N자 중 M자 · …]`) + 주문 블록 + 앞 6,000자 + `[…중략 N자…]` + 다수의견 끝 3,000자. 다수의견이 9,000자 이하면 통째로. 반대·별개·보충의견은 생략하며 종결 문장("이 판결에는 … 관여 법관의 의견이 일치…")이 없으면 뒤 조각도 뺀다.
+- brief(법령): `lexlink_toc`(`조문번호`, `조문가지번호`, `조문제목`, `조문여부`; 장·절 행 포함), `toc_total`, `notice`. 같은 안내가 `raw_content`의 `법령.lexlink_notice`(기본정보 바로 뒤)에도 있다. 목차가 `max_chars`를 넘으면 `offset`으로 나눈다.
+- 크기 필드(최상위, summary·brief·자동 brief·쪽 나누기 결과): `full_chars`(전문 전체 글자), `full_body_chars`(본문, 법령은 전 조문 글자), `full_opinions`(없음: 별개의견 언급 없음 / 객체 `{"반대의견": n, "별개의견": n, "보충의견": n, "chars": 다수의견 끝 이후 글자 수}` / `null`: 언급은 있으나 구간을 특정 못함).
+- 생략이 있으면 `truncated: true`, `truncated_fields`, `truncated_note`, `truncated_detail: [{"field", "original_chars", "shown_chars"}]`(의견을 뺐으면 `separate_opinions_omitted: true`).
+- 예(쪽 나누기): `prec_service(id="228541", sections="full", max_chars=20000)` → `next_offset`을 `offset`으로 넘겨 반복.
+- 캐시는 전체 응답을 담고 brief·summary·쪽은 사본에서 만든다. `SLIM_RESPONSE`는 그 뒤에 적용된다.
 
 ---
 

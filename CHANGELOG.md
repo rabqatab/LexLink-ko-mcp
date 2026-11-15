@@ -8,6 +8,14 @@ All notable changes to LexLink are documented here in both English and Korean.
 
 ### Unreleased
 
+#### Size-aware responses for long texts (default behaviour change)
+- `prec_service`, `detc_service`, `expc_service`, `decc_service`, `law_service`, `eflaw_service` gain `sections="brief"` and the paging parameters `offset` (int >= 0) and `max_chars` (int 1000..24000, default 20000 when paging). `law_service`/`eflaw_service` also gain `sections` (`"brief"`|`"full"`; `"summary"` is a `VALIDATION_ERROR`). All lengths are characters (Unicode code points), not bytes.
+- **Default change:** when `sections` is omitted, a body of **20,000 characters or less** (case law: the body field 판례내용/전문/이유/이유; laws: the rendered article text of all 조문단위, and only when `jo` is not given) is returned whole exactly as before; a **longer** one comes back as the brief view with `truncated: true`, `truncated_fields`, `truncated_note`, `truncated_detail` and the size fields. `sections="full"` without paging returns everything exactly as before (citation verification relies on it). Threshold: `sizing.AUTO_BRIEF_THRESHOLD = 20000` (strictly greater than 20,000 triggers brief).
+- Case-law brief: all non-body fields, the 주문 block, the first 6,000 body characters after it, `[…중략 N자…]`, and the last 3,000 characters of the majority opinion (the part before the closing sentence "이 판결에는 … 관여 법관의 의견이 일치…"); a majority of 9,000 characters or less is kept whole. Separate opinions (반대/별개/보충의견) are omitted and counted in `full_opinions`; without a closing sentence the tail is omitted and the banner says so. A banner line `[축약본 · 전문 N자 중 M자 · …]` starts the body field.
+- Paging (`sections="full"` or omitted, with `offset`/`max_chars`): one page of the body, cut back to a paragraph break, under a `[판례내용 a~b자 / 전체 N자 · 다수의견|반대의견|…|불명]` line, `next_offset` until the last page; the other fields only on the first page. Laws page over whole 조문단위 (`next_offset` = next unit index). Law brief (no `jo`): 기본정보 + `lexlink_toc` (+ `toc_total`, `notice`, TOC paging via `offset`/`max_chars`); the notice is also inside raw_content as `lexlink_notice` right after 기본정보. With `jo`, brief adds the TOC (one more upstream call) to the unchanged article.
+- New top-level size fields `full_chars`, `full_body_chars`, `full_opinions` (absent / object / `null`) in summary, brief, auto-brief and paged results. `sections="summary"` now uses the cache (derived from a copy of the full response). `SLIM_RESPONSE` applies afterwards and keeps earlier `truncated_*` entries.
+- Internal callers (chain/composite tools, `prec_status`, citation, as-of, constitutional check) pass `sections="full"` explicitly; other tools' output is unchanged. The server instructions no longer recommend `sections="summary"` as the default.
+
 #### Per-request OC (HTTP mode, opt-in)
 - `LEXLINK_ACCEPT_OC_HEADER=true` (default off): a `tools/call` whose HTTP request carries a valid `X-LexLink-OC` (`^[A-Za-z0-9._-]{1,64}$`) uses that OC for every law.go.kr request of the call (composite/chain tools and citation verification included); otherwise the server `OC`. An invalid value is a `VALIDATION_ERROR` (value not echoed). The `oc` tool argument stays ignored in HTTP mode; stdio is unchanged. The value is carried in a contextvar set in the per-call wrapper (`oc_context.py`).
 - The per-request OC is masked wherever the env OC is (`redact_oc` now also masks the env OC and the current request OC; request log incl. `LOG_ARGUMENTS`/`LOG_BODIES`, errors, hints, `OC=` links, exception text). `tools/call` log entries carry `oc_source` (`"header"` / `"server"`, never the value). Cache keys never contain the OC, errors are never cached, successes are shared between callers (public data). The user OC works only if the user registered the server IP at open.law.go.kr.
@@ -697,6 +705,14 @@ All notable changes to LexLink are documented here in both English and Korean.
 ## 한국어 (Korean)
 
 ### 미배포 (Unreleased)
+
+#### 긴 본문의 크기 인식 응답 (기본 동작 변경)
+- `prec_service`, `detc_service`, `expc_service`, `decc_service`, `law_service`, `eflaw_service`에 `sections="brief"`와 쪽 나누기 `offset`(0 이상 정수), `max_chars`(1000~24000, 쪽 나누기 기본 20000)를 추가했다. `law_service`/`eflaw_service`에는 `sections`(`"brief"`|`"full"`, `"summary"`는 `VALIDATION_ERROR`)도 생겼다. 길이 단위는 바이트가 아니라 글자(유니코드 코드포인트)다.
+- **기본값 변경:** `sections`를 생략하면 본문(판례: 판례내용/전문/이유; 법령: `jo` 없이 호출했을 때 전 조문단위의 조문 글자 수)이 **20,000자 이하**면 종전과 똑같이 전문을, **초과**하면 축약본(brief)을 돌려주고 `truncated`, `truncated_fields`, `truncated_note`, `truncated_detail`, 크기 필드를 붙인다. `sections="full"`(쪽 나누기 없음)은 종전과 똑같이 전부 돌려준다(인용 검증이 이에 의존). 임계값은 `sizing.AUTO_BRIEF_THRESHOLD = 20000`이며 20,000자를 넘을 때만 brief다.
+- 판례 brief: 본문 외 필드 전부, 주문 블록, 그 뒤 본문 앞 6,000자, `[…중략 N자…]`, 다수의견 끝 3,000자(종결 문장 "이 판결에는 … 관여 법관의 의견이 일치…" 앞까지). 다수의견이 9,000자 이하면 통째로 넣는다. 반대·별개·보충의견은 생략하고 `full_opinions`에 개수를 적는다. 종결 문장이 없으면 뒤 조각을 빼고 배너에 밝힌다.
+- 쪽 나누기(`sections="full"` 또는 생략 + `offset`/`max_chars`): 본문 한 쪽을 문단 경계에서 끊어 `[판례내용 a~b자 / 전체 N자 · 구간]` 줄과 함께 돌려주고 마지막 쪽까지 `next_offset`을 준다. 법령은 조문단위 단위로 나눈다. 법령 brief(`jo` 없음): 기본정보 + `lexlink_toc`(+ `toc_total`, `notice`); 같은 안내가 raw_content의 `lexlink_notice`(기본정보 바로 뒤)에도 들어간다. `jo`와 함께 brief면 조문은 그대로 두고 목차를 붙인다(업스트림 1회 추가).
+- 최상위 크기 필드 `full_chars`, `full_body_chars`, `full_opinions`(없음 / 객체 / `null`)를 summary·brief·자동 brief·쪽 나누기 결과에 붙인다. `sections="summary"`도 캐시를 쓴다. `SLIM_RESPONSE`는 그 뒤에 적용되며 앞선 `truncated_*`를 유지한다.
+- 내부 호출(chain·복합 도구, `prec_status`, 인용, as-of, 헌재 확인)은 `sections="full"`을 명시한다. 다른 도구의 출력은 그대로다.
 
 #### 요청별 OC (HTTP 모드, 선택)
 - `LEXLINK_ACCEPT_OC_HEADER=true`(기본 꺼짐): 유효한 `X-LexLink-OC`(`^[A-Za-z0-9._-]{1,64}$`) 헤더가 있는 `tools/call`은 그 호출의 모든 law.go.kr 요청(복합·chain 도구, 인용 검증 포함)에 그 OC를 쓰고, 없으면 서버 `OC`를 씁니다. 형식 오류는 `VALIDATION_ERROR`(값은 되돌려 주지 않음). 도구 인자 `oc`는 HTTP 모드에서 계속 무시되고 stdio는 그대로입니다. 값은 호출별 래퍼가 설정하는 contextvar로 전달됩니다(`oc_context.py`).
