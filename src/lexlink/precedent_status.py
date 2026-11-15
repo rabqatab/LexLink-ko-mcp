@@ -608,7 +608,7 @@ def run_prec_status(*, get_client, oc: str, case_number: Optional[str], prec_id:
 
     def service(prec_id_: str) -> Optional[dict]:
         snake = {"oc": oc, "target": "prec", "id": str(prec_id_), "type": "JSON"}
-        res = run_service(get_client=client, target="prec", snake_params=snake, response_type="JSON")
+        res = run_service(get_client=client, target="prec", snake_params=snake, response_type="JSON", sections="full")
         calls["n"] += 1
         if res.get("status") != "ok":
             if res.get("error_code") == ErrorCode.NOT_FOUND:
