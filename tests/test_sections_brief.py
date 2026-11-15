@@ -132,7 +132,7 @@ def test_decoy_headers_are_not_split_points():
 
 
 def test_header_split_over_two_lines_is_joined():
-    body = "서문" + BR + "  5. 대법관 김가나, 대법관 이다라의" + BR + "반대의견은 다음과 같다." + BR + "내용"
+    body = "  5. 대법관 김가나, 대법관 이다라의" + BR + "반대의견은 다음과 같다." + BR + "내용"
     body = "이 판결에는 대법관 김가나, 대법관 이다라의 반대의견이 있는 외에는 관여 법관의 의견이 일치하였다." + BR + body
     info = sizing.analyze_opinions(body)
     assert info["state"] == "mapped" and info["counts"] == {"반대": 1}
@@ -479,7 +479,7 @@ def test_internal_callers_still_get_full_bodies_above_20k(monkeypatch):
 
 REAL = Path("/private/tmp/claude-501/-Users-minhancho-HypeProof-hypeproof-legal/a1fe05b7-d648-41b0-a2ad-f8f8e0b8b71d/scratchpad/v180/real")
 REAL_EXPECT = {"2013므568": ("mapped", {"반대": 1}), "2010므4071": ("mapped", {"반대": 1, "별개": 2, "보충": 1}),
-               "2013다61381": ("unknown", {})}
+               "2013다61381": ("mapped", {"별개": 2, "반대": 1, "보충": 1})}
 
 
 @pytest.mark.parametrize("name", sorted(REAL_EXPECT))
@@ -493,3 +493,68 @@ def test_real_decisions_if_present(name):
     assert (info["state"], info["counts"]) == (state, counts)
     if state == "mapped":
         assert 3000 < info["majority_end"] < len(body)
+
+
+# ---------------------------------------------------------------- follow-ups: variants and page budget
+
+def _variant_body() -> str:
+    parts = ["【주    문】", "  상고를 기각한다.", "", "【이    유】"] + [_para("본", i) for i in range(18)]
+    parts.append("  7. 이 판결에는 상고이유 제3점에 관한 판단에 대하여 대법관 김가나의 별개의견이 있고, 대법관 이다라, 대법관 박마바의 "
+                 "반대의견이 있는 외에는 관여 법관의 의견이 일치되었으며, 대법관 최사아, 대법관 정자차의 다수의견에 대한 보충의견이 있다.")
+    parts += ["  8. 상고이유 제3점에 관한 판단에 대한 대법관 김가나의 별개의견", _para("별", 0),
+              "  9. 대법관 이다라, 대법관 박마바의 반대의견", _para("반", 0),
+              "  10. 대법관 최사아, 대법관 정자차의 다수의견에 대한 보충의견", _para("보", 0)]
+    return BR.join(parts)
+
+
+def test_closing_variant_and_header_without_eun_dagateunda_map():
+    body = _variant_body()
+    info = sizing.analyze_opinions(body)
+    assert info["state"] == "mapped" and info["counts"] == {"별개": 1, "반대": 1, "보충": 1}
+    assert body[info["majority_end"] - 5:info["majority_end"]].endswith("있다.")   # end of the whole sentence
+    assert "8. 상고이유" in body[info["majority_end"]:info["majority_end"] + 30]
+
+
+def test_kind_only_header_and_two_line_join():
+    body = ("이 판결에는 대법관 김가나, 대법관 이다라의 반대의견이 있는 외에는 관여 법관의 의견이 일치하였다." + BR
+            + "  5. 대법관 김가나, 대법관" + BR + "이다라의 반대의견" + BR + "내용")
+    assert sizing.analyze_opinions(body)["counts"] == {"반대": 1}
+    assert sizing._header_body("5. 반대의견은 다음과 같다.") is not None      # KIND_ONLY
+    assert sizing._header_body("5. 어떤 이유의 반대의견") is None             # no 대법관, not KIND_ONLY
+    assert sizing._header_body("가. 대법관 박마바의 별개의견(이하 '별개의견2'라고 한다)이 같다.") is None
+
+
+def test_first_page_budget_counts_other_fields(call):
+    body = make_body()
+    StubClient.payload["prec"] = case_json(body, extra={"판결요지": "요" * 6000})
+    res = call("prec_service", id="1", sections="full", max_chars=10000)
+    inner = json.loads(res["raw_content"])["PrecService"]
+    others = sum(len(v) for k, v in inner.items() if isinstance(v, str) and k != "판례내용")
+    text = inner["판례내용"]
+    assert others + len(text) <= 10000
+    assert len(text.split("\n", 1)[1]) >= 1000
+    nxt = json.loads(call("prec_service", id="1", offset=res["next_offset"], max_chars=10000)["raw_content"])["PrecService"]["판례내용"]
+    assert len(nxt) <= 10000 and len(nxt.split("\n", 1)[1]) > len(text.split("\n", 1)[1])
+    small = call("prec_service", id="1", sections="full", max_chars=1000)
+    assert 0 < len(body_of(small).split("\n", 1)[1]) <= 1000      # body budget floor is 1,000
+
+
+def test_brief_budget_shrinks_head_then_tail(call):
+    body = make_body()
+    StubClient.payload["prec"] = case_json(body, extra={"판결요지": "요" * 18000})
+    out = call("prec_service", id="1", sections="brief")
+    inner = json.loads(out["raw_content"])["PrecService"]
+    total = sum(len(v) for v in inner.values() if isinstance(v, str))
+    assert total <= 24000
+    shown = inner["판례내용"]
+    maj_end = sizing.analyze_opinions(body)["majority_end"]
+    assert shown.rstrip().endswith(body[maj_end - 100:maj_end].rstrip()[-30:])    # tail kept, head shrunk
+    first = shown.split("\n")[0]
+    assert f"전문 {len(body)}자 중 " in first
+    assert out["truncated_detail"][0]["shown_chars"] < sizing.HEAD_CHARS + sizing.TAIL_CHARS + 700
+    # even larger other fields: the tail shrinks as well
+    StubClient.payload["prec"] = case_json(body, extra={"판결요지": "요" * 22500})
+    get_cache().invalidate()
+    out = call("prec_service", id="1", sections="brief")
+    inner = json.loads(out["raw_content"])["PrecService"]
+    assert sum(len(v) for v in inner.values() if isinstance(v, str)) <= 24000

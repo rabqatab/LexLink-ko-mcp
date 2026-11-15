@@ -27,23 +27,22 @@ MAX_PAGE_CHARS = 24_000
 HEAD_CHARS = 6_000
 TAIL_CHARS = 3_000
 WHOLE_MAJORITY_CHARS = 9_000
+BRIEF_MAX_CHARS = 24_000   # the whole brief result (other fields + banner + body) stays within this
+BANNER_RESERVE = 400
 
 _BR = "<br/>"
 
 CLOSING_RE = re.compile(
-    r"이\s*판결(?:에는|에 대하여는)[^\n]*?관여\s*(?:대)?법관(?:들)?의\s*(?:의견이\s*)?일치(?:하였|되었)다\.?"
+    r"이\s*판결(?:에는|에 대하여는)[^\n]*?관여\s*(?:대)?법관(?:들)?의\s*(?:의견이\s*)?일치(?:하였|되었)(?:다|으며)\.?"
 )
 KINDS = ("반대", "별개", "보충")
 _KIND_RE = re.compile(r"(반대|별개|보충)의견")
-_NAME_RE = re.compile(r"대법관\s*([가-힣]{2,4}?)(?=\s|,|의|$)")
-_NUM = r"(?:\d{1,2}\.\s*)?"
-_HEADER_A = re.compile(
-    rf"^\s*{_NUM}대법관\s[^()]*?의\s*(반대|별개|보충)의견은\s*다음과\s*같다\.?\s*$"
-)
-_HEADER_B = re.compile(
-    rf"^\s*{_NUM}(?:다수|반대|별개)의견에\s*대한\s*[^()]*?보충의견(?:은\s*다음과\s*같다)?\.?\s*$"
-)
-_LOOSE_RE = re.compile(rf"^\s*{_NUM}[^\n()]{{0,160}}(반대|별개|보충)의견(?:은\s*다음과\s*같다)?\.?\s*$")
+_NAME_RE = re.compile(r"대법관\s+([가-힣]{2,4}?)(?=[,\s의과와]|$)")
+# Ported from LexAgent opinionSections.ts (#180 / PR #188)
+_TOP_NUM = re.compile(r"^\s*\d{1,2}\.\s*")
+_KIND_ONLY = re.compile(r"^(다수|반대|별개)의견(?:에 대한 보충의견)?(?:(?:은|는)\s*다음과\s*같다)?\.?$")
+_HEADER_END = re.compile(r"(?:다수|반대|별개|보충)의견(?:(?:은|는)\s*다음과\s*같다)?\s*[.。]?$")
+_LOOSE_RE = re.compile(r"^\s*(?:\d{1,2}\.\s*)?[^\n()]{0,160}(반대|별개|보충)의견(?:은\s*다음과\s*같다)?\.?\s*$")
 _JUMUN_RE = re.compile(r"【\s*주\s*문\s*】")
 
 
@@ -108,6 +107,28 @@ def _expected_from_closing(sentence: str) -> dict[str, set]:
     return expected
 
 
+def _header_body(line: str) -> Optional[str]:
+    """LexAgent ``headerBody``: a strict one-sentence opinion header, else None."""
+    t = line.strip()
+    if not t or len(t) > 260:
+        return None
+    b = _TOP_NUM.sub("", t, count=1).strip()
+    if "(" in b or "（" in b or re.search(r"[.。]\s", re.sub(r"[.。]\s*$", "", b)):
+        return None
+    if not _HEADER_END.search(b):
+        return None
+    return b if "대법관" in b or _KIND_ONLY.match(b) else None
+
+
+def _classify(h0: str) -> Optional[str]:
+    """Kind of a header ("반대"/"별개"/"보충"/"다수") or None when it names several kinds."""
+    h = re.sub(r"\s*(?:은|는)\s*다음과\s*같다\.?$", "", h0)
+    h = re.sub(r"[.。]$", "", h).strip()
+    bare = re.sub(r"(?:다수|반대|별개)의견에\s*대한", "", h)
+    kinds = set(re.findall(r"(다수|반대|별개|보충)의견", bare))
+    return next(iter(kinds)) if len(kinds) == 1 else None
+
+
 def analyze_opinions(body: str) -> dict:
     """Map the majority/separate-opinion structure of a judgment body.
 
@@ -136,63 +157,66 @@ def analyze_opinions(body: str) -> dict:
 
     closing = CLOSING_RE.search(norm)
     expected: dict[str, set] = {}
+    expected_names: set = set()
     maj_end: Optional[int] = None
+    scan_from = 0
     if closing:
-        expected = _expected_from_closing(closing.group(0))
-        line_end = norm.find("\n", closing.end())
-        maj_end = orig(len(norm) if line_end < 0 else line_end)
+        end_n = closing.end()
+        if not closing.group(0).rstrip(".").endswith("다"):   # "…일치되었으며, … 보충의견이 있다."
+            line_end = norm.find("\n", end_n)
+            rest = norm[end_n:len(norm) if line_end < 0 else line_end]
+            k = rest.find("다.")
+            end_n = end_n + (k + 2 if k >= 0 else len(rest))
+        sentence = norm[closing.start():end_n]
+        expected = _expected_from_closing(sentence)
+        expected_names = set(_names(sentence))
+        maj_end = orig(end_n)
+        scan_from = end_n
 
-    # header lines (a header split over two lines is joined before judging)
     lines, p = [], 0
     for line in norm.split("\n"):
         lines.append((p, line))
         p += len(line) + 1
-    headers: list[tuple[int, str, list]] = []
+    headers: list[tuple[int, Optional[str], list]] = []   # (orig pos, kind or None=unclassifiable, names)
     loose: list[tuple[int, str]] = []
+    skip = False
     for idx, (start, line) in enumerate(lines):
-        text = line
-        if not text.strip():
+        if skip:
+            skip = False
             continue
-        cand = text
-        if not re.search(r"[.다]\s*$", cand) and idx + 1 < len(lines):
-            cand = text.rstrip() + " " + lines[idx + 1][1].strip()
-        for variant in (text, cand):
-            if len(variant) > 260 or "(" in variant:
-                continue
-            stripped = re.sub(r"^\s*\d{1,2}\.\s*", "", variant).rstrip()
-            if re.search(r"\.\s", stripped):
-                continue  # a sentence end mid-line: prose, not a header
-            m = _HEADER_A.match(variant) or _HEADER_B.match(variant)
-            if m:
-                kind = m.group(1) if m.re is _HEADER_A else "보충"
-                headers.append((orig(start), kind, _names(variant)))
-                break
-        else:
-            if "대법관" in text and _LOOSE_RE.match(text) and len(text) <= 260:
-                lm = _LOOSE_RE.match(text)
-                loose.append((orig(start), lm.group(1)))
+        if start + len(line) <= scan_from or not line.strip():
+            continue
+        text = line
+        h = _header_body(text)
+        if h is None and re.match(r"^\s*(?:\d{1,2}\.\s*)?대법관", text) and not re.search(r"다\.\s*$", text) \
+                and idx + 1 < len(lines) and len(text) < 200:
+            joined = f"{text} {lines[idx + 1][1].strip()}"
+            if _header_body(joined) is not None:
+                h, text, skip = _header_body(joined), joined, True
+        if h is not None:
+            headers.append((orig(start), _classify(h), _names(h)))
+        elif not closing and "대법관" in text and len(text) <= 260 and "(" not in text and _LOOSE_RE.match(text):
+            loose.append((orig(start), _LOOSE_RE.match(text).group(1)))
 
     counts: dict[str, int] = {}
     for _, kind, _n in headers:
-        counts[kind] = counts.get(kind, 0) + 1
+        if kind in KINDS:
+            counts[kind] = counts.get(kind, 0) + 1
     kinds = sorted(set(expected) | set(counts) | {k for _, k in loose}, key=KINDS.index)
 
-    def matches() -> bool:
-        if not expected or set(expected) != set(counts):
-            return False
-        for kind, names in expected.items():
-            got = {nm for _, k, ns in headers if k == kind for nm in ns}
-            if names and got and names != got:
-                return False
-        return True
-
-    mentioned = bool(expected or headers or loose)
+    mentioned = bool(expected or expected_names or headers or loose)
     if not mentioned:
         state = "absent"
-    elif closing and matches():
-        state = "mapped"
-    else:
+    elif not closing:
         state = "unknown"
+    elif not expected and not expected_names:
+        state = "mapped" if headers else "absent"
+    else:
+        got_kinds = {k for _, k, _n in headers if k}
+        got_names = {nm for _, _k, ns in headers for nm in ns}
+        pre = body[maj_end:headers[0][0]].replace(_BR, "").strip() if headers else ""
+        ok = bool(headers) and not pre and set(expected) <= got_kinds and expected_names <= got_names
+        state = "mapped" if ok else "unknown"
 
     first_mark = min([h[0] for h in headers] + [l[0] for l in loose] + [n])
     limit = n if state == "absent" else (maj_end if maj_end is not None else first_mark)
@@ -203,12 +227,12 @@ def analyze_opinions(body: str) -> dict:
     if state == "absent":
         segments = [(0, n, "다수의견")]
     elif state == "mapped":
-        hs = sorted(headers)
+        hs = sorted(headers, key=lambda h: h[0])
         segments = [(0, hs[0][0], "다수의견")]
         for i, (hp, kind, names) in enumerate(hs):
             end = hs[i + 1][0] if i + 1 < len(hs) else n
-            label = f"{kind}의견"
-            if names:
+            label = "의견 구분 불명" if kind is None else ("다수의견" if kind == "다수" else f"{kind}의견")
+            if names and kind:
                 label += "(" + "·".join(names[:3]) + (f" 외{len(names) - 3}" if len(names) > 3 else "") + ")"
             segments.append((hp, end, label))
     else:
@@ -313,11 +337,19 @@ def page_case(response: dict, field: str, offset: Optional[int], max_chars: Opti
             f"offset={start}이 본문 길이({total}자) 이상입니다",
             hints=[f"offset은 0 이상 {total - 1} 이하여야 합니다. 이전 응답의 next_offset을 사용하세요"],
         )
-    end = min(start + size, total)
-    if end < total:
-        end = _cut_to_break(body, start, end)
     info = analyze_opinions(body)
-    header = f"[{field} {start + 1}~{end}자 / 전체 {total}자 · {_segment_label(info, start, end)}]"
+    # budget: other text fields (first page only) + header line + body slice stay within max_chars
+    other = count_text_chars(holder) - total if start == 0 else 0
+    budget = max(MIN_PAGE_CHARS, size - other - 100)
+    for _ in range(4):
+        end = min(start + budget, total)
+        if end < total:
+            end = _cut_to_break(body, start, end)
+        header = f"[{field} {start + 1}~{end}자 / 전체 {total}자 · {_segment_label(info, start, end)}]"
+        over = other + len(header) + 1 + (end - start) - size
+        if over <= 0 or end - start <= MIN_PAGE_CHARS:
+            break
+        budget = max(MIN_PAGE_CHARS, (end - start) - over)
     holder[field] = header + "\n" + body[start:end]
     if start > 0:  # later pages carry only the metadata and the page
         for key in list(holder):
@@ -341,12 +373,16 @@ def page_case(response: dict, field: str, offset: Optional[int], max_chars: Opti
     return out
 
 
-def _brief_body(body: str, info: dict) -> Optional[tuple[str, int, bool, bool]]:
-    """(brief_body_without_banner, shown_chars, has_gap, tail_omitted) or None when nothing is cut."""
+def _brief_body(body: str, info: dict, budget: int) -> Optional[tuple[str, int, bool, bool]]:
+    """(brief_body_without_banner, shown_chars, has_gap, tail_omitted) or None when nothing is cut.
+
+    ``budget``: characters the text may take (the other fields and the banner are already counted);
+    over budget the head shrinks first, then the tail.
+    """
     n = len(body)
     region_end = info["majority_end"] if info["majority_end"] is not None else info["limit"]
     has_tail_rule = info["majority_end"] is not None
-    if region_end <= WHOLE_MAJORITY_CHARS:
+    if region_end <= WHOLE_MAJORITY_CHARS and region_end <= budget:
         if region_end >= n:
             return None
         return body[:region_end], region_end, False, not has_tail_rule
@@ -358,24 +394,36 @@ def _brief_body(body: str, info: dict) -> Optional[tuple[str, int, bool, bool]]:
         block_end = nxt if nxt >= 0 else min(region_end, m.end() + 600)
         block = body[m.start():block_end]
         head_start = block_end
-    head_end = min(head_start + HEAD_CHARS, region_end)
-    head = body[head_start:head_end]
-    parts = [block] if block else []
-    parts.append(head)
-    shown = len(block) + len(head)
-    gap = False
-    if has_tail_rule:
-        tail_start = max(region_end - TAIL_CHARS, head_end)
-        if tail_start > head_end:
-            parts.append(f"[…중략 {tail_start - head_end}자…]")
-            gap = True
-        tail = body[tail_start:region_end]
-        if tail:
-            parts.append(tail)
-            shown += len(tail)
-    else:
-        gap = head_end < region_end
-    return "\n".join(p for p in parts if p), shown, gap, not has_tail_rule
+    head_len = min(HEAD_CHARS, region_end - head_start)
+    tail_len = TAIL_CHARS if has_tail_rule else 0
+    tail_len = min(tail_len, max(region_end - head_start - head_len, 0))   # no overlap with the head
+
+    def assemble(h: int, t: int):
+        head_end = head_start + h
+        tail_start = region_end - t
+        parts = [block] if block else []
+        parts.append(body[head_start:head_end])
+        shown, gap = len(block) + h, False
+        if t:
+            if tail_start > head_end:
+                parts.append(f"[…중략 {tail_start - head_end}자…]")
+                gap = True
+            parts.append(body[tail_start:region_end])
+            shown += t
+        else:
+            gap = head_end < region_end
+        return "\n".join(p for p in parts if p), shown, gap
+
+    text, shown, gap = assemble(head_len, tail_len)
+    over = len(text) - budget
+    if over > 0:
+        head_len = max(0, head_len - over)
+        text, shown, gap = assemble(head_len, tail_len)
+        over = len(text) - budget
+        if over > 0 and tail_len:
+            tail_len = max(0, tail_len - over)
+            text, shown, gap = assemble(head_len, tail_len)
+    return text, shown, gap, not has_tail_rule
 
 
 def _opinion_note(info: dict, tail_omitted: bool) -> str:
@@ -404,7 +452,8 @@ def brief_case(response: dict, field: str) -> dict:
     out = dict(response)
     out.update(size_fields(_parse_json(response["raw_content"]), field, body))
     info = analyze_opinions(body)
-    built = _brief_body(body, info)
+    other = count_text_chars(holder) - total
+    built = _brief_body(body, info, max(0, BRIEF_MAX_CHARS - other - BANNER_RESERVE))
     if built is None:
         return out
     text, shown, gap, tail_omitted = built
