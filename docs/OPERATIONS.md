@@ -247,7 +247,7 @@ Amazon Linux는 `apt` 대신 `yum`, 사용자 `ec2-user`, Nginx 설정 위치 `/
 cd ~/lexlink-ko-mcp && git pull && uv sync && sudo systemctl restart lexlink
 ```
 
-PlayMCP처럼 응답 크기 제한이 있는 곳에 붙일 때는 환경 파일에 `SLIM_RESPONSE=true`를 추가합니다. 제한 때문에 못 받은 부분은 `jo`, `page`/`display`, `sections="summary"`로 나누어 조회합니다(`truncated_notes`에 안내가 나옵니다).
+PlayMCP처럼 응답 크기 제한이 있는 곳에 붙일 때는 환경 파일에 `SLIM_RESPONSE=true`를 추가합니다. 제한 때문에 못 받은 부분은 `jo`, `page`/`display`로 나누어 조회합니다(판례 본문은 `sections` 생략 또는 `sections="full"`+`offset`/`max_chars`; `summary`는 본문 없는 판시사항·메타데이터만)(`truncated_notes`에 안내가 나옵니다).
 
 ## 9. 문제 해결
 

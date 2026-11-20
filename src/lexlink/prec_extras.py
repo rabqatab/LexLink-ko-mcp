@@ -15,7 +15,7 @@ import re
 from typing import Optional
 
 from ._helpers import ToolValidationError
-from .precedent_status import CASE_RE, civil_year, norm_year
+from .precedent_status import CASE_RE, civil_year
 
 # 사건종류명 -> 사건종류코드 as seen in live rows (2026-11-20; the 6 values below covered ~1,000 rows
 # of 10 unrelated keyword searches). Other codes may exist.
@@ -27,13 +27,21 @@ CASE_TYPE_ALIASES = {"행정": "일반행정", "조세": "세무", "세금": "�
 _CODE_TO_NAME = {v: k for k, v in CASE_TYPES.items()}
 
 
+_CONSTITUTIONAL_KIND_RE = re.compile(r"\d{2,4}(헌가|헌바|헌마|헌라|헌사|헌아|헌나|헌다)\d")
+
+
+def is_constitutional_case_number(query: str) -> bool:
+    """헌재 사건번호 (헌가/헌바/헌마/헌라/헌사/헌아...): not in the court precedent index; use detc_search."""
+    return bool(_CONSTITUTIONAL_KIND_RE.fullmatch((query or "").strip()))
+
+
 def sole_case_number(query: str) -> Optional[str]:
     """``query`` when it is exactly one case number (``63다131``, ``2013다61381``, ``4294민상1350``),
     else None. Mixed text (``63다131 손해배상``), quoted phrases and joined numbers
     (``94므1713, 1720``) are not case numbers here."""
     s = (query or "").strip()
     m = CASE_RE.fullmatch(s)
-    if not m or (m.group(4) or "").strip():
+    if not m or (m.group(4) or "").strip() or is_constitutional_case_number(s):
         return None
     return s
 
@@ -56,6 +64,11 @@ def normalize_case_type(value) -> Optional[tuple]:
     return s, None, (f"case_type_unknown: '{s}'는 확인된 사건종류명(" + ", ".join(CASE_TYPES) + ")이 아닙니다. 사건종류명이 정확히 일치하는 행만 남깁니다")
 
 
+def _store_rows(ranked: dict, rows: list, was_dict: bool) -> None:
+    """Write ``rows`` back; a single-row dict stays a dict (the shape the upstream/parser gave)."""
+    ranked["prec"] = rows[0] if (was_dict and len(rows) == 1) else rows
+
+
 def _prec_rows(response: dict):
     """``(ranked_data, rows_list)`` for a prec response, or ``(None, None)``."""
     ranked = response.get("ranked_data") if isinstance(response, dict) else None
@@ -69,6 +82,10 @@ def _prec_rows(response: dict):
     return ranked, rows
 
 
+_CT_SCOPE = ("한 번에 업스트림 100행(page = 100행 단위 쪽)을 받아 그 안에서만 거릅니다. 업스트림에는 사건종류 검색 변수가 없어 "
+             "totalCnt는 거르기 전 전체 건수이고, 남은 행 수가 아닙니다. 다음 쪽(page+1)에 더 있을 수 있습니다. display는 이때 무시됩니다")
+
+
 def apply_case_type_filter(response: dict, case_type: tuple) -> dict:
     """Keep only rows of the requested 사건종류 (post-filter of one upstream window).
 
@@ -79,7 +96,8 @@ def apply_case_type_filter(response: dict, case_type: tuple) -> dict:
     ranked, rows = _prec_rows(response)
     if ranked is None:
         if response.get("status") == "ok":
-            response["case_type_filter"] = {"case_type": name, "code": code, "rows_before_filter": 0, "rows_after_filter": 0}
+            response["case_type_filter"] = {"case_type": name, "code": code, "rows_before_filter": 0,
+                                            "rows_after_filter": 0, "scope": _CT_SCOPE}
         return response
 
     def match(row):
@@ -90,14 +108,16 @@ def apply_case_type_filter(response: dict, case_type: tuple) -> dict:
         return str(row.get("사건종류명", "")).strip() == name
 
     kept = [r for r in rows if match(r)]
-    ranked["prec"] = kept
+    _store_rows(ranked, kept, isinstance(ranked["prec"], dict))
     raw = response.get("raw_content")
     if isinstance(raw, str):
         try:
             data = json.loads(raw)
             root_key = next(iter(data)) if isinstance(data, dict) and len(data) == 1 else None
             if root_key and isinstance(data[root_key], dict) and "prec" in data[root_key]:
-                data[root_key]["prec"] = [r for r in _as_list(data[root_key]["prec"]) if match(r)]
+                orig = data[root_key]["prec"]
+                kept_raw = [r for r in _as_list(orig) if match(r)]
+                data[root_key]["prec"] = kept_raw[0] if (isinstance(orig, dict) and len(kept_raw) == 1) else kept_raw
                 response["raw_content"] = json.dumps(data, ensure_ascii=False)
         except ValueError:
             pass
@@ -105,8 +125,7 @@ def apply_case_type_filter(response: dict, case_type: tuple) -> dict:
         "case_type": name, "code": code,
         "rows_before_filter": len(rows), "rows_after_filter": len(kept),
         "upstream_total": ranked.get("totalCnt"),
-        "scope": "한 번에 업스트림 100행(page = 100행 단위 쪽)을 받아 그 안에서만 거릅니다. 업스트림에는 사건종류 검색 변수가 없어 "
-                 "totalCnt는 거르기 전 전체 건수이고, 남은 행 수가 아닙니다. 다음 쪽(page+1)에 더 있을 수 있습니다. display는 이때 무시됩니다",
+        "scope": _CT_SCOPE,
     }
     response["case_type_filter"] = info
     return response
@@ -120,50 +139,89 @@ def _norm_case_no(v) -> str:
     return re.sub(r"\s+", "", str(v or ""))
 
 
-def group_duplicate_rows(response: dict) -> dict:
-    """Group rows that are the same judgment (same 사건번호 + 선고일자 + 법원명, different 판례일련번호).
+_COURT_OWN_SOURCES = ("대법원", "법원도서관", "헌법재판소")
+_DIFF_FIELDS = ("데이터출처명", "판결유형", "사건종류명", "사건명")
 
-    ``ranked_data["prec"]`` keeps the first row of each group and gives it ``same_case_ids`` (the other
-    판례일련번호, in result order). ``duplicate_groups`` lists every group with all ids, and
-    ``rows_before_grouping`` shows the raw count. ``raw_content`` (when present) keeps every upstream row untouched.
-    Only rows of this page are compared. The ids differ because the upstream indexed the judgment more than once
-    (body text differs by whitespace/format); either id opens the judgment."""
+
+def _source_rank(row: dict) -> int:
+    """0 = the court's own source, 1 = unknown/empty, 2 = a copy from a tax/pension/compensation system."""
+    src = str(row.get("데이터출처명") or "").strip()
+    if not src or src in _COURT_OWN_SOURCES:
+        return 0 if src else 1
+    return 2
+
+
+def _pick_representative(members: list) -> dict:
+    """Court's own source first, then a row whose 판시사항 is known to be non-empty (only when the search row
+    carries the field), else upstream order (``min`` keeps the first of equal keys)."""
+    def key(row):
+        has_head = 0 if str(row.get("판시사항") or "").strip() else (1 if "판시사항" in row else 0)
+        return (_source_rank(row), has_head)
+    return min(members, key=key)
+
+
+def group_duplicate_rows(response: dict) -> dict:
+    """Group rows with the same 사건번호 + 선고일자 + 법원명 (different 판례일련번호).
+
+    These are NOT guaranteed to be the same text: live groups differ in 데이터출처명 (대법원 vs 지방세법령정보시스템),
+    사건종류, 판결유형 and in whether 판시사항 is filled. ``ranked_data["prec"]`` keeps one row per group (preferring the
+    court's own 데이터출처명 ``대법원``, then a row with a non-empty 판시사항 when the row shows it, else upstream order)
+    and gives it ``same_case_ids``. ``duplicate_groups`` lists every member with 데이터출처명/판결유형/사건종류명/사건명
+    and ``differs_from_representative``, so nothing is lost when ``raw_content`` is dropped. ``rows_before_grouping`` is the
+    count before grouping; ``rank`` can have gaps and the page can hold fewer rows than ``display``. ``raw_content`` is untouched."""
     ranked, rows = _prec_rows(response)
     if ranked is None or len(rows) < 2:
         return response
     groups: dict = {}
-    order: list = []
+    order: list = []  # one entry per row or group, in first-seen order: ("row", row) | ("group", key)
     for row in rows:
         if not isinstance(row, dict):
-            order.append(row)
+            order.append(("row", row))
             continue
         key = (_norm_case_no(row.get("사건번호")), str(row.get("선고일자", "")).strip(), str(row.get("법원명", "")).strip())
         if not key[0] or not key[1]:
-            order.append(row)
+            order.append(("row", row))
             continue
         if key in groups:
             groups[key].append(row)
         else:
             groups[key] = [row]
-            order.append(row)
-    dups = {k: v for k, v in groups.items() if len(v) > 1}
-    if not dups:
+            order.append(("group", key))
+    if not any(len(v) > 1 for v in groups.values()):
         return response
     summary = []
-    drop = set()
-    for (case_no, date, court), members in dups.items():
+    out = []
+    for kind, val in order:
+        if kind == "row":
+            out.append(val)
+            continue
+        members = groups[val]
+        if len(members) == 1:
+            out.append(members[0])
+            continue
+        rep = _pick_representative(members)
         ids = [str(m.get("판례일련번호", "")) for m in members]
-        members[0]["same_case_ids"] = ids[1:]
-        drop.update(id(m) for m in members[1:])
-        summary.append({"사건번호": case_no, "선고일자": date, "법원명": court,
-                        "판례일련번호": ids, "representative": ids[0]})
-    ranked["prec"] = [r for r in order if id(r) not in drop]
+        rep_id = str(rep.get("판례일련번호", ""))
+        rep["same_case_ids"] = [i for i in ids if i != rep_id]
+        out.append(rep)
+        detail = []
+        for m in members:
+            entry = {"판례일련번호": str(m.get("판례일련번호", ""))}
+            for f in _DIFF_FIELDS:
+                entry[f] = m.get(f)
+            if m is not rep:
+                entry["differs_from_representative"] = [f for f in _DIFF_FIELDS if m.get(f) != rep.get(f)]
+            detail.append(entry)
+        summary.append({"사건번호": val[0], "선고일자": val[1], "법원명": val[2],
+                        "representative": rep_id, "판례일련번호": ids, "members": detail})
+    _store_rows(ranked, out, isinstance(ranked["prec"], dict))
     response["rows_before_grouping"] = len(rows)
     response["duplicate_groups"] = summary
     response["duplicate_groups_note"] = (
-        "같은 판결(사건번호·선고일자·법원명이 같음)이 서로 다른 판례일련번호로 중복 색인된 경우입니다. ranked_data에는 "
-        "그룹당 첫 행만 두고 나머지 번호를 same_case_ids에 적었으며, 어느 번호로 prec_service를 불러도 같은 판결입니다"
-        "(본문은 공백·서식이 조금 다를 수 있음). raw_content(있으면)는 업스트림 행 그대로입니다")
+        "사건번호·선고일자·법원명이 같은 행을 묶었습니다. 데이터출처가 다른 사본일 수 있어(예: 대법원 vs 지방세법령정보시스템) "
+        "본문·판시사항·판결유형·사건종류가 서로 다를 수 있습니다(members 참조). ranked_data에는 그룹당 한 행(대법원 출처 우선)만 두고 "
+        "나머지 번호를 same_case_ids에 적었습니다. 어느 판례일련번호를 읽었는지 기록하세요. rank에 빈 번호가 생기고 한 쪽이 "
+        "display보다 적을 수 있으며 묶기 전 행 수는 rows_before_grouping입니다. raw_content(있으면)는 업스트림 행 그대로입니다")
     return response
 
 
@@ -174,7 +232,9 @@ def case_number_year(case_no) -> Optional[int]:
     m = CASE_RE.search(str(case_no or ""))
     if not m:
         return None
-    y = norm_year(m.group(1))
+    y = int(m.group(1))
+    if len(m.group(1)) == 2:
+        y += 1900  # two-digit years were used only up to 1999; 4-digit years start in 2000
     return civil_year(y)
 
 

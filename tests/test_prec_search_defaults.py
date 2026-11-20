@@ -213,3 +213,93 @@ def test_service_warns_on_case_year_and_on_lower_court_date():
     assert prec_extras.service_date_warnings(_svc("20241226", "2024므1", "본문")) == []
     assert prec_extras.service_date_warnings({"raw_content": "not json"}) == []
     assert prec_extras.service_date_warnings({}) == []
+
+
+# --- review follow-ups (all rows SYNTHETIC) ------------------------------------------
+
+def _src(i, seq, src, head="", kind="일반행정", code="400107", jud="판결"):
+    r = row(i, "2024두1", "2025.10.16", kind=kind, code=code, seq=seq)
+    r.update({"데이터출처명": src, "판결유형": jud, "판시사항": head})
+    return r
+
+
+@pytest.mark.unit
+def test_representative_prefers_court_source_then_headnote_then_order(tool):
+    Rec.rows = [_src(1, 11, "지방세법령정보시스템", kind="세무", code="400108", jud="파기환송"), _src(2, 12, "대법원")]
+    out = tool("prec_search", query="x")
+    r = out["ranked_data"]["prec"]
+    assert len(r) == 1 and r[0]["판례일련번호"] == "12" and r[0]["same_case_ids"] == ["11"]
+    g = out["duplicate_groups"][0]
+    assert g["representative"] == "12" and [m["판례일련번호"] for m in g["members"]] == ["11", "12"]
+    m11 = g["members"][0]
+    assert (m11["데이터출처명"], m11["판결유형"], m11["사건종류명"]) == ("지방세법령정보시스템", "파기환송", "세무")
+    assert set(m11["differs_from_representative"]) == {"데이터출처명", "판결유형", "사건종류명"}
+    assert "differs_from_representative" not in g["members"][1]
+    assert "서로 다를 수 있" in out["duplicate_groups_note"] and "같은 판결" not in out["duplicate_groups_note"]
+
+
+@pytest.mark.unit
+def test_representative_same_source_prefers_filled_headnote_else_first(tool):
+    Rec.rows = [_src(1, 21, "대법원", head=""), _src(2, 22, "대법원", head="판시")]
+    assert tool("prec_search", query="x")["ranked_data"]["prec"][0]["판례일련번호"] == "22"
+    get_cache().invalidate()
+    Rec.rows = [_src(1, 31, "대법원", head=""), _src(2, 32, "대법원", head="")]
+    assert tool("prec_search", query="x")["ranked_data"]["prec"][0]["판례일련번호"] == "31"
+
+
+@pytest.mark.unit
+def test_source_order_court_over_unknown_over_other_system():
+    from lexlink.prec_extras import _pick_representative
+    a, b, c = {"판례일련번호": "a", "데이터출처명": "근로복지공단산재판례"}, {"판례일련번호": "b"}, {"판례일련번호": "c", "데이터출처명": "대법원"}
+    assert _pick_representative([a, b, c])["판례일련번호"] == "c"
+    assert _pick_representative([a, b])["판례일련번호"] == "b"
+
+
+@pytest.mark.unit
+def test_two_digit_years_are_1900s():
+    assert prec_extras.case_number_year("49다1") == 1949
+    assert prec_extras.case_number_year("99다1") == 1999
+    assert prec_extras.case_number_year("2000다1") == 2000
+    assert prec_extras.date_warning("49다1", "1949.03.01") is None
+    assert prec_extras.date_warning("49다1", "1948.03.01")
+
+
+@pytest.mark.unit
+def test_constitutional_numbers_not_routed_but_hinted(tool):
+    out = tool("prec_search", query="2013헌바1")
+    assert "query_routed_to_nb" not in out and "nb" not in Rec.calls[-1]
+    assert any("detc_search" in n for n in out["notes"])
+
+
+@pytest.mark.unit
+def test_routed_zero_rows_gets_specific_hints(tool):
+    Rec.rows = []
+    out = tool("prec_search", query="2013므3963")
+    assert out["query_routed_to_nb"] is True
+    assert any("결합사건" in h for h in out["hints"]) and not any("줄이거나" in h for h in out["hints"])
+
+
+@pytest.mark.unit
+def test_lowercase_type_accepted_for_case_type(tool):
+    Rec.rows = MIXED()
+    out = tool("prec_search", query="x", case_type="가사", type="json")
+    assert out["case_type_filter"]["rows_after_filter"] == 2
+
+
+@pytest.mark.unit
+def test_single_row_dict_shape_is_kept():
+    resp = {"status": "ok", "ranked_data": {"prec": row(1, "2024므1", kind="가사", code="400103")}}
+    prec_extras.apply_case_type_filter(resp, ("가사", "400103", None))
+    assert isinstance(resp["ranked_data"]["prec"], dict)
+    prec_extras.group_duplicate_rows(resp)
+    assert isinstance(resp["ranked_data"]["prec"], dict)
+    resp2 = {"status": "ok", "ranked_data": {"prec": row(1, "2024도1")}}
+    prec_extras.apply_case_type_filter(resp2, ("가사", "400103", None))
+    assert resp2["ranked_data"]["prec"] == []
+
+
+@pytest.mark.unit
+def test_case_type_scope_present_with_zero_rows():
+    resp = {"status": "ok", "ranked_data": {}}
+    prec_extras.apply_case_type_filter(resp, ("가사", "400103", None))
+    assert resp["case_type_filter"]["rows_before_filter"] == 0 and resp["case_type_filter"]["scope"]

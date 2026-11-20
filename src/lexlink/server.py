@@ -1696,6 +1696,11 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
 
     # ==================== PHASE 3: CASE LAW & LEGAL RESEARCH ====================
 
+    def _ranked_prec_count(response: dict) -> int:
+        ranked = response.get("ranked_data")
+        rows = ranked.get("prec") if isinstance(ranked, dict) else None
+        return 1 if isinstance(rows, dict) else (len(rows) if isinstance(rows, list) else 0)
+
     # ==================== TOOL 16: prec_search ====================
     @server.tool(annotations=TOOL_ANNOTATIONS)
     @handle_tool_error
@@ -1744,7 +1749,11 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         Duplicates: the upstream lists some judgments more than once under different 판례일련번호 (same 사건번호,
         선고일자, 법원명; body differs by whitespace). `ranked_data` keeps one row per judgment with
         `same_case_ids` (the other ids); `duplicate_groups` lists every group; `raw_content` (when present)
-        keeps every upstream row. Rows whose 선고일자 year is earlier than the case-number year (impossible)
+        keeps every upstream row. The rows are not guaranteed to have the same text: they can come from different
+        sources (대법원 vs 지방세법령정보시스템) with different 판시사항/판결유형/사건종류. The kept row prefers the
+        대법원 source; `duplicate_groups[].members` lists every id with 데이터출처명, 판결유형, 사건종류명, 사건명 and what
+        differs, so record which id you read. After grouping `rank` can have gaps and a page can hold fewer rows than
+        `display`; `rows_before_grouping` is the count before grouping. Rows whose 선고일자 year is earlier than the case-number year (impossible)
         carry `date_warning`; the upstream date is never changed.
 
         Args:
@@ -1773,7 +1782,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 it fetches 100 rows for `page` (page = 100-row pages, `display` is ignored), keeps the matching
                 rows and reports `case_type_filter` (`rows_before_filter`, `rows_after_filter`, `upstream_total`).
                 `totalCnt` stays the unfiltered upstream count; a page can hold few or no matching rows while a
-                later page still has more. Needs type="JSON". Combine with `curt`/`org`/`jo` to narrow upstream.
+                later page still has more. Needs type="JSON" (case-insensitive). `case_type_filter.scope` repeats these semantics even for 0 rows. Combine with `curt`/`org`/`jo` to narrow upstream.
 
         Returns:
             Search results with precedent list or error.
@@ -1804,6 +1813,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         prnc_yd, date_applied = guards.resolve_date_filter("prec", date, prnc_yd)
         nb = guards.normalize_case_number(nb)
         ct = prec_extras.normalize_case_type(case_type)
+        type = type.strip().upper() if isinstance(type, str) and type.strip().upper() in ("JSON", "XML", "HTML") else type
         if ct and type != "JSON":
             raise ToolValidationError(
                 "case_type은 type=\"JSON\"에서만 쓸 수 있습니다 (LexLink가 행을 걸러야 해서 JSON 행이 필요합니다)",
@@ -1814,6 +1824,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             if routed_nb:
                 nb = guards.normalize_case_number(routed_nb)
                 query = "*"
+        constitutional_hint = (not nb and search in (None, 1) and prec_extras.is_constitutional_case_number(query))
         search_defaulted = False
         if search is None and query != "*":
             search, search_defaulted = 2, True
@@ -1854,6 +1865,13 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 guards.add_notes(response, f"query={routed_nb!r}는 사건번호 하나라서 nb={nb!r}로 조회했습니다 "
                                  "(사건명 검색은 번호로 무관한 행을 돌려줍니다). 본문에 이 번호가 인용된 판결을 찾으려면 "
                                  "query='\"사건번호\"', search=2를 쓰세요")
+            if constitutional_hint:
+                guards.add_notes(response, "헌법재판소 사건번호(헌가/헌바/헌마 등)는 법원 판례 색인(prec)에 없습니다. "
+                                 "detc_search(nb 또는 query)로 헌재 결정례를 조회하세요. 이 호출은 본문 검색(search=2)으로 처리되었습니다")
+            if routed_nb and not _ranked_prec_count(response):
+                response["hints"] = [
+                    "사건번호로 조회한 결과가 0건입니다: 법제처 판례 DB에 수록되지 않은 판결이거나 결합사건의 두 번째 번호일 수 있습니다",
+                    "이 번호를 인용한 판결을 찾으려면 prec_search(query='\"사건번호\"', search=2)를 사용하세요"]
             warnings_extra = []
             if ct:
                 prec_extras.apply_case_type_filter(response, ct)
@@ -1911,7 +1929,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             body is unavailable (unknown id or source not served by the API).
             sections="summary" falls back to including 판례내용 when both 판시사항
             and 판결요지 are empty (sections="summary_fallback").
-            `warnings` has `date_before_case_year` / `date_before_lower_court` when the upstream 선고일자 is
+            `warnings` (type="JSON" only) has `date_before_case_year` / `date_before_lower_court` when the upstream 선고일자 is
             impossible (earlier than the case-number year, or than the 원심판결 date in the body); the date
             itself is never changed.
 

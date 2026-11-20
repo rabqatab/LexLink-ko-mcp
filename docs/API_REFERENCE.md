@@ -236,7 +236,7 @@ for t in asyncio.run(create_server().list_tools()):
 
 - 기본: 이미 가져온 내용은 자르지 않습니다. JSON `raw_content`는 요청한 페이지의 행만 담습니다.
 - `SLIM_RESPONSE=true`: `ranked_data`가 있으면 `raw_content`를 지우고, 압축 상한(발췌 500자, 상위 10/3건, 위임 항목 80건)을 유지하며, 20,000바이트를 넘는 결과는 줄이고 `truncated`, `truncated_notes`(그리고 `truncated_fields`)로 표시합니다. 이 모드에서는 `sections="full"` 전문을 받을 수 없습니다.
-- `jo`, `page`/`display`, `sections="summary"`로 나누어 조회하세요.
+- `jo`, `page`/`display`로 나누어 조회하세요. 판례 본문은 `sections`를 생략하거나 `sections="full"`에 `offset`/`max_chars`를 쓰세요(`sections="summary"`는 본문 없는 판시사항·메타데이터만 줍니다).
 
 ---
 
@@ -969,7 +969,7 @@ http://www.law.go.kr/DRF/lawSearch.do?OC=test&target=prec&type=HTML&query=담보
 - **기본 검색범위는 본문(`search=2`).** 사건명(`search=1`) 기본에서는 쟁점어가 거의 0건이었다(가사 쟁점어 93개 중 91개가 0건, legal-research exp 012). `search=1`/`3`을 명시하면 그대로 쓴다. 전문·참조판례 검색은 업스트림 순서(선고일 내림차순)를 유지하고, 사건명 관련도 재정렬은 `search=1`일 때만 한다.
 - **사건번호 하나만 `query`로 넣으면 `nb`로 라우팅**(`nb`가 없고 `search`가 생략·1일 때): `query="63다131"`은 사건명 검색이 무관한 약 99행을 돌려주지만 `nb`는 1건이다. 응답에 `query_routed_to_nb: true`, `routed_nb`, 안내 `notes`가 붙는다. `63다131 손해배상`, `"63다131"`(따옴표 인용 검색), `94므1713, 1720`, `search=2/3`는 라우팅하지 않는다.
 - **`case_type`(사건종류)**: 업스트림에 사건종류 변수가 없다(알 수 없는 변수는 무시됨; `org`는 법원종류 400201/400202뿐, `curt`는 법원명). 행에는 `사건종류명`/`사건종류코드`가 있다(민사 400101, 형사 400102, 가사 400103, 특허 400106, 일반행정 400107, 세무 400108). `case_type`은 LexLink가 업스트림 한 쪽(100행)을 받아 거르는 후처리다: `page`는 100행 단위 쪽이고 `display`는 무시되며 `totalCnt`는 거르기 전 건수다. `case_type_filter`에 `rows_before_filter`/`rows_after_filter`/`upstream_total`이 나온다(예: 가사 쟁점어 100행 중 22행). 남은 행이 적어도 다음 쪽에 더 있을 수 있다. `type=JSON`만 된다. 가사 법원명(`curt=서울가정법원`)과 함께 쓰면 좁히기 쉽다.
-- **중복 판결 묶음**: 업스트림은 같은 판결(사건번호·선고일자·법원명 동일)을 다른 판례일련번호로 여러 번 색인하기도 한다(92므68 = 602511/123909, 93스6 = 604435/189896/603259). `ranked_data`는 그룹당 첫 행만 두고 `same_case_ids`에 나머지 번호를 적으며, `duplicate_groups`·`rows_before_grouping`이 요약한다. `raw_content`(있으면)는 업스트림 행 그대로다. 같은 쪽 안에서만 비교한다.
+- **같은 사건번호·선고일자·법원명 묶음**: 업스트림은 같은 번호·날짜·법원의 행을 다른 판례일련번호로 여러 번 돌려주기도 한다(92므68 = 602511/123909, 93스6 = 604435/189896/603259). 데이터출처가 다른 사본일 수 있어(예 2024두67238: 대법원 vs 지방세법령정보시스템) 본문·판시사항·판결유형·사건종류가 다를 수 있다. `ranked_data`는 그룹당 한 행(데이터출처명 `대법원` 우선, 다음으로 판시사항이 있는 행, 아니면 업스트림 순서)만 두고 `same_case_ids`에 나머지 번호를 적는다. `duplicate_groups[].members`는 모든 번호의 데이터출처명·판결유형·사건종류명·사건명과 대표 행과 다른 필드(`differs_from_representative`)를 담고, `rows_before_grouping`은 묶기 전 행 수다. `rank`에 빈 번호가 생기고 한 쪽이 `display`보다 적을 수 있다. `raw_content`(있으면)는 업스트림 행 그대로다. 같은 쪽 안에서만 비교한다. 어느 번호를 읽었는지 기록할 것.
 - **선고일자 경고**: 선고일자의 연도가 사건번호 연도보다 앞서면(2024므14761, 판례일련번호 609449, 선고일자 2023.12.26) 행에 `date_warning`, 결과에 `date_warning_rows`가 붙는다. 사건번호 연도는 두 자리(63다131 = 1963)와 단기(4294민상1350 = 1961)를 환산한다. `prec_service`는 같은 검사에 더해 본문 `【원심판결】` 뒤의 첫 날짜보다 선고일자가 앞서면 `warnings`에 `date_before_lower_court`를 단다. 업스트림 값은 바꾸지 않는다.
 
 ---
