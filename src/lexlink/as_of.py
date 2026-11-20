@@ -410,3 +410,76 @@ def expired_unknown(cands: list[dict]) -> bool:
         return False
     statuses = {c["row"].get("현행연혁코드", "") for c in cands}
     return not (statuses & {"현행", "시행예정"}) and not is_repeal(cands[-1]["row"])
+
+
+# ---------------------------------------------------------------------------
+# data_warnings: upstream snapshots that look stale (공포 order != 시행 order)
+# ---------------------------------------------------------------------------
+
+def _announce_key(c: dict) -> tuple:
+    row = c["row"]
+    return (row.get("공포일자", "") or "", _int(row.get("공포번호")))
+
+
+def announcement_inversion(cands: list[dict], chosen: dict) -> Optional[dict]:
+    """The earlier-in-force candidate that was *promulgated later* than ``chosen``, or ``None``.
+
+    law.go.kr builds each (MST, 시행일) body from that amendment's own chain. When an amendment
+    promulgated first takes effect after one promulgated later (공포 A < 공포 B but 시행 A > 시행 B),
+    the body served for A can lack B's changes (measured: 민법 MST 60400 / 79107). The returned
+    candidate is the one whose changes the chosen body may be missing (latest 공포 among them).
+    """
+    mine = _announce_key(chosen)
+    earlier = [c for c in cands if c["effective_date"] < chosen["effective_date"] and _announce_key(c) > mine]
+    return max(earlier, key=_announce_key) if earlier else None
+
+
+def _norm(text: Optional[str]) -> str:
+    return re.sub(r"\s+", "", text or "")
+
+
+def paragraph_count(text: Optional[str]) -> int:
+    """Number of distinct circled-number 항 markers (①..⑳); they only appear as paragraph numbers."""
+    return len({ch for ch in (text or "") if ch in _CIRCLED})
+
+
+def assess_snapshot(chosen_text: Optional[str], inverted_text: Optional[str],
+                    next_text: Optional[str] = None) -> Optional[str]:
+    """Why ``chosen_text`` (None = article absent) looks like a stale snapshot, or ``None``.
+
+    ``inverted_text`` is the article in the version of ``announcement_inversion``;
+    ``next_text`` the article in the following version (``None`` when unknown / absent).
+    Returns ``"ARTICLE_MISSING"``, ``"PARAGRAPHS_DROPPED"`` or ``"REVERTS_TO_EARLIER_WORDING"``.
+    """
+    if inverted_text is None:
+        return None
+    if chosen_text is None:
+        return "ARTICLE_MISSING"
+    if _norm(chosen_text) == _norm(inverted_text):
+        return None
+    if paragraph_count(chosen_text) < paragraph_count(inverted_text):
+        return "PARAGRAPHS_DROPPED"
+    if next_text is not None and _norm(next_text) == _norm(inverted_text):
+        return "REVERTS_TO_EARLIER_WORDING"
+    return None
+
+
+def flip_back_rows(texts: list) -> list[tuple[int, str]]:
+    """Indexes ``i`` whose article differs from ``i-1`` while ``i+1`` equals ``i-1`` again.
+
+    ``texts`` holds one entry per consecutive version (``None`` = article absent in that version).
+    Returns ``(i, kind)`` with kind ``ARTICLE_MISSING`` (absent between two identical versions),
+    ``PARAGRAPHS_DROPPED`` or ``REVERTS_TO_EARLIER_WORDING``.
+    """
+    out = []
+    for i in range(1, len(texts) - 1):
+        a, b, c = texts[i - 1], texts[i], texts[i + 1]
+        if a is None or c is None or _norm(a) != _norm(c) or (b is not None and _norm(b) == _norm(a)):
+            continue
+        if b is None:
+            out.append((i, "ARTICLE_MISSING"))
+        elif paragraph_count(b) < paragraph_count(a):
+            out.append((i, "PARAGRAPHS_DROPPED"))
+        else:
+            out.append((i, "REVERTS_TO_EARLIER_WORDING"))
+    return out

@@ -22,7 +22,7 @@
 | `law_service` | - | id, mst, lm, ld, ln, jo, sections, offset, max_chars, lang, type=JSON |
 | `eflaw_josub` | - | id, mst, ef_yd, jo, hang, ho, mok, type=JSON |
 | `law_josub` | - | id, mst, jo, hang, ho, mok, type=JSON |
-| `law_as_of` | law_name, as_of | article, article_branch=0, as_of_end, type=JSON |
+| `law_as_of` | law_name, as_of | article, article_branch=0, as_of_end, period_after, type=JSON |
 | `elaw_search` | - | query=*, display=20, page=1, type=JSON, sort, ef_yd, org, knd |
 | `elaw_service` | - | id, mst, lm, ld, ln, type=JSON |
 
@@ -518,6 +518,12 @@ http://www.law.go.kr/DRF/lawService.do?OC=test&target=lawjosub&type=XML&ID=00182
 | `null` | `ARTICLE_STAGED_DATE_UNRESOLVED` | `article`을 지정했고 부칙이 그 조문의 시행일을 계산할 수 없는 방식(`대통령령으로 정하는 날`, `이 법 시행 후 N개월이 경과한 날`, `공포 후 N개월 이내` 등, 또는 부칙 공포일 없음)으로 정한 경우: 기준일에 그 조문이 시행 중이었는지 알 수 없음. 부칙 원문은 `partial_effect.unresolved`와 `caveats` |
 
 **부칙 상대일(`공포 후 6개월이 경과한 날부터 시행`):** 부칙 단위의 `부칙공포일자`로 계산합니다. 기간은 공포일 다음 날부터 기산(민법 제157조)하고 역(曆)에 따라 계산하며(제160조) 기간이 지난 다음 날이 "경과한 날"입니다(공포 2021-04-20 + 6개월 = 2021-10-21; 말일이 없는 달은 다음 달 1일). 법제처 `eflaw` 시행일자와 대조: 스토킹범죄의 처벌 등에 관한 법률 3건과 가정폭력범죄의 처벌 등에 관한 특례법 13건(공포 후 1~8개월·1년 형태), 총 16건(개정본)에서 계산값이 그 개정본의 `시행일자`와 같았습니다(같은 개정의 다른 시행일 행 1건, MST 115734는 비교 대상이 아니라 제외). `공포 후 1년 6개월이 경과한 날`(연+월)은 합산하고, `경과한 날이 속하는 달의 1일`·`경과한 날의 다음 날`은 그대로 계산하며, 그 밖의 이어지는 말(`…속하는 달의 다음 달 1일`, `…의 전날`), 일과 월·년의 혼합, `공포 6개월 후`, `공포한 날부터 N개월이 경과한 날`(기산일이 하루 다른지 실제 법령으로 확인하지 못함), `공포 후 N개월 이내`는 계산하지 않고 unresolved로 둡니다(평범한 경과일로 잘못 계산하지 않음). `각 호`로 나열한 항목(`1. 제5조: 2024년 1월 1일`)이 조문을 지목하면 그 항목 줄을 따로 평가합니다. **적용 범위:** 계산 불가(`unresolved`) 판정은 **선택된 버전 자신의 개정 부칙**(공포일자·공포번호가 같은 부칙 단위)에만 적용합니다. 더 이전 개정의 부칙에 `대법원규칙으로 정하는 날` 같은 규정이 있어도 그 뒤 개정이 이미 시행되었으므로 `in_force`는 바꾸지 않고 `partial_effect.earlier_amendment_unresolved_dates`와 `caveats`에만 적습니다(가족관계의 등록 등에 관한 법률 제14조·제15조의 2016 부칙이 2018-01-01과 2026-01-01에서 `in_force`를 영구히 null로 만들던 회귀를 막음; 13개 질의에서 null 0건). 절대일·계산된 상대일이 기준일보다 늦은 경우는 이전 개정의 부칙이어도 그대로 보고합니다. 계산된 날짜가 기준일보다 늦으면 `partial_effect.article_scan.matches[].later_dates`와 `computed_from_announcement`에 나옵니다(`in_force`는 그대로 true). 위헌·헌법불합치 단서는 `law_as_of`에 넣지 않고 `law_constitutional_check`로 따로 조회합니다.
+
+**효력 기간 `in_force_period` (Unreleased):** `{start, end, end_inclusive: true, open_ended}`. `start` = 선택된 개정본의 시행일, `end` = 다음 개정본(목록상 시행일이 더 늦은 버전)의 시행일 전날(포함), 다음 버전이 없으면 `end: null`, `open_ended: true`. `in_force: true` 결과, `ARTICLE_NOT_FOUND` 오류, `article.in_force_period`(+ `upstream_article_effective_date`), `period.revisions[]` 각 행에 있다. 기존 `valid_from`/`valid_until`은 같은 값의 별칭이며 기간 조회 행에서는 질의 구간 `[as_of, as_of_end]`로 잘린 값이다(`in_force_period`는 잘리지 않은 전체 기간). 조문별 종료일은 계산하지 않는다(버전 단위: 조문이 다음 버전에서 그대로면 실제 문언의 유효 기간은 더 길다).
+
+**`data_warnings` / `announcement_order_inversion` (Unreleased):** 공포 순서와 시행 순서가 뒤집힌 버전(A: 공포가 더 이르지만 시행이 더 늦음, B: 먼저 시행되지만 더 늦게 공포됨)은 업스트림이 A의 본문에 B의 개정을 반영하지 못하는 경우가 있다(실측: 민법 MST 60400의 제1019조 제3항 누락(B=58429), MST 79107의 제836조의2·제839조의3 누락과 제837조·제837조의2·제909조·가사소송법 제2조 구문언 복귀(B=81988). 원 법령의 `eflaw` 본문 자체가 그렇다: MST 79107 전문에 `제836조의2(이혼의 절차)`가 없음). LexLink 선택 로직(시행일 기준)의 버그가 아니며 본문은 고치지 않는다. 대신 `announcement_order_inversion`(B 정보, 없으면 `null`)을 항상 싣고, `article` 지정 시 B 버전의 같은 조문(및 문언이 다르면 다음 버전)과 비교해 `data_warnings[]`에 `SUSPECT_SNAPSHOT_ARTICLE_MISSING`(B에는 있으나 A에 없음: 오류 응답에도 실림, 이웃 버전 모두 있을 때는 `ARTICLE_MISSING_BUT_PRESENT_IN_NEIGHBOURS`), `SUSPECT_SNAPSHOT_PARAGRAPHS_DROPPED`(항 수 감소), `SUSPECT_SNAPSHOT_WORDING_FLIP`(A는 B와 다르고 다음 버전은 B와 같음)를 적는다. 문언이 B와 같으면 경고하지 않는다. 조문 미지정 시에는 `ANNOUNCEMENT_ORDER_INVERSION`(severity `notice`)만. 기간 조회(`as_of_end`)에서는 연속 버전 a, b, c에서 a와 c가 같고 b만 다르면 `..._BETWEEN_IDENTICAL_VERSIONS`(추가 호출 없음). 추가 업스트림 호출: 역전이 있을 때 +1~2회, 조문 없음 오류 때 최대 +3회.
+
+**기간 조회 상한 (Unreleased):** `article` 지정 시 호출당 개정본 최대 20개(개정본마다 1회 호출). 넘으면 `period.truncated`, `remaining_revisions`, `next_cursor`(마지막 반환 시행일)가 오고, 같은 인자에 `period_after=<next_cursor>`를 주면 이어서 반환한다(`article_changed_within_period`는 `article_changed_scope: "returned_revisions_only"`; 페이지 경계의 이웃 비교는 하지 않는다). `article`이 없으면 상한이 없다(추가 호출 없음).
 
 오류는 `status: error` + `error_code` (VALIDATION_ERROR, ARTICLE_NOT_FOUND, 업스트림 코드). 업스트림 실패는 "없음"으로 보고하지 않는다.
 동일 명칭의 구법(다른 법령ID)은 법령구분이 같고 (법률/대통령령/헌법이거나 소관부처가 같을 때)에만 대체한다.
