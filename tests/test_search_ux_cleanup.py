@@ -84,7 +84,7 @@ def _prec_rows(n):
 @pytest.mark.unit
 def test_prec_search_raw_content_is_only_requested_rows(monkeypatch):
     body = json.dumps({"PrecSearch": {"totalCnt": "100", "page": "1", "prec": _prec_rows(100)}}, ensure_ascii=False)
-    out = _tool(monkeypatch, "prec_search", body)(query="손해배상", display=5)
+    out = _tool(monkeypatch, "prec_search", body)(query="손해배상", display=5, search=1)
     raw_rows = json.loads(out["raw_content"])["PrecSearch"]["prec"]
     assert len(raw_rows) == 5 == len(out["ranked_data"]["prec"])
     # no fields lost: raw rows are the upstream rows (still carrying id)
@@ -192,7 +192,7 @@ def test_prec_search_xml_raw_content_trimmed(monkeypatch):
         f'<prec id="{i + 1}"><사건명>손해배상 {i}</사건명><판례일련번호>{1000 + i}</판례일련번호></prec>'
         for i in range(100))
     body = f'<?xml version="1.0" encoding="UTF-8"?><PrecSearch><totalCnt>100</totalCnt>{rows}</PrecSearch>'
-    out = _tool(monkeypatch, "prec_search", body)(query="손해배상", display=3, type="XML")
+    out = _tool(monkeypatch, "prec_search", body)(query="손해배상", display=3, type="XML", search=1)
     assert out["raw_content"].count("<prec ") == 3
     assert len(out["raw_content"]) < 2000
     assert "<판례일련번호>" in out["raw_content"]
