@@ -49,23 +49,20 @@ QUOTE_MAX = 400
 
 _KINDS = (
     # two/three-letter kinds first so they win over their prefixes (민상.. are 단기 연호 era kinds)
-    "민재항고|형재항고|행재항고|민재항|민상|민재|민항|형상|형비상|행상|민공|형공|민질|형질|민신|민특|민비|형비|행항|형항|행재|형재|"
+    "민재항고|형재항고|행재항고|민재항|특별항고|민특별|민상|민재|민항|형상|형비상|행상|민공|형공|민질|형질|민신|민특|민비|형비|행항|형항|행재|형재|"
     "재다|재누|재두|재도|재나|재가|재므|재스|재마|재초|초기|초재|초보|헌가|헌나|헌다|헌마|헌바|헌사|헌아|"
     "감도|감노|전도|전노|다카|다단|가합|가단|가소|나단|구합|구단|고합|고단|고정|고약|드합|드단|느합|느단|"
     "카합|카단|카기|카담|카확|카불|카정|"
     "가|나|다|라|마|바|사|아|자|차|카|타|파|하|거|너|더|러|머|버|서|어|저|고|노|도|로|모|보|소|오|조|초|코|토|포|호|"
     "구|누|두|루|무|부|수|우|주|추|쿠|투|푸|후|그|느|드|르|므|브|스|으|즈|츠|크|트|프|흐"
-    # last resort for kinds not listed above ("4290민재항고58" must parse, not raise): any 2-6 Hangul run
-    # glued between the year and the number; tried only after every listed kind failed to complete a match
-    "|(?![일월년])[가-힣]{2,6}"
 )
-_AFTER_CASE = "판결|판례|결정|판|결|등|호|은|는|을|를|의|과|와|및|도|에|이"
+_AFTER_CASE = "판결|판례|결정|판|결|등|은|는|을|를|의|과|와|및|도|에|이"
 # year (2 or 4 digits) + kind + number, no spaces; optional ", 1720" style joined numbers
 CASE_RE = re.compile(
     # one space is tolerated between a multi-letter kind and the number ("4294민상 1350", as printed in 판례내용);
     # "93누21255판결" (no space before 판결) still counts
     rf"(?<!\d)(\d{{4}}|\d{{2}})({_KINDS})(?:(?<=[가-힣]{{2}}) )?(\d{{1,6}})(?!\d)(?!(?!{_AFTER_CASE})[가-힣])"
-    r"((?:\s*[,，、·ㆍ]\s*\d{1,6}(?![\d가-힣.]))*)"
+    rf"((?:\s*[,，、·ㆍ]\s*\d{{1,6}}(?!\d)(?!\.)(?!(?!{_AFTER_CASE})[가-힣]))*)"
 )
 _NUM_RE = re.compile(r"\d{1,6}")
 
@@ -136,10 +133,19 @@ def format_case_no(key: CaseKey, original: Optional[str] = None) -> str:
     return format_case_key(key)
 
 
+_TARGET_FALLBACK_RE = re.compile(r"(?<![\d가-힣])(\d{4}|\d{2})([가-힣]{2,6})(\d{1,6})(?![\d가-힣])")
+_NOT_A_KIND_RE = re.compile(r"조|원|시간|음|법|년|월|일|분|건|명|회|^항$|^호$|^관$|^목$|^개$|^번$")
+
+
 def parse_target(case_number: str) -> tuple[CaseKey, list[CaseKey]]:
     """Primary case key and joined co-numbers from free text like
     '94므1713', '94므1713, 1720', '대법원 1995. 5. 23. 선고 94므1713 판결'."""
     keys = parse_case_numbers(case_number or "")
+    if not keys:
+        # a kind that is not in the whitelist ("4290민별항고7"): accepted for the typed target only, glued form,
+        # never for prose scanning; statute/unit words are rejected ("제92조의6", "2000만원1000")
+        keys = [(norm_year(m.group(1)), m.group(2), int(m.group(3))) for m in _TARGET_FALLBACK_RE.finditer(case_number or "")
+                if not _NOT_A_KIND_RE.search(m.group(2))][:1]
     if not keys:
         raise ValueError(
             f"사건번호를 해석할 수 없습니다: {case_number!r} (예: '94므1713', '2013므2250', '2018다248909')")
@@ -167,10 +173,14 @@ _ENTRY_RE = re.compile(
 # ": 본결정으로 변경" (marker after the cited case, no brackets)
 _MARKER_RE = re.compile(
     r"[(\[【]\s*(?:[^()\[\]【】]{0,60}?[,，]\s*)?(?P<p>일부\s*)?(?P<m>변경|폐기)\s*(?:[,，][^()\[\]【】]{0,60})?[)\]】]"
-    r"|(?P<q>본\s*(?:판결|결정)(?:에\s*의하여|으로))\s*(?P<m2>변경|폐기)(?!된)")
+    r"|(?P<q>본\s*(?:판결|결정)(?:에\s*의하여|으로))\s*(?P<m2>변경|폐기)(?!된|하지|되지|할\s*수|할\s*것|할\s*필요)")
 # heading form: the entries after "변경된 판례" / "[본판결에 의하여 변경된 판결]" are the changed ones
+# Only a real heading counts: bracketed, or a line of its own (the field's <br/> are kept as newlines for this).
 _HEADING_RE = re.compile(
-    r"[\[【]?\s*(?:본\s*(?:판결|결정)에\s*의하여\s*)?변경된\s*(?:판례|판결|결정)\s*[\]】]?")
+    r"[\[【]\s*(?:본\s*(?:판결|결정)에\s*의하여\s*)?변경된\s*(?:판례|판결|결정)\s*[\]】]"
+    r"|(?m:^[ \t]*변경된[ \t]*(?:판례|판결|결정)[ \t]*$)")
+_LIST_BREAK_RE = re.compile(r"/|[\[【]")        # section separator, [2] group marker or any other heading
+_ENTRY_START_RE = re.compile(r"\s*(?:(?:대법원|헌법재판소|[가-힣]{2,10}(?:지방법원|고등법원|법원|지원))\s*)?\d{4}\.\s*\d{1,2}\.")
 _SENT_END_RE = re.compile(r"다\.(?=\s|$)")
 # explicit wording: measured on 180 en banc decisions, 135 of 137 case-naming sentences that match it sit
 # next to a (변경) marker for the same case (the 2 others look like genuine omissions of the marker)
@@ -273,21 +283,47 @@ def _quote(text: str, s: int, e: int, hit: Optional[tuple[int, int]] = None) -> 
 
 
 def _heading_start(ref: str, pos: int) -> int:
-    """Start of the nearest "변경된 판례" heading before ``pos`` whose list still runs over ``pos`` (-1 if none).
+    """Start of the "변경된 판례" heading whose list runs over ``pos`` (-1 if none).
 
-    The list ends at the next " / " section separator or the end of the field."""
-    start = -1
+    The entries must follow the heading directly; the list ends at any "/", any "[...]" group marker or other
+    heading, so nothing after a separator is ever swept in."""
+    start, end = -1, -1
     for m in _HEADING_RE.finditer(ref, 0, pos):
-        start = m.start()
-    if start < 0:
+        start, end = m.start(), m.end()
+    if start < 0 or not _ENTRY_START_RE.match(ref, end):
         return -1
-    if re.search(r"\s/\s", ref[start:pos]):
+    if _LIST_BREAK_RE.search(ref, end, pos):
         return -1
     return start
 
 
 def _in_changed_heading(ref: str, pos: int) -> bool:
     return _heading_start(ref, pos) >= 0
+
+
+def _paren_view_ok(text: str, sent_start: int, hs: int, close: int, view: "re.Match") -> bool:
+    """The case must sit inside the parenthesis (the one that says 참조) that ``close`` ends, and the sentence must be
+    the court's own, not quoted lower-court text ("'… 참조), 이러한 견해는 폐기한다'는 원심의 판단")."""
+    depth, opener = 0, -1
+    for i in range(close, sent_start - 1, -1):
+        c = text[i]
+        if c == ")":
+            depth += 1
+        elif c == "(":
+            depth -= 1
+            if depth == 0:
+                opener = i
+                break
+    if opener < 0 or opener > hs or "참조" not in text[opener:close]:
+        return False
+    before = text[sent_start:hs]
+    if before.count("'") % 2 or before.count('"') % 2 or before.count("‘") > before.count("’") \
+            or before.count("“") > before.count("”"):
+        return False
+    return not _QUOTED_VIEW_TAIL_RE.match(text, view.end(), min(len(text), view.end() + 30))
+
+
+_QUOTED_VIEW_TAIL_RE = re.compile(r"\s*[’”'\"]?\s*(?:는|라는|라고|고|며)\s*(?:원심|제1심|항소심|판단|판시|주장|취지|논지|상고)")
 
 
 def find_evidence(fields: dict, key: CaseKey) -> dict:
@@ -302,7 +338,11 @@ def find_evidence(fields: dict, key: CaseKey) -> dict:
     soft: list[dict] = []
     seen: set = set()
 
-    ref = clean(fields.get("참조판례"))
+    raw_ref = fields.get("참조판례")
+    # <br/> kept as newlines so a heading on a line of its own can be told from prose; quotes show spaces
+    ref = clean(raw_ref) if not isinstance(raw_ref, str) else "\n".join(
+        re.sub(r"[ \t\r\f\v]+", " ", ln).strip() for ln in re.sub(r"<br\s*/?>|</?p\s*/?>", "\n", raw_ref, flags=re.I).split("\n")
+        if ln.strip())
     for hs, he in case_mentions(ref, key):
         for es, ee in reference_entries(ref):
             if es <= hs < ee:
@@ -313,7 +353,7 @@ def find_evidence(fields: dict, key: CaseKey) -> dict:
                 other = CASE_RE.search(after)
                 limit = other.start() if other else len(after)
                 mk = _MARKER_RE.search(after[:limit])
-                item = {"field": "참조판례", "quote": entry.strip().rstrip(",").strip()}
+                item = {"field": "참조판례", "quote": re.sub(r"\s+", " ", entry).strip().rstrip(",").strip()}
                 if mk:
                     word = mk.group("m") or mk.group("m2")
                     item["marker"] = mk.group(0) if mk.group("q") else f"({'일부' if mk.group('p') else ''}{word})"
@@ -322,7 +362,7 @@ def find_evidence(fields: dict, key: CaseKey) -> dict:
                     explicit.append({**item, "evidence": "explicit_marker"})
                 elif _in_changed_heading(ref, hs):
                     item["marker"] = "(변경된 판례 목록)"
-                    item["marker_text"] = _HEADING_RE.match(ref, _heading_start(ref, hs)).group(0).strip()
+                    item["marker_text"] = re.sub(r"\s+", " ", _HEADING_RE.match(ref, _heading_start(ref, hs)).group(0)).strip()
                     item["partial"] = False
                     explicit.append({**item, "evidence": "explicit_marker"})
                 else:
@@ -357,6 +397,8 @@ def find_evidence(fields: dict, key: CaseKey) -> dict:
                     break
                 cp = he + pm.end()
                 paren_view = _PAREN_VIEW_RE.match(text, cp, min(len(text), cp + 80))
+                if paren_view and not _paren_view_ok(text, s, hs, he + pm.start(), paren_view):
+                    paren_view = None
                 if paren_view or re.match(r"\s*[.。]", tail[pm.end():pm.end() + 3]):
                     break          # matched, or this parenthesis ends its sentence: never look past it
             if paren_view and not _NEGATED_RE.search(text[he:e]) and role == "majority":

@@ -137,7 +137,6 @@ def test_space_between_kind_and_number_is_tolerated():
     ("88다카33619", (1988, "다카", 33619)),
     ("4291형상7", (4291, "형상", 7)),
     ("4285형재항고3", (4285, "형재항고", 3)),   # SYNTHETIC number
-    ("4290민별항고7", (4290, "민별항고", 7)),   # SYNTHETIC: a kind that is not listed at all: generic fallback
 ])
 def test_old_and_odd_case_numbers_parse(text, key):
     assert ps.parse_case_numbers(text) == [key]
@@ -250,13 +249,114 @@ def test_cases_before_a_heading_are_not_marked(name, key):
         assert cited
 
 
+X = "대법원 2003. 1. 1. 선고 2003다1234 판결"
+OTHER = "대법원 1999. 1. 1. 선고 99다1 판결"
+
+
+def explicit_for(ref):
+    return ps.find_evidence({"참조판례": ref}, (2003, "다", 1234))["explicit"]
+
+
+def test_heading_list_positive_forms_still_work():
+    # SYNTHETIC wording, real shapes: bracketed heading, and a heading on a line of its own (<br/>)
+    assert explicit_for(f"[변경된 판례] {X}")
+    assert explicit_for(f"{OTHER}<br/>변경된 판결<br/>{X}")
+    assert explicit_for(f"{OTHER}<br/>【변경된 판례】<br/>{X}")
+
+
+@pytest.mark.parametrize("ref", [
+    # SYNTHETIC negatives: the entry X is NOT in the changed list
+    f"변경된 판례 {OTHER} /[2]{X}",
+    f"변경된 판례 {OTHER} /{X}",
+    f"[변경된 판례] {OTHER} [2] {X}",
+    f"[변경된 판례] {OTHER} [참조판례] {X}",
+    f"[변경된 판례] {OTHER} [변경되지 아니한 판례] {X}",
+    f"대법원 1990. 1. 1. 선고 89다7 판결(공2004, 1, 변경) 이후 변경된 판결에 관하여 {X}",
+    f"[변경된 판례] {OTHER} / {X}",
+    f"{OTHER}<br/>변경된 판결<br/>{OTHER} / {X}",
+    # the heading must be followed directly by entries
+    f"[변경된 판례] 아래 판결은 해당하지 않는다. {X}",
+])
+def test_heading_scope_stops_at_separators_and_headings(ref):
+    assert explicit_for(ref) == []
+
+
 def test_heading_list_stops_at_a_section_separator():
     # SYNTHETIC
-    ref = ("[1] 대법원 1990. 1. 1. 선고 89다1 판결 / 변경된 판결 대법원 1980. 1. 1. 선고 79다2 판결 "
+    ref = ("[1] 대법원 1990. 1. 1. 선고 89다1 판결 / [변경된 판례] 대법원 1980. 1. 1. 선고 79다2 판결 "
            "/ [2] 대법원 1991. 1. 1. 선고 90다3 판결")
     assert ps.find_evidence({"참조판례": ref}, (1979, "다", 2))["explicit"]
     assert ps.find_evidence({"참조판례": ref}, (1990, "다", 3))["explicit"] == []
     assert ps.find_evidence({"참조판례": ref}, (1989, "다", 1))["explicit"] == []
+
+
+# ---- kinds: no generic Hangul-run in prose -------------------------------------------------------
+
+@pytest.mark.parametrize("text", [
+    # SYNTHETIC prose that once produced garbage keys
+    "구 법인세법 제92조의6", "제92조의6", "2000만원 1000", "12시간 22", "2010다음3", "2020일부터30 이내", "2024민법 1",
+])
+def test_prose_numbers_are_not_case_keys(text):
+    assert ps.parse_case_numbers(text) == []
+    with pytest.raises(ValueError):
+        ps.parse_target(text)
+
+
+def test_unlisted_kind_parses_only_for_the_typed_target():
+    assert ps.parse_target("4290민별항고7")[0] == (4290, "민별항고", 7)      # SYNTHETIC kind
+    assert ps.parse_case_numbers("4290민별항고7") == []                       # never in prose scanning
+
+
+def test_statute_numbers_do_not_break_declarations():
+    s1 = "대법원 2003. 1. 1. 선고 2003다1234 판결, 제92조의6 등은 모두 변경하기로 한다."
+    assert len(ps.find_evidence({"판례내용": s1}, (2003, "다", 1234))["explicit"]) == 1
+    s2 = "구 법인세법 제92조의6 및 종전의 대법원 판결의 견해는 이 판결로써 변경한다."
+    assert len(ps.find_evidence({"판례내용": s2}, (2003, "다", 1234))["generic_change"]) == 1
+
+
+def test_number_followed_by_unit_word_is_not_a_case_and_joined_numbers_keep_all():
+    assert ps.parse_case_numbers("2003다1234호증") == []
+    assert ps.parse_case_numbers("2003다1234, 5678판결") == [(2003, "다", 1234), (2003, "다", 5678)]
+
+
+def test_marker_window_is_not_cut_short_by_statute_numbers():
+    # SYNTHETIC: a statute reference between the case and its marker
+    ref = "대법원 2003. 1. 1. 선고 2003다1234 판결(제92조의6 관련, 변경)"
+    assert explicit_for(ref)
+
+
+@pytest.mark.parametrize("tail,found", [
+    ("변경하지 않음", False), ("변경하지 아니한다", False), ("변경할 수 없음", False), ("변경", True),
+])
+def test_book_marker_negation(tail, found):
+    # SYNTHETIC
+    assert bool(explicit_for(f"{X} 본 판결에 의하여 {tail}")) is found
+
+
+@pytest.mark.parametrize("text", [
+    # SYNTHETIC (a) quoted lower-court text
+    "원심은 '당원은 종전에 달리 판시한 일이 있으나(2003. 1. 1. 선고 2003다1234 판결 참조), 이러한 견해는 폐기한다'는 취지로 판단하였다.",
+    "당원은 종전에 달리 판시한 일이 있으나(2003. 1. 1. 선고 2003다1234 판결 참조), 이러한 견해는 폐기한다는 원심의 판단은 잘못이다.",
+    "원심은 \"당원은 종전에 달리 판시한 일이 있으나(2003. 1. 1. 선고 2003다1234 판결 참조), 이러한 견해는 폐기한다.\" 라고 설시하였다.",
+    "원심은 '당원은 종전에 달리 판시한 일이 있으나(2003. 1. 1. 선고 2003다1234 판결 참조), 이러한 견해는 폐기한다.' 라고 설시하였다.",
+    # (b) the case sits outside the parenthesis
+    "2003다1234 판결이 있으나(다른 사건 참조), 이러한 견해는 폐기한다.",
+])
+def test_parenthesis_pattern_negatives(text):
+    assert ps.find_evidence({"판례내용": text}, (2003, "다", 1234))["explicit"] == []
+
+
+def test_parenthesis_pattern_does_not_fire_when_the_case_is_outside_the_parenthesis():
+    # the plain same-sentence wording (case named, then 폐기한다) is the older explicit_sentence rule, not the
+    # parenthesis pattern: no "pattern" key
+    t = "대법원 2003. 1. 1. 선고 2003다1234 판결(공2003상, 1), 이러한 견해는 폐기한다."
+    assert all("pattern" not in e for e in ps.find_evidence({"판례내용": t}, (2003, "다", 1234))["explicit"])
+
+
+def test_parenthesis_pattern_positive_with_nested_parenthesis():
+    t = "당원은 종전에 달리 판시한 일이 있으나(2003. 1. 1. 선고 2003다1234 판결(공2003상, 1) 각 참조), 이러한 견해는 폐기한다."
+    assert [e["pattern"] for e in ps.find_evidence({"판례내용": t}, (2003, "다", 1234))["explicit"]] == [
+        "cited_in_parenthesis_then_view_changed"]
 
 
 def test_marker_belongs_to_its_own_entry_in_info_list_form():
