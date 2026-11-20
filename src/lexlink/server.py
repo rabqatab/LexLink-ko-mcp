@@ -1746,8 +1746,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         unrelated rows). The result has `query_routed_to_nb: true`. Mixed text ("63다131 손해배상"), a quoted
         phrase ('"63다131"', full-text citation search) and an explicit `search=2`/`3` are not routed.
 
-        Duplicates: the upstream lists some judgments more than once under different 판례일련번호 (same 사건번호,
-        선고일자, 법원명; body differs by whitespace). `ranked_data` keeps one row per judgment with
+        Same-case rows: the upstream lists some rows more than once under different 판례일련번호 (same 사건번호,
+        선고일자, 법원명; they may be copies from different sources whose content differs). `ranked_data` keeps one row per group with
         `same_case_ids` (the other ids); `duplicate_groups` lists every group; `raw_content` (when present)
         keeps every upstream row. The rows are not guaranteed to have the same text: they can come from different
         sources (대법원 vs 지방세법령정보시스템) with different 판시사항/판결유형/사건종류. The kept row prefers the
@@ -1866,8 +1866,10 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                                  "(사건명 검색은 번호로 무관한 행을 돌려줍니다). 본문에 이 번호가 인용된 판결을 찾으려면 "
                                  "query='\"사건번호\"', search=2를 쓰세요")
             if constitutional_hint:
+                scope_txt = ("본문 검색(search=2, 기본값)" if search_defaulted else
+                             f"search={search}({'사건명' if search == 1 else '지정한 검색범위'}) 검색")
                 guards.add_notes(response, "헌법재판소 사건번호(헌가/헌바/헌마 등)는 법원 판례 색인(prec)에 없습니다. "
-                                 "detc_search(nb 또는 query)로 헌재 결정례를 조회하세요. 이 호출은 본문 검색(search=2)으로 처리되었습니다")
+                                 f"detc_search(nb 또는 query)로 헌재 결정례를 조회하세요. 이 호출은 {scope_txt}으로 처리되었고 nb로 바꾸지 않았습니다")
             if routed_nb and not _ranked_prec_count(response):
                 response["hints"] = [
                     "사건번호로 조회한 결과가 0건입니다: 법제처 판례 DB에 수록되지 않은 판결이거나 결합사건의 두 번째 번호일 수 있습니다",

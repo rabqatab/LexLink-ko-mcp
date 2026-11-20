@@ -303,3 +303,13 @@ def test_case_type_scope_present_with_zero_rows():
     resp = {"status": "ok", "ranked_data": {}}
     prec_extras.apply_case_type_filter(resp, ("가사", "400103", None))
     assert resp["case_type_filter"]["rows_before_filter"] == 0 and resp["case_type_filter"]["scope"]
+
+
+@pytest.mark.unit
+def test_constitutional_note_follows_applied_search(tool):
+    default = tool("prec_search", query="2013헌바1")
+    assert any("search=2" in n and "기본값" in n for n in default["notes"])
+    get_cache().invalidate()
+    explicit = tool("prec_search", query="2013헌바1", search=1)
+    note = next(n for n in explicit["notes"] if "detc_search" in n)
+    assert "search=1" in note and "search=2" not in note
