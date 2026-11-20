@@ -136,7 +136,7 @@ TOOL_POLICIES: dict[str, dict] = {
     "ls_rlt_search": _p("knowledge", "primary", "normal", 1, "측정 4~49KB(3개 질의), 질의에 따라 더 클 수 있음"),
     "lstrm_search": _p("knowledge", "primary", "normal", 1),
     "lstrm_service": _p("knowledge", "primary", "normal", 1),
-    "law_as_of": _p("law_history", "primary", "normal", 5, "조문 지정 4~5회(법령ID 지정 시 4). 대형 법령은 이력 페이지 추가로 최대 7회(건축법 6, 소득세법 7). 공포일 역전 버전(앞서 시행되나 늦게 공포된 개정본이 있는 경우)에서 조문 지정 시 +1~2회, 조문 없음 오류 때 이웃 버전 확인 +최대 3회(data_warnings). 기간 모드는 조문 지정 시 호출당 개정본 최대 20개(개정본당 1회, 초과분은 period_after로 이어받기), 조문 미지정 기간은 추가 호출 없음. 측정: 20개 페이지 약 19회. 부칙 확인용 전체 법령 조회 약 1MB"),
+    "law_as_of": _p("law_history", "primary", "normal", 5, "조문 지정 4~5회(대형 법령은 이력 페이지로 최대 7회). 공포일 역전 버전이면 조문 지정 시 +1~2회, 조문 없음 오류 시 이웃 확인 +최대 3회. 기간 모드: 조문 지정 시 호출당 개정본 20개(개정본당 1회, 약 20~26회, period_after로 이어받기), 미지정은 100행 단위 추가 호출 없음. 부칙 확인용 전체 법령 조회 약 1MB"),
     "law_amendment_summary": _p("law_history", "primary", "normal", 2, "통상 2회, 대형 법령은 이력 페이지 추가로 2~4회"),
     "article_amendment_diff": _p("law_history", "primary", "normal", 2, "두 버전 조문은 원문, 비교(diff)는 LexLink 계산 필드"),
     "oldAndNew_search": _p("law_history", "primary", "normal", 1),

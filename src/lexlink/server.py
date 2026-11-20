@@ -3766,10 +3766,11 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
     from .as_of import (
         normalize_as_of, build_candidates, select_as_of, describe, day_before, is_repeal,
         is_deleted_article, bupchik_units, scan_bupchik, expired_unknown,
-        announcement_inversion, assess_snapshot, flip_back_rows,
+        announcement_inversion, assess_snapshot, flip_back_rows, lacks_later_amendment,
     )
     from .article_text import parse_law_payload
-    PERIOD_MAX = 20  # law_as_of period mode with an article: max revisions fetched per call (1 upstream call each)
+    PERIOD_MAX = 20  # law_as_of period mode with an article: max revisions per call (1 upstream call each)
+    PERIOD_ROWS_MAX = 100  # header-only period mode: max rows per call (no per-row upstream call)
     from .validation import format_article_number
 
     def _internal_format(response_type: str) -> str:
@@ -5608,6 +5609,9 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         cursor = normalize_as_of(period_after) if period_after not in (None, "") else None
         if cursor and not end:
             raise ValueError("period_after requires as_of_end (it continues a period query).")
+        if cursor and not (d <= cursor <= end):
+            raise ValueError(f"period_after ({cursor}) must lie within as_of ({d}) .. as_of_end ({end}). "
+                             "It is a 시행일 date (the last one of the previous page's period.next_cursor).")
         name = (law_name or "").strip()
         if not name:
             raise ToolValidationError("law_name (법령명 또는 법령ID) is required.")
@@ -5747,9 +5751,11 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
 
         def _snapshot_warning(kind: str, v: dict, prev: Optional[dict]) -> dict:
             label = {"ARTICLE_MISSING": "조문이 없습니다",
+                     "DELETED_PLACEHOLDER": "'삭제' 자리표시만 있고 이웃 버전에는 더 늦게 개정된 본문이 있습니다",
                      "PARAGRAPHS_DROPPED": "항 수가 줄었습니다",
                      "REVERTS_TO_EARLIER_WORDING": "앞선 버전의 문언으로 되돌아갔습니다"}[kind]
             w = {"code": "SUSPECT_SNAPSHOT_" + {"ARTICLE_MISSING": "ARTICLE_MISSING",
+                                                 "DELETED_PLACEHOLDER": "DELETED_PLACEHOLDER",
                                                  "PARAGRAPHS_DROPPED": "PARAGRAPHS_DROPPED",
                                                  "REVERTS_TO_EARLIER_WORDING": "WORDING_FLIP"}[kind],
                  "mst": v["mst"], "effective_date": v["effective_date"], "announced_date": v["announced_date"],
@@ -5791,11 +5797,14 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             total_revs = len(revs)
             if cursor:
                 revs = [c for c in revs if c["effective_date"] > cursor]
-            # Only the article fetch costs an upstream call per revision; a header-only period is unbounded.
-            truncated = bool(wanted) and len(revs) > PERIOD_MAX
-            remaining = len(revs) - PERIOD_MAX if truncated else 0
+            # With an article every revision costs one upstream call (20 per call); a header-only period
+            # costs none but is still paged (100 rows) to bound the response size.
+            cap = PERIOD_MAX if wanted else PERIOD_ROWS_MAX
+            skipped = total_revs - len(revs)
+            truncated = len(revs) > cap
+            remaining = len(revs) - cap if truncated else 0
             if truncated:
-                revs = revs[:PERIOD_MAX]
+                revs = revs[:cap]
             rows_out = []
             texts: list = []
             any_fail = False
@@ -5808,11 +5817,13 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 entry = {"version": describe(c), "valid_from": max(c["effective_date"], d),
                          "valid_until": min(until, end) if until else end}
                 # in_force_period: the full run of this version (not clipped to [as_of, as_of_end])
-                entry["in_force_period"] = _in_force_period(c["effective_date"], until)
+                entry["in_force_period"] = (None if is_repeal(c["row"])
+                                            else _in_force_period(c["effective_date"], until))
                 if announcement_inversion(cands, c) is not None:
                     entry["announcement_order_inversion"] = True
                 if is_repeal(c["row"]):
                     entry["repealed"] = True
+                    entry["not_in_force_from"] = c["effective_date"]   # 폐지: no in-force period
                 elif wanted:
                     try:
                         a, fail = fetch(c)
@@ -5841,22 +5852,47 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 if not any_fail and not any(e.get("repealed") for e in rows_out):
                     for i, kind in flip_back_rows(texts):
                         v, before, after = (rows_out[j]["version"] for j in (i, i - 1, i + 1))
+                        inv_flags = [bool(rows_out[j].get("announcement_order_inversion")) for j in (i - 1, i, i + 1)]
                         w = _snapshot_warning(kind, v, before)
-                        w["code"] += "_BETWEEN_IDENTICAL_VERSIONS"
                         w["identical_before_and_after_mst"] = [before["mst"], after["mst"]]
-                        w["version_announced_out_of_order"] = bool(rows_out[i].get("announcement_order_inversion"))
-                        w["message"] = (f"MST {v['mst']}(시행 {v['effective_date']}) 본문만 앞 버전 MST {before['mst']}과 뒤 버전 "
-                                        f"MST {after['mst']}(둘은 서로 같음)과 달라, 업스트림 본문이 중간 개정을 반영하지 못한 "
-                                        "스냅샷일 수 있습니다(본문은 업스트림 그대로, 앞/뒤 중 어느 쪽이 맞는지는 판단하지 않았습니다).")
+                        if inv_flags[1]:
+                            # a stale snapshot is the version promulgated out of order: blame this row, when its
+                            # text lacks an amendment tag that a neighbour carries
+                            if not (lacks_later_amendment(texts[i], texts[i - 1])
+                                    or lacks_later_amendment(texts[i], texts[i + 1])):
+                                continue
+                            w["code"] += "_BETWEEN_IDENTICAL_VERSIONS"
+                            w["version_announced_out_of_order"] = True
+                            w["message"] = (f"MST {v['mst']}(시행 {v['effective_date']}, 공포 {v['announced_date']})는 먼저 시행된 "
+                                            "개정본보다 일찍 공포된 버전이고, 본문이 앞 버전 MST "
+                                            f"{before['mst']}과 뒤 버전 MST {after['mst']}(둘은 서로 같음)에 있는 더 늦은 개정 표시를 "
+                                            "담고 있지 않아, 업스트림 본문이 중간 개정을 반영하지 못한 스냅샷일 수 있습니다"
+                                            "(본문은 업스트림 그대로).")
+                        elif not any(inv_flags):
+                            # nothing says which side is wrong: report the pattern only
+                            w["code"] = "ARTICLE_PATTERN_DIFFERS_BETWEEN_IDENTICAL_VERSIONS"
+                            w["severity"] = "notice"
+                            w["version_announced_out_of_order"] = False
+                            w["message"] = (f"MST {v['mst']}(시행 {v['effective_date']})의 조문만 앞 버전 MST {before['mst']}과 뒤 버전 "
+                                            f"MST {after['mst']}(둘은 서로 같음)과 다릅니다. 어느 쪽이 맞는지는 판단하지 않았습니다"
+                                            "(공포 순서 역전 없음).")
+                        else:
+                            continue  # an out-of-order neighbour is the suspect; it is reported by its own pattern
                         data_warnings.append(w)
+            if truncated or cursor:
+                # total = the whole period, whatever page this is; revision_count = this page;
+                # skipped_by_cursor = rows before period_after; remaining = rows after this page
+                block["total_revisions_in_period"] = total_revs
+                block["skipped_by_cursor"] = skipped
+                block["remaining_revisions"] = remaining
             if truncated:
                 block["truncated"] = True
-                block["total_revisions_in_period"] = total_revs
-                block["remaining_revisions"] = remaining
                 block["next_cursor"] = revs[-1]["effective_date"]
                 caveats.append(
-                    f"기간 내 개정본 {total_revs}개 중 이번 호출에서 {len(revs)}개만 조회했습니다(개정본마다 업스트림 호출 1회). "
-                    f"나머지 {remaining}개는 period_after={block['next_cursor']}로 이어서 조회하세요.")
+                    f"기간 내 개정본 {total_revs}개 중 이번 호출에서 {len(revs)}개를 반환했습니다"
+                    + (f"(조문 지정 시 개정본마다 업스트림 호출 1회, 호출당 최대 {PERIOD_MAX}개)" if wanted else
+                       f"(호출당 최대 {PERIOD_ROWS_MAX}개)")
+                    + f". 나머지 {remaining}개는 period_after={block['next_cursor']}로 이어서 조회하세요.")
             return block
 
         if sel["outcome"] == "before_first_version":
@@ -5867,6 +5903,10 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 "in_force": False,
                 "reason": "BEFORE_FIRST_ENFORCEMENT" if truly_new else "BEFORE_EARLIEST_AVAILABLE_VERSION",
                 "first_version": describe(first),
+                "in_force_period": None,
+                "not_in_force_period": {"start": None, "end": day_before(first["effective_date"]),
+                                        "reason": "BEFORE_FIRST_ENFORCEMENT" if truly_new
+                                        else "BEFORE_EARLIEST_AVAILABLE_VERSION"},
                 "statement": (
                     f"{law_label}: 기준일 {d}에 시행 전이었습니다. 최초 시행일은 {first['effective_date']}입니다."
                     if truly_new else
@@ -5891,6 +5931,10 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 "repealed_on": eff,
                 "repealing_version": version,
                 "last_version_before_repeal": describe(sel["previous"]),
+                "in_force_period": None,
+                "not_in_force_period": {"start": eff,
+                                        "end": day_before(sel["next"]["effective_date"]) if sel["next"] else None,
+                                        "reason": "AFTER_REPEAL"},
                 "statement": f"{law_label}: {eff}자로 폐지되어 기준일 {d}에는 시행 중이 아니었습니다 "
                              f"(폐지 MST {mst}, {version['revision_type']}).",
             })
@@ -5904,6 +5948,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 "in_force": None,
                 "reason": "NOT_CURRENT_UPSTREAM",
                 "last_version": version,
+                "in_force_period": None,
+                "in_force_period_unknown_from": eff,
                 "statement": (
                     f"{law_label}: 기준일 {d}: 업스트림이 가진 마지막 버전(MST {mst}, 시행일 {eff}) 이후입니다. "
                     "이 법령은 업스트림에서 현행·시행예정으로 표시된 버전이 없어(한시법 종료·실효 등 가능) "
@@ -5998,7 +6044,11 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                             continue
                         try:
                             nb_art, nb_fail = fetch(nb)
-                            present[tag] = nb_fail is None and nb_art is not None
+                            present[tag] = (nb_art is not None) if nb_fail is None else None  # failed fetch = unknown
+                            if tag == "announced_later" and present[tag]:
+                                # an absent article is only suspect when the later-promulgated version carries an
+                                # amendment tag the chosen (absent) text cannot have
+                                present[tag] = lacks_later_amendment(None, nb_art["text"])
                         except ArticleNotFoundError:
                             present[tag] = False
                         except Exception:
@@ -6009,6 +6059,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                                      else "ARTICLE_MISSING_BUT_PRESENT_IN_NEIGHBOURS"),
                             "mst": mst, "effective_date": eff, "announced_date": version["announced_date"],
                             "present_in": sorted(k for k, v_ in present.items() if v_),
+                            "unknown_in": sorted(k for k, v_ in present.items() if v_ is None),
                             "message": (f"{label}는 이 버전(MST {mst})에는 없지만 앞뒤 버전"
                                         + (f" 및 이 버전보다 늦게 공포된 MST {inv['mst']}" if inv is not None else "")
                                         + "에는 있습니다. 업스트림 본문이 중간 개정을 반영하지 못한 스냅샷일 수 있습니다"
@@ -6062,6 +6113,18 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                         kind = assess_snapshot(art["text"], p_art["text"], n_text)
                         if kind:
                             data_warnings.append(_snapshot_warning(kind, version, describe(inv)))
+                        elif (re.sub(r"\s+", "", art["text"]) != re.sub(r"\s+", "", p_art["text"])
+                              and (is_deleted_article(art["text"])
+                                   or (art["title"] and p_art["title"] and art["title"] != p_art["title"]))):
+                            # no amendment-tag evidence either way (e.g. a renumbering): report the difference only
+                            data_warnings.append({
+                                "code": "ARTICLE_DIFFERS_FROM_INVERTED_VERSION", "severity": "notice",
+                                "mst": mst, "effective_date": eff, "announced_date": version["announced_date"],
+                                "compared_with_mst": inv["mst"],
+                                "message": (f"이 버전(MST {mst}, 공포 {version['announced_date']})은 먼저 시행되지만 더 늦게 공포된 "
+                                            f"MST {inv['mst']}(시행 {inv['effective_date']})와 {label}의 제목 또는 삭제 여부가 "
+                                            "다릅니다. 개정 표시로는 어느 쪽이 맞는지 판단할 수 없습니다(조문 재배열·삭제일 수 있음). "
+                                            "관보·법제처 연혁으로 확인하세요.")})
                 if is_deleted_article(art["text"]):
                     out["article"]["deleted"] = True
                     out["article_deleted"] = True
@@ -6204,7 +6267,9 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 else:
                     parts.append(f"MST {v['mst']}(시행 {v['effective_date']})")
             stmt += (f" 기간 {d}~{end} 동안 시행된 개정본 {per.get('total_revisions_in_period', per['revision_count'])}개"
-                     + (f"(처음 {per['revision_count']}개만 조회, 나머지 생략)" if per.get("truncated") else "")
+                     + (f"(이번 호출에서 {per['revision_count']}개 반환, 나머지 {per['remaining_revisions']}개는 "
+                        f"period_after={per['next_cursor']}로 이어서 조회)" if per.get("truncated") else
+                        f"(period_after 이후 {per['revision_count']}개)" if per.get("continued_after") else "")
                      + (": " + "; ".join(parts) + "." if parts else "."))
         out["statement"] = stmt
         if slim and omitted:

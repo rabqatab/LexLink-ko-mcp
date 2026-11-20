@@ -9,7 +9,7 @@ import pytest
 
 import lexlink.server as server_mod
 from lexlink.as_of import (announcement_inversion, assess_snapshot, build_candidates,
-                           flip_back_rows, paragraph_count)
+                           flip_back_rows, latest_tag_date, paragraph_count)
 import test_law_as_of as base
 from test_law_as_of import FakeClient, _row, as_of  # noqa: F401  (as_of fixture)
 
@@ -55,11 +55,24 @@ SYN = [
     _row("009300", "합성지연법", "901", "20100101", "20091201", "1", "제정", "연혁"),
     _row("009300", "합성지연법", "902", "20110101", "20100601", "2", "일부개정", "연혁"),
     _row("009300", "합성지연법", "903", "20110701", "20100501", "3", "일부개정", "현행"),
+    # 합성변동법: no inversion, wording A, B, A
+    _row("009600", "합성변동법", "961", "20100101", "20091201", "1", "제정", "연혁"),
+    _row("009600", "합성변동법", "962", "20110101", "20101201", "2", "일부개정", "연혁"),
+    _row("009600", "합성변동법", "963", "20120101", "20111201", "3", "일부개정", "현행"),
+    # 합성정당삭제법: 953 (공포 earlier, 시행 later) legitimately removes 항 ③ with its own later tag
+    _row("009500", "합성정당삭제법", "951", "20100101", "20091201", "1", "제정", "연혁"),
+    _row("009500", "합성정당삭제법", "952", "20110101", "20100601", "2", "일부개정", "연혁"),
+    _row("009500", "합성정당삭제법", "953", "20110701", "20100501", "3", "일부개정", "현행"),
+    # 합성기간정당법: inverted middle row whose own later tag explains its difference
+    _row("009800", "합성기간정당법", "981", "20100101", "20100601", "1", "제정", "연혁"),
+    _row("009800", "합성기간정당법", "982", "20110101", "20100501", "2", "일부개정", "연혁"),
+    _row("009800", "합성기간정당법", "983", "20120101", "20111201", "3", "일부개정", "현행"),
 ] + [  # 합성다량법: 25 revisions
     _row("009400", "합성다량법", str(1000 + i), f"{2000 + i}0101", f"{1999 + i}1201", str(i + 1), "일부개정",
          "현행" if i == 24 else "연혁") for i in range(25)
 ]
-OLDW, NEWW = "제1조(목적) 이 법은 구문언을 따른다.", "제1조(목적) 이 법은 신문언을 따른다."
+OLDW = "제1조(목적) 이 법은 구문언을 따른다. <개정 2009.12.1>"   # SYNTHETIC wording + amendment tags
+NEWW = "제1조(목적) 이 법은 신문언을 따른다. <개정 2010.6.1>"
 BODIES = {
     ("58429", "20020114"): {"제1019조": A1019_P},
     ("60400", "20020701"): {"제1019조": A1019_STALE},
@@ -71,6 +84,14 @@ BODIES = {
     ("801", "20100101"): {"제1조": OLDW}, ("802", "20110101"): {"제1조": NEWW}, ("803", "20120101"): {"제1조": NEWW},
     ("901", "20100101"): {"제1조": OLDW}, ("902", "20110101"): {"제1조": NEWW}, ("903", "20110701"): {"제1조": NEWW},
 }
+BODIES.update({("981", "20100101"): {"제1조": "제1조 본문 <개정 2009.12.1>"},
+               ("982", "20110101"): {"제1조": "제1조 본문 변경 <개정 2010.5.1>"},
+               ("983", "20120101"): {"제1조": "제1조 본문 <개정 2009.12.1>"}})
+DEL3 = "제1조(목적) ①가 ②나 ③다 <개정 2009.12.1>"
+DEL2 = "제1조(목적) ①가 ②나 <삭제 2010.5.1>"
+BODIES.update({("961", "20100101"): {"제1조": OLDW}, ("962", "20110101"): {"제1조": NEWW}, ("963", "20120101"): {"제1조": OLDW},
+               ("951", "20100101"): {"제1조": DEL3}, ("952", "20110101"): {"제1조": DEL3}, ("953", "20110701"): {"제1조": DEL2},
+               ("67272", "20050331"): {"제1019조": A1019_P}})
 BODIES.update({(str(1000 + i), f"{2000 + i}0101"): {"제1조": f"제1조 {2000 + i}년 문언"} for i in range(25)})
 
 
@@ -181,6 +202,94 @@ def test_period_after_needs_as_of_end(w):
 
 
 # ---- pure helpers
+def test_period_blames_only_the_out_of_order_version(w):
+    # VERBATIM 민법: 58429 (correct, has ③), 60400 (stale), 67272 (has ③ again) -> only 60400
+    ws = w(law_name="민법", as_of="20020101", as_of_end="20050630", article=1019)["data_warnings"]
+    assert [(x["code"], x["mst"]) for x in ws] == [("SUSPECT_SNAPSHOT_PARAGRAPHS_DROPPED_BETWEEN_IDENTICAL_VERSIONS", "60400")]
+    # SYNTHETIC 합성역전법: 701 old, 702 new, 703 old (inverted), 704 new -> only 703
+    ws = w(law_name="합성역전법", as_of="20100101", as_of_end="20121231", article=1)["data_warnings"]
+    assert [x["mst"] for x in ws] == ["703"] and ws[0]["version_announced_out_of_order"] is True
+
+
+def test_period_inverted_row_explained_by_own_tag_does_not_warn(w):
+    ws = w(law_name="합성기간정당법", as_of="20100101", as_of_end="20121231", article=1)["data_warnings"]
+    assert ws == []
+
+
+def test_period_pattern_without_inversion_is_a_neutral_notice(w):
+    ws = w(law_name="합성변동법", as_of="20100101", as_of_end="20121231", article=1)["data_warnings"]
+    assert [(x["code"], x["severity"], x["mst"]) for x in ws] == [
+        ("ARTICLE_PATTERN_DIFFERS_BETWEEN_IDENTICAL_VERSIONS", "notice", "962")]
+    assert ws[0]["version_announced_out_of_order"] is False and "stale" not in ws[0]["message"]
+
+
+def test_legitimate_delayed_amendment_does_not_warn(w):
+    out = w(law_name="합성정당삭제법", as_of="20110801", article=1)
+    assert out["version"]["mst"] == "953" and out["announcement_order_inversion"] is not None
+    assert out["data_warnings"] == []
+    # unit level: own tag explains the drop; deletion placeholder explained by its tag; untagged = no evidence
+    assert assess_snapshot("제5조 ①가 ②나 <삭제 2010.5.1>", "제5조 ①가 ②나 ③다 <개정 2009.12.1>") is None
+    assert assess_snapshot("제5조 ①가 ②나", "제5조 ①가 ②나 ③다") is None
+    assert assess_snapshot("제5조 삭제 <2020.1.1>", "제5조 ①가 <개정 2019.5.1>") is None
+    assert assess_snapshot("제5조 삭제 <2020.1.1>", "제5조 ①가 <개정 2021.5.1>") == "DELETED_PLACEHOLDER"
+    assert assess_snapshot(None, "제5조 ①가 <개정 2019.5.1>") == "ARTICLE_MISSING"
+    assert latest_tag_date("<개정 1990ㆍ1ㆍ13> <신설 2002.1.14>") == "20020114"
+    assert latest_tag_date("제1조 2020.1.1 본문") is None
+
+
+def test_repeal_and_gap_paths_have_no_in_force_period(w):
+    p = w(law_name="폐지법", as_of="20000101", as_of_end="20060101")["period"]
+    rep = [r for r in p["revisions"] if r.get("repealed")][0]
+    assert rep["in_force_period"] is None and rep["not_in_force_from"] == "20050301"
+    out = w(law_name="폐지법", as_of="20060101")
+    assert out["in_force_period"] is None
+    assert out["not_in_force_period"] == {"start": "20050301", "end": None, "reason": "AFTER_REPEAL"}
+    out = w(law_name="폐지법", as_of="19990101")
+    assert out["in_force_period"] is None and out["not_in_force_period"]["end"] == "19991231"
+    assert out["not_in_force_period"]["reason"].startswith("BEFORE_")
+
+
+def test_period_after_range_and_header_paging(w, monkeypatch):
+    for bad in ("19990101", "20300101"):
+        out = w(law_name="합성다량법", as_of="20000101", as_of_end="20250101", article=1, period_after=bad)
+        assert out["error_code"] == "VALIDATION_ERROR", bad
+    rows = [_row("009700", "합성백오법", str(2000 + i), f"{1901 + i}0101", f"{1900 + i}0601", str(i + 1), "일부개정",
+                 "현행" if i == 104 else "연혁") for i in range(105)]          # SYNTHETIC, 105 versions
+    monkeypatch.setattr(base, "ROWS", base.ROWS + rows)
+    first = w(law_name="합성백오법", as_of="19010101", as_of_end="20201231")
+    p = first["period"]
+    assert p["truncated"] is True and p["revision_count"] == 100 and p["total_revisions_in_period"] == 105
+    assert p["remaining_revisions"] == 5 and p["skipped_by_cursor"] == 0 and "개 반환" in first["statement"]
+    second = w(law_name="합성백오법", as_of="19010101", as_of_end="20201231", period_after=p["next_cursor"])["period"]
+    assert second["revision_count"] == 5 and second["remaining_revisions"] == 0 and second["skipped_by_cursor"] == 100
+    assert second["total_revisions_in_period"] == 105 and "truncated" not in second
+
+
+def test_empty_announcement_date_is_unknown_not_earliest():
+    rows = [_row("1", "x", "1", "20100101", "", "1", "제정", "연혁"), _row("1", "x", "2", "20110101", "20100101", "2", "일부개정", "현행")]
+    c = build_candidates(rows)
+    assert announcement_inversion(c, c[0]) is None and announcement_inversion(c, c[1]) is None
+    rows[0]["공포일자"], rows[1]["공포일자"] = "20100301", ""
+    c = build_candidates(rows)
+    assert announcement_inversion(c, c[1]) is None
+
+
+def test_failed_neighbour_fetch_is_unknown_not_absent(w):
+    orig = FakeClient.get
+    def flaky(self, endpoint, params, response_type="JSON"):
+        if endpoint == "/DRF/lawService.do" and params.get("MST") == "93194" and params.get("JO"):
+            return {"status": "error", "error_code": "UPSTREAM_ERROR", "message": "x", "request_id": "f"}
+        return orig(self, endpoint, params, response_type)
+    FakeClient.get = flaky
+    try:
+        out = w(law_name="민법", as_of="20080201", article=836, article_branch=2)
+    finally:
+        FakeClient.get = orig
+    ww = out["data_warnings"][0]
+    assert ww["unknown_in"] == ["next"] and "next" not in ww["present_in"]    # failed fetch: unknown, not absent
+    assert set(ww["present_in"]) == {"previous", "announced_later"}
+
+
 def test_pure_helpers_and_mutation_guards():
     c = build_candidates(CIVIL)
     by = {x["mst"]: x for x in c}
@@ -188,7 +297,7 @@ def test_pure_helpers_and_mutation_guards():
     assert announcement_inversion(c, by["58429"]) is None
     assert announcement_inversion(c, by["93194"]) is None            # 공포 2009 is after every earlier one
     assert paragraph_count(A1019_P) == 3 and paragraph_count(A1019_STALE) == 2
-    assert assess_snapshot(A1019_STALE, A1019_P) == "PARAGRAPHS_DROPPED"
+    assert assess_snapshot(A1019_STALE, A1019_P) == "PARAGRAPHS_DROPPED"   # P carries <신설 2002.1.14>, A lacks it
     assert assess_snapshot(None, A1019_P) == "ARTICLE_MISSING"
     assert assess_snapshot(OLDW, NEWW, NEWW) == "REVERTS_TO_EARLIER_WORDING"
     assert assess_snapshot(OLDW, NEWW, None) is None                 # no next version known: no verdict
@@ -196,3 +305,12 @@ def test_pure_helpers_and_mutation_guards():
     assert flip_back_rows([OLDW, NEWW, OLDW]) == [(1, "REVERTS_TO_EARLIER_WORDING")]
     assert flip_back_rows([OLDW, None, OLDW]) == [(1, "ARTICLE_MISSING")]
     assert flip_back_rows([OLDW, NEWW, NEWW]) == [] and flip_back_rows([OLDW, NEWW]) == []
+
+
+def test_untagged_difference_is_a_neutral_notice(w, monkeypatch):
+    # SYNTHETIC: 953 serves a 삭제 placeholder where the inverted 952 has an (untagged) article; the title
+    # branch is the same code path but the fake upstream carries no 조문제목
+    monkeypatch.setitem(base.BODIES, ("953", "20110701"), {"제1조": "제1조 삭제 <2010.5.1>"})
+    monkeypatch.setitem(base.BODIES, ("952", "20110101"), {"제1조": "제1조(목적) 본문"})
+    out = w(law_name="합성정당삭제법", as_of="20110801", article=1)
+    assert [(x["code"], x["severity"]) for x in out["data_warnings"]] == [("ARTICLE_DIFFERS_FROM_INVERTED_VERSION", "notice")]
