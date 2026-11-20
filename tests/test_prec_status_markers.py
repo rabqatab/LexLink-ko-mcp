@@ -390,3 +390,44 @@ def test_case_in_an_earlier_supporting_parenthesis_is_not_tied_to_a_later_discar
     assert ps.find_evidence(b, (1979, "다", 1741))["explicit"] == []
     assert ps.find_evidence(b, (1979, "다", 1741))["cited"]
     assert ps.find_evidence(b, (1981, "다카", 545))["explicit"]
+
+
+# ---- round 3: more 사건부호 kinds, 호, whole-word kind rejection, partial sentences -------------------
+
+@pytest.mark.parametrize("kind", ["즈기", "즈단", "즈합", "하단", "하합", "하면", "하기", "재가합", "재가단", "재가소",
+                                  "가기", "가담", "가확", "가불", "회합", "회단", "회확", "개회", "헌라", "재고합", "재구단"])
+def test_more_case_kinds_parse_in_prose_and_as_target(kind):
+    text = f"대법원 2019. 1. 1. 선고 2018{kind}123 판결"
+    assert ps.parse_case_numbers(text) == [(2018, kind, 123)]
+    assert ps.parse_target(f"2018{kind}123")[0] == (2018, kind, 123)
+
+
+def test_longer_kind_wins_over_its_prefix():
+    # 재가합 is not "재가" + garbage, 즈합 is not "즈"
+    assert ps.parse_case_numbers("2018재가합5") == [(2018, "재가합", 5)]
+    assert ps.parse_case_numbers("2018즈합5") == [(2018, "즈합", 5)]
+
+
+def test_ho_is_a_follow_character_only_at_a_word_end():
+    assert ps.parse_case_numbers("2003다1234호") == [(2003, "다", 1234)]
+    assert ps.parse_case_numbers("2003다1234호 사건") == [(2003, "다", 1234)]
+    assert ps.parse_case_numbers("2003다1234호증") == []          # 호증: an exhibit, not a case
+
+
+def test_kind_rejection_is_whole_word_only():
+    # SYNTHETIC unlisted kinds: ones that merely contain 법/원/음/조 are fine, the bare words are not
+    assert ps.parse_target("4290민조사7")[0] == (4290, "민조사", 7)
+    assert ps.parse_target("4290법원사7")[0] == (4290, "법원사", 7)
+    for bad in ("2000만원1000", "2010다음3", "제92조의6", "2024민법1"):
+        with pytest.raises(ValueError):
+            ps.parse_target(bad)
+
+
+@pytest.mark.parametrize("lead,partial", [
+    ("이 부분은 ", True), ("일부 ", True), ("이 부분에 한하여 ", True), ("", False), ("이를 ", False),
+])
+def test_partial_wording_in_sentence(lead, partial):
+    # SYNTHETIC
+    t = f"이와 달리 판시한 대법원 2003. 1. 1. 선고 2003다1234 판결의 {lead}폐기하기로 한다."
+    ev = ps.find_evidence({"판례내용": t}, (2003, "다", 1234))["explicit"]
+    assert [(e["evidence"], e["partial"]) for e in ev] == [("explicit_sentence", partial)]

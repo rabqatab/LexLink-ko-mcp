@@ -49,6 +49,9 @@ QUOTE_MAX = 400
 
 _KINDS = (
     # two/three-letter kinds first so they win over their prefixes (민상.. are 단기 연호 era kinds)
+    # kinds from the 대법원 사건부호 예규 (longer ones before their prefixes: 재가합 before 재가, 즈합 before 즈)
+    "재가합|재가단|재가소|재고합|재고단|재고정|재고약|재감도|재구합|재구단|"
+    "즈기|즈단|즈합|하단|하합|하면|하기|가기|가담|가확|가불|회합|회단|회확|회기|개회|헌라|초사|"
     "민재항고|형재항고|행재항고|민재항|특별항고|민특별|민상|민재|민항|형상|형비상|행상|민공|형공|민질|형질|민신|민특|민비|형비|행항|형항|행재|형재|"
     "재다|재누|재두|재도|재나|재가|재므|재스|재마|재초|초기|초재|초보|헌가|헌나|헌다|헌마|헌바|헌사|헌아|"
     "감도|감노|전도|전노|다카|다단|가합|가단|가소|나단|구합|구단|고합|고단|고정|고약|드합|드단|느합|느단|"
@@ -56,7 +59,7 @@ _KINDS = (
     "가|나|다|라|마|바|사|아|자|차|카|타|파|하|거|너|더|러|머|버|서|어|저|고|노|도|로|모|보|소|오|조|초|코|토|포|호|"
     "구|누|두|루|무|부|수|우|주|추|쿠|투|푸|후|그|느|드|르|므|브|스|으|즈|츠|크|트|프|흐"
 )
-_AFTER_CASE = "판결|판례|결정|판|결|등|은|는|을|를|의|과|와|및|도|에|이"
+_AFTER_CASE = "판결|판례|결정|판|결|등|호(?![가-힣])|은|는|을|를|의|과|와|및|도|에|이"
 # year (2 or 4 digits) + kind + number, no spaces; optional ", 1720" style joined numbers
 CASE_RE = re.compile(
     # one space is tolerated between a multi-letter kind and the number ("4294민상 1350", as printed in 판례내용);
@@ -134,7 +137,9 @@ def format_case_no(key: CaseKey, original: Optional[str] = None) -> str:
 
 
 _TARGET_FALLBACK_RE = re.compile(r"(?<![\d가-힣])(\d{4}|\d{2})([가-힣]{2,6})(\d{1,6})(?![\d가-힣])")
-_NOT_A_KIND_RE = re.compile(r"조|원|시간|음|법|년|월|일|분|건|명|회|^항$|^호$|^관$|^목$|^개$|^번$")
+# whole-word match: a real kind that merely contains 법/원/음/조 is not rejected
+_NOT_A_KIND_RE = re.compile(
+    r"조|조의|항|호|호증|관|목|개|번|차|기|부|종|점|원|만원|시간|음|다음|법|민법|형법|상법|세법|년|월|일|분|건|명|회|가지|일부터|부터|까지|이내|이후|이전|이상|이하")
 
 
 def parse_target(case_number: str) -> tuple[CaseKey, list[CaseKey]]:
@@ -145,7 +150,7 @@ def parse_target(case_number: str) -> tuple[CaseKey, list[CaseKey]]:
         # a kind that is not in the whitelist ("4290민별항고7"): accepted for the typed target only, glued form,
         # never for prose scanning; statute/unit words are rejected ("제92조의6", "2000만원1000")
         keys = [(norm_year(m.group(1)), m.group(2), int(m.group(3))) for m in _TARGET_FALLBACK_RE.finditer(case_number or "")
-                if not _NOT_A_KIND_RE.search(m.group(2))][:1]
+                if not _NOT_A_KIND_RE.fullmatch(m.group(2))][:1]
     if not keys:
         raise ValueError(
             f"사건번호를 해석할 수 없습니다: {case_number!r} (예: '94므1713', '2013므2250', '2018다248909')")
@@ -248,6 +253,8 @@ def change_ties_to_case(text: str, hs: int, he: int, change_start: int) -> bool:
 _PAREN_VIEW_RE = re.compile(
     r"\s*[,，]?\s*(?:이러한|이와\s*같은|위와\s*같은|그러한)\s*(?:견해|입장|판단|법리|해석|판시)(?:는|은|를|을)?\s*(?:이로써\s*)?"
     r"(?:변경|폐기)\s*(?:하기로\s*한다|한다)")
+# "… 판결 중 이 부분은 폐기하기로 한다" / "일부 변경한다": only part of the decision is changed
+_PARTIAL_BEFORE_RE = re.compile(r"(?:(?:이|그|위)\s*부분(?:은|에\s*한(?:하여|해))?|일부(?:를|는|은)?)\s*(?:이를\s*)?$")
 _NEGATED_RE = re.compile(r"(변경|폐기)\s*(?:할\s*필요가?\s*없|하지\s*(?:아니|않)|할\s*수\s*없|할\s*이유가?\s*없|(?:하고\s*있는|한|하는)\s*것(?:이|은)\s*아니)")
 _GENERIC_RE = re.compile(r"(?:대법원|판결|판례|견해|결정|선례|법리)")
 
@@ -411,7 +418,8 @@ def find_evidence(fields: dict, key: CaseKey) -> dict:
                 q = _quote(text, s, e, (hs, he))
                 if (field, s) not in seen:
                     seen.add((field, s))
-                    explicit.append({"field": field, "quote": q, "evidence": "explicit_sentence"})
+                    explicit.append({"field": field, "quote": q, "evidence": "explicit_sentence",
+                                     "partial": bool(_PARTIAL_BEFORE_RE.search(text[max(he, change_after.start() - 25):change_after.start()]))})
             elif soft_after and not supportive and not _NEGATED_RE.search(sent) and role == "majority":
                 soft.append({"field": field, "quote": _quote(text, s, e, (hs, he))})
             else:
