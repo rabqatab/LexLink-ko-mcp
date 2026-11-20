@@ -9,7 +9,7 @@ import pytest
 
 import lexlink.server as server_mod
 from lexlink.as_of import (announcement_inversion, assess_snapshot, build_candidates,
-                           flip_back_rows, latest_tag_date, paragraph_count)
+                           flip_back_rows, latest_tag_date, paragraph_count, same_text)
 import test_law_as_of as base
 from test_law_as_of import FakeClient, _row, as_of  # noqa: F401  (as_of fixture)
 
@@ -67,6 +67,19 @@ SYN = [
     _row("009800", "합성기간정당법", "981", "20100101", "20100601", "1", "제정", "연혁"),
     _row("009800", "합성기간정당법", "982", "20110101", "20100501", "2", "일부개정", "연혁"),
     _row("009800", "합성기간정당법", "983", "20120101", "20111201", "3", "일부개정", "현행"),
+    # 합성삭제법: 제2조 legitimately removed by 1003 (공포 before 1002, 시행 after); 1004 has it again
+    _row("010000", "합성삭제법", "1001", "20100101", "20091201", "1", "제정", "연혁"),
+    _row("010000", "합성삭제법", "1002", "20110101", "20100601", "2", "일부개정", "연혁"),
+    _row("010000", "합성삭제법", "1003", "20110701", "20100501", "3", "일부개정", "연혁"),
+    _row("010000", "합성삭제법", "1004", "20120101", "20111201", "4", "일부개정", "현행"),
+    _row("010100", "합성삭제2법", "1011", "20100101", "20091201", "1", "제정", "연혁"),
+    _row("010100", "합성삭제2법", "1012", "20110101", "20100601", "2", "일부개정", "연혁"),
+    _row("010100", "합성삭제2법", "1013", "20110701", "20100501", "3", "일부개정", "연혁"),
+    _row("010100", "합성삭제2법", "1014", "20120101", "20111201", "4", "일부개정", "현행"),
+    # 합성삭제3법: no inversion; 제2조 present before and after, absent in the middle version
+    _row("010200", "합성삭제3법", "1021", "20100101", "20091201", "1", "제정", "연혁"),
+    _row("010200", "합성삭제3법", "1022", "20110101", "20100601", "2", "일부개정", "연혁"),
+    _row("010200", "합성삭제3법", "1023", "20120101", "20111201", "3", "일부개정", "현행"),
 ] + [  # 합성다량법: 25 revisions
     _row("009400", "합성다량법", str(1000 + i), f"{2000 + i}0101", f"{1999 + i}1201", str(i + 1), "일부개정",
          "현행" if i == 24 else "연혁") for i in range(25)
@@ -87,6 +100,13 @@ BODIES = {
 BODIES.update({("981", "20100101"): {"제1조": "제1조 본문 <개정 2009.12.1>"},
                ("982", "20110101"): {"제1조": "제1조 본문 변경 <개정 2010.5.1>"},
                ("983", "20120101"): {"제1조": "제1조 본문 <개정 2009.12.1>"}})
+ART2 = "제2조(정의) 본문 <개정 2009.12.1>"
+BODIES.update({("1001", "20100101"): {"제2조": ART2}, ("1002", "20110101"): {"제2조": ART2}, ("1004", "20120101"): {"제2조": ART2},
+               ("1021", "20100101"): {"제2조": ART2}, ("1023", "20120101"): {"제2조": ART2},
+               ("1011", "20100101"): {"제2조": ART2}, ("1012", "20110101"): {"제2조": ART2},
+               # VERBATIM pair (민법 제912조, MST 58429 / 60400): the same 삭제 date in two separator spellings
+               ("58429", "20020114"): {"제1019조": A1019_P, "제912조": "제912조 삭제 <1990ㆍ1ㆍ13>"},
+               ("60400", "20020701"): {"제1019조": A1019_STALE, "제912조": "제912조 삭제 <1990.1.13>"}})
 DEL3 = "제1조(목적) ①가 ②나 ③다 <개정 2009.12.1>"
 DEL2 = "제1조(목적) ①가 ②나 <삭제 2010.5.1>"
 BODIES.update({("961", "20100101"): {"제1조": OLDW}, ("962", "20110101"): {"제1조": NEWW}, ("963", "20120101"): {"제1조": OLDW},
@@ -211,6 +231,33 @@ def test_period_blames_only_the_out_of_order_version(w):
     assert [x["mst"] for x in ws] == ["703"] and ws[0]["version_announced_out_of_order"] is True
 
 
+def test_same_deleted_placeholder_in_two_date_spellings_is_silent(w):
+    out = w(law_name="민법", as_of="20030101", article=912)
+    assert out["version"]["mst"] == "60400" and out["announcement_order_inversion"] is not None
+    assert out["data_warnings"] == []
+    assert same_text("제912조 삭제 <1990.1.13>", "제912조 삭제 <1990ㆍ1ㆍ13>")
+    assert same_text("제1조 〈개정 2010. 6. 1〉", "제1조 <개정 2010.6.1>")
+    assert latest_tag_date("제1조 〈개정 2010.6.1〉") == "20100601"
+
+
+def test_missing_article_suspect_only_with_inverted_version_and_next(w):
+    # SYNTHETIC: 1003 lacks 제2조, the inverted 1002 and the next 1004 have it -> suspect (no tag needed: new articles have none)
+    out = w(law_name="합성삭제법", as_of="20110801", article=2)
+    assert out["status"] == "error" and out["error_code"] == "ARTICLE_NOT_FOUND"
+    assert codes(out) == ["SUSPECT_SNAPSHOT_ARTICLE_MISSING"]
+    assert out["data_warnings"][0]["present_in"] == ["announced_later", "next", "previous"]
+    # SYNTHETIC legitimate removal: the next version lacks it too -> nothing to say
+    assert w(law_name="합성삭제2법", as_of="20110801", article=2)["data_warnings"] == []
+    # SYNTHETIC no inversion, present before and after: neutral notice, no stale claim
+    n = w(law_name="합성삭제3법", as_of="20110801", article=2)["data_warnings"]
+    assert [(x["code"], x["severity"]) for x in n] == [("ARTICLE_MISSING_BUT_PRESENT_IN_NEIGHBOURS", "notice")]
+    assert "스냅샷" not in n[0]["message"] and n[0]["present_in"] == ["next", "previous"]
+    # VERBATIM 민법 제836조의2 (the real body carries no tag): message and present_in agree
+    real = w(law_name="민법", as_of="20080201", article=836, article_branch=2)["data_warnings"][0]
+    assert real["code"] == "SUSPECT_SNAPSHOT_ARTICLE_MISSING" and "늦게 공포된 MST 81988" in real["message"]
+    assert "announced_later" in real["present_in"]
+
+
 def test_period_inverted_row_explained_by_own_tag_does_not_warn(w):
     ws = w(law_name="합성기간정당법", as_of="20100101", as_of_end="20121231", article=1)["data_warnings"]
     assert ws == []
@@ -286,7 +333,7 @@ def test_failed_neighbour_fetch_is_unknown_not_absent(w):
     finally:
         FakeClient.get = orig
     ww = out["data_warnings"][0]
-    assert ww["unknown_in"] == ["next"] and "next" not in ww["present_in"]    # failed fetch: unknown, not absent
+    assert ww["code"] == "ARTICLE_MISSING_BUT_PRESENT_IN_NEIGHBOURS" and ww["unknown_in"] == ["next"] and "next" not in ww["present_in"]    # failed fetch: unknown, not absent
     assert set(ww["present_in"]) == {"previous", "announced_later"}
 
 

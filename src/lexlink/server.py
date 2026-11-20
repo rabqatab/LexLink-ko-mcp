@@ -3767,6 +3767,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         normalize_as_of, build_candidates, select_as_of, describe, day_before, is_repeal,
         is_deleted_article, bupchik_units, scan_bupchik, expired_unknown,
         announcement_inversion, assess_snapshot, flip_back_rows, lacks_later_amendment,
+        same_text, latest_tag_date,
     )
     from .article_text import parse_law_payload
     PERIOD_MAX = 20  # law_as_of period mode with an article: max revisions per call (1 upstream call each)
@@ -6045,25 +6046,32 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                         try:
                             nb_art, nb_fail = fetch(nb)
                             present[tag] = (nb_art is not None) if nb_fail is None else None  # failed fetch = unknown
-                            if tag == "announced_later" and present[tag]:
-                                # an absent article is only suspect when the later-promulgated version carries an
-                                # amendment tag the chosen (absent) text cannot have
-                                present[tag] = lacks_later_amendment(None, nb_art["text"])
                         except ArticleNotFoundError:
                             present[tag] = False
                         except Exception:
                             present[tag] = None
-                    if present.get("announced_later") or (present.get("previous") and present.get("next")):
+                    base_w = {"mst": mst, "effective_date": eff, "announced_date": version["announced_date"],
+                              "present_in": sorted(k for k, v_ in present.items() if v_),
+                              "unknown_in": sorted(k for k, v_ in present.items() if v_ is None)}
+                    names = {"previous": "앞 버전", "next": "뒤 버전",
+                             "announced_later": f"늦게 공포된 MST {inv['mst'] if inv else ''}"}
+                    where = ", ".join(names[k] for k in base_w["present_in"])
+                    # Rule: a stale snapshot lacks an article that the version promulgated after it (yet in force
+                    # before it) already has, and that the next version has too. A newly created article carries no
+                    # amendment tag, so tags cannot serve as evidence for a missing article.
+                    if present.get("announced_later") and present.get("next"):
                         data_warnings.append({
-                            "code": ("SUSPECT_SNAPSHOT_ARTICLE_MISSING" if inv is not None
-                                     else "ARTICLE_MISSING_BUT_PRESENT_IN_NEIGHBOURS"),
-                            "mst": mst, "effective_date": eff, "announced_date": version["announced_date"],
-                            "present_in": sorted(k for k, v_ in present.items() if v_),
-                            "unknown_in": sorted(k for k, v_ in present.items() if v_ is None),
-                            "message": (f"{label}는 이 버전(MST {mst})에는 없지만 앞뒤 버전"
-                                        + (f" 및 이 버전보다 늦게 공포된 MST {inv['mst']}" if inv is not None else "")
-                                        + "에는 있습니다. 업스트림 본문이 중간 개정을 반영하지 못한 스냅샷일 수 있습니다"
-                                          "(본문은 업스트림 그대로, 조문 없음으로 보고합니다)."),
+                            "code": "SUSPECT_SNAPSHOT_ARTICLE_MISSING", **base_w,
+                            "message": (f"{label}는 이 버전(MST {mst})에는 없지만 {where}에는 있고, 늦게 공포된 MST {inv['mst']}가 "
+                                        "이미 이 조문을 갖고 있고 다음 버전에도 있습니다. 업스트림 본문이 중간 개정을 "
+                                        "반영하지 못한 스냅샷일 수 있습니다(본문은 업스트림 그대로, 조문 없음으로 보고합니다)."),
+                        })
+                    elif (present.get("previous") and present.get("next")) or (
+                            present.get("announced_later") and "next" in present and present["next"] is None):
+                        data_warnings.append({
+                            "code": "ARTICLE_MISSING_BUT_PRESENT_IN_NEIGHBOURS", "severity": "notice", **base_w,
+                            "message": (f"{label}는 이 버전(MST {mst})에는 없지만 {where}에는 있습니다. 개정 표시로는 업스트림 "
+                                        "누락인지 이 버전에서의 일시 삭제인지 판단할 수 없습니다(본문은 업스트림 그대로)."),
                         })
                     return create_error_response(
                         error_code=ErrorCode.ARTICLE_NOT_FOUND,
@@ -6104,7 +6112,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                         p_art, p_fail = None, True
                     if p_fail is None and p_art is not None:
                         n_text = None
-                        if nxt is not None and re.sub(r"\s+", "", art["text"]) != re.sub(r"\s+", "", p_art["text"]):
+                        if nxt is not None and not same_text(art["text"], p_art["text"]):
                             try:
                                 n_art, n_fail = fetch(nxt)
                                 n_text = n_art["text"] if n_fail is None and n_art is not None else None
@@ -6113,7 +6121,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                         kind = assess_snapshot(art["text"], p_art["text"], n_text)
                         if kind:
                             data_warnings.append(_snapshot_warning(kind, version, describe(inv)))
-                        elif (re.sub(r"\s+", "", art["text"]) != re.sub(r"\s+", "", p_art["text"])
+                        elif (not same_text(art["text"], p_art["text"])
+                              and not (is_deleted_article(art["text"]) and is_deleted_article(p_art["text"]))
                               and (is_deleted_article(art["text"])
                                    or (art["title"] and p_art["title"] and art["title"] != p_art["title"]))):
                             # no amendment-tag evidence either way (e.g. a renumbering): report the difference only

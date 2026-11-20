@@ -439,7 +439,14 @@ def announcement_inversion(cands: list[dict], chosen: dict) -> Optional[dict]:
 
 
 def _norm(text: Optional[str]) -> str:
-    return re.sub(r"\s+", "", text or "")
+    """Comparison form: no whitespace, 〈〉 as <>, tag dates as Y.M.D whatever the separator (. ㆍ ·)."""
+    t = (text or "").replace("〈", "<").replace("〉", ">")
+    t = re.sub(r"(\d{4})\s*[.ㆍ·]\s*(\d{1,2})\s*[.ㆍ·]\s*(\d{1,2})", r"\1.\2.\3", t)
+    return re.sub(r"\s+", "", t)
+
+
+def same_text(a: Optional[str], b: Optional[str]) -> bool:
+    return _norm(a) == _norm(b)
 
 
 def paragraph_count(text: Optional[str]) -> int:
@@ -454,7 +461,7 @@ _TAG_DATE_RE = re.compile(r"(\d{4})\s*[.ㆍ·]\s*(\d{1,2})\s*[.ㆍ·]\s*(\d{1,2}
 def latest_tag_date(text: Optional[str]) -> Optional[str]:
     """Latest YYYYMMDD in the text's own amendment tags (<개정 2002.1.14>, <신설 ...>, <삭제 ...>), or None."""
     found = []
-    for tag in _TAG_RE.findall(text or ""):
+    for tag in _TAG_RE.findall((text or "").replace("〈", "<").replace("〉", ">")):
         for y, m, d in _TAG_DATE_RE.findall(tag):
             try:
                 found.append(date(int(y), int(m), int(d)).strftime("%Y%m%d"))
