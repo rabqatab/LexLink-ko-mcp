@@ -8,6 +8,12 @@ All notable changes to LexLink are documented here in both English and Korean.
 
 ### Unreleased
 
+#### `prec_status` misses from experiment 014 (more overrulings found, same call budget)
+- Case numbers: `4290민재항고58` and other kinds not in the kind list now parse (generic fallback: any 2-6 Hangul run between year and number; it was a `VALIDATION_ERROR` before, now `case_not_found` when the index has no such row); one space between a multi-letter kind and the number (`4294민상 1350`) and a number glued to 판결/결정 (`93누21255판결은`) are read as that case.
+- 참조판례 markers: besides `(변경)`/`(폐기)`: `[폐기]`, `(일부폐기)` (confidence `medium`, `partial: true`), `(공1993하, 3120, 변경)` (marker last in an info list), `: 본결정으로 변경`, and the heading form (`【변경된 판례】`, `변경된 판결`, `[본판결에 의하여 변경된 판결]`: the entries after the heading up to the next ` / ` are the changed ones, marker text `(변경된 판례 목록)`); entries listed before the heading stay unmarked. Evidence items now carry `marker_text` and `partial`.
+- Sentences: a list declaration whose case numbers are followed by a closing clause (`… 판결 등을 비롯한 같은 취지의 판결들은 이 판결의 견해에 배치되는 범위 내에서 이를 모두 변경하기로 한다`, `… 판결과 그 밖에 이 판결의 견해와 다른 대법원 판결들은 … 이를 변경하기로 한다`) is tied to every listed case; `(… 81다카545 판결 각 참조), 이러한 견해는 폐기한다` (same sentence, directly after the parenthesis) is `explicit_sentence` with `pattern: cited_in_parenthesis_then_view_changed`, confidence `medium`. A citation in an earlier parenthesis that ends its sentence is never tied to a later one.
+- Measured live: the five misses (71누196, 81다카545, 95도1035, 4294민상1350, 93누21255) are now `overruled_found` (all `explicit_sentence`, `medium`) in 3 upstream calls each; the three #182 pairs and the earlier controls are unchanged. Unchanged limit: a declaration that names no case ("… 판결 등은 … 변경한다") cannot be matched to a case that is not cited by number; no search by legal issue was added (it would need extra upstream calls per candidate and cannot be made precise).
+
 #### Size-aware responses for long texts (default behaviour change)
 - `prec_service`, `detc_service`, `expc_service`, `decc_service`, `law_service`, `eflaw_service` gain `sections="brief"` and the paging parameters `offset` (int >= 0) and `max_chars` (int 1000..24000, default 20000 when paging). `law_service`/`eflaw_service` also gain `sections` (`"brief"`|`"full"`; `"summary"` is a `VALIDATION_ERROR`). All lengths are characters (Unicode code points), not bytes.
 - **Default change:** when `sections` is omitted, a body of **20,000 characters or less** (case law: the body field 판례내용/전문/이유/이유; laws: the rendered article text of all 조문단위, and only when `jo` is not given) is returned whole exactly as before; a **longer** one comes back as the brief view with `truncated: true`, `truncated_fields`, `truncated_note`, `truncated_detail` and the size fields. `sections="full"` without paging returns everything exactly as before (citation verification relies on it). Threshold: `sizing.AUTO_BRIEF_THRESHOLD = 20000` (strictly greater than 20,000 triggers brief).
@@ -706,6 +712,12 @@ All notable changes to LexLink are documented here in both English and Korean.
 ## 한국어 (Korean)
 
 ### 미배포 (Unreleased)
+
+#### 실험 014에서 나온 `prec_status` 누락 보완 (찾는 변경 판결 증가, 호출 수 동일)
+- 사건번호: `4290민재항고58`처럼 종류 목록에 없는 사건 종류도 해석합니다(연도와 번호 사이 한글 2~6자 일반 규칙). 전에는 `VALIDATION_ERROR`였고 이제 색인에 없으면 `case_not_found`입니다. 두 글자 이상 종류와 번호 사이의 공백 한 칸(`4294민상 1350`)과 판결·결정에 붙여 쓴 번호(`93누21255판결은`)도 그 사건으로 읽습니다.
+- 참조판례 표지: `(변경)`/`(폐기)` 외에 `[폐기]`, `(일부폐기)`(신뢰도 `medium`, `partial: true`), `(공1993하, 3120, 변경)`(정보 목록 끝의 표지), `: 본결정으로 변경`, 제목 목록 형식(`【변경된 판례】`, `변경된 판결`, `[본판결에 의하여 변경된 판결]`: 제목 뒤 다음 ` / ` 전까지의 항목이 변경된 판결, 표지 문구 `(변경된 판례 목록)`). 제목 앞에 적힌 항목은 표지가 없는 것으로 봅니다. 근거 항목에 `marker_text`, `partial`이 붙습니다.
+- 문장: 사건번호를 나열한 뒤 맺음절이 오는 선언(`… 판결 등을 비롯한 같은 취지의 판결들은 이 판결의 견해에 배치되는 범위 내에서 이를 모두 변경하기로 한다`, `… 판결과 그 밖에 이 판결의 견해와 다른 대법원 판결들은 … 이를 변경하기로 한다`)은 나열된 모든 사건에 연결합니다. `(… 81다카545 판결 각 참조), 이러한 견해는 폐기한다`(같은 문장, 괄호 바로 뒤)는 `explicit_sentence`(`pattern: cited_in_parenthesis_then_view_changed`, 신뢰도 `medium`)입니다. 문장을 끝내는 앞 괄호의 인용은 뒤 괄호의 선언과 연결하지 않습니다.
+- 실제 호출 측정: 누락 5건(71누196, 81다카545, 95도1035, 4294민상1350, 93누21255)이 각 3회 호출로 `overruled_found`(모두 `explicit_sentence`, `medium`)가 되었고, #182의 3건과 기존 대조군은 그대로입니다. 한계는 그대로입니다: 사건을 지목하지 않는 선언("… 판결 등은 … 변경한다")은 번호로 인용되지 않은 사건과 연결할 수 없습니다. 쟁점별 검색은 추가하지 않았습니다(후보마다 호출이 늘고 정밀도를 보장할 수 없음).
 
 #### 긴 본문의 크기 인식 응답 (기본 동작 변경)
 - `prec_service`, `detc_service`, `expc_service`, `decc_service`, `law_service`, `eflaw_service`에 `sections="brief"`와 쪽 나누기 `offset`(0 이상 정수), `max_chars`(1000~24000, 쪽 나누기 기본 20000)를 추가했다. `law_service`/`eflaw_service`에는 `sections`(`"brief"`|`"full"`, `"summary"`는 `VALIDATION_ERROR`)도 생겼다. 길이 단위는 바이트가 아니라 글자(유니코드 코드포인트)다.
