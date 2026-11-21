@@ -155,7 +155,7 @@ def test_expc_inq_name_rejected_code_sent(tool):
 
 @pytest.mark.unit
 def test_prec_ranking_uses_real_title_field(tool):
-    out = tool("prec_search", query="담보권", display=5)
+    out = tool("prec_search", query="담보권", display=5, search=1)
     titles = [r["사건명"] for r in out["ranked_data"]["prec"]]
     assert titles[0] == "담보권 실행"          # starts-with query ranks first (was a no-op with 판례명)
 

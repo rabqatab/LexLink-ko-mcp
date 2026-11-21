@@ -49,17 +49,23 @@ QUOTE_MAX = 400
 
 _KINDS = (
     # two/three-letter kinds first so they win over their prefixes (민상.. are 단기 연호 era kinds)
-    "민재항|민상|민재|민항|형상|형비상|행상|"
+    # kinds from the 대법원 사건부호 예규 (longer ones before their prefixes: 재가합 before 재가, 즈합 before 즈)
+    "재가합|재가단|재가소|재고합|재고단|재고정|재고약|재감도|재구합|재구단|"
+    "즈기|즈단|즈합|하단|하합|하면|하기|가기|가담|가확|가불|회합|회단|회확|회기|개회|헌라|초사|"
+    "민재항고|형재항고|행재항고|민재항|특별항고|민특별|민상|민재|민항|형상|형비상|행상|민공|형공|민질|형질|민신|민특|민비|형비|행항|형항|행재|형재|"
     "재다|재누|재두|재도|재나|재가|재므|재스|재마|재초|초기|초재|초보|헌가|헌나|헌다|헌마|헌바|헌사|헌아|"
     "감도|감노|전도|전노|다카|다단|가합|가단|가소|나단|구합|구단|고합|고단|고정|고약|드합|드단|느합|느단|"
     "카합|카단|카기|카담|카확|카불|카정|"
     "가|나|다|라|마|바|사|아|자|차|카|타|파|하|거|너|더|러|머|버|서|어|저|고|노|도|로|모|보|소|오|조|초|코|토|포|호|"
     "구|누|두|루|무|부|수|우|주|추|쿠|투|푸|후|그|느|드|르|므|브|스|으|즈|츠|크|트|프|흐"
 )
+_AFTER_CASE = "판결|판례|결정|판|결|등|호(?![가-힣])|은|는|을|를|의|과|와|및|도|에|이"
 # year (2 or 4 digits) + kind + number, no spaces; optional ", 1720" style joined numbers
 CASE_RE = re.compile(
-    rf"(?<!\d)(\d{{4}}|\d{{2}})({_KINDS})(\d{{1,6}})(?![\d가-힣])"
-    r"((?:\s*[,，、·ㆍ]\s*\d{1,6}(?![\d가-힣.]))*)"
+    # one space is tolerated between a multi-letter kind and the number ("4294민상 1350", as printed in 판례내용);
+    # "93누21255판결" (no space before 판결) still counts
+    rf"(?<!\d)(\d{{4}}|\d{{2}})({_KINDS})(?:(?<=[가-힣]{{2}}) )?(\d{{1,6}})(?!\d)(?!(?!{_AFTER_CASE})[가-힣])"
+    rf"((?:\s*[,，、·ㆍ]\s*\d{{1,6}}(?!\d)(?!\.)(?!(?!{_AFTER_CASE})[가-힣]))*)"
 )
 _NUM_RE = re.compile(r"\d{1,6}")
 
@@ -130,10 +136,21 @@ def format_case_no(key: CaseKey, original: Optional[str] = None) -> str:
     return format_case_key(key)
 
 
+_TARGET_FALLBACK_RE = re.compile(r"(?<![\d가-힣])(\d{4}|\d{2})([가-힣]{2,6})(\d{1,6})(?![\d가-힣])")
+# whole-word match: a real kind that merely contains 법/원/음/조 is not rejected
+_NOT_A_KIND_RE = re.compile(
+    r"조|조의|항|호|호증|관|목|개|번|차|기|부|종|점|원|만원|시간|음|다음|법|민법|형법|상법|세법|년|월|일|분|건|명|회|가지|일부터|부터|까지|이내|이후|이전|이상|이하")
+
+
 def parse_target(case_number: str) -> tuple[CaseKey, list[CaseKey]]:
     """Primary case key and joined co-numbers from free text like
     '94므1713', '94므1713, 1720', '대법원 1995. 5. 23. 선고 94므1713 판결'."""
     keys = parse_case_numbers(case_number or "")
+    if not keys:
+        # a kind that is not in the whitelist ("4290민별항고7"): accepted for the typed target only, glued form,
+        # never for prose scanning; statute/unit words are rejected ("제92조의6", "2000만원1000")
+        keys = [(norm_year(m.group(1)), m.group(2), int(m.group(3))) for m in _TARGET_FALLBACK_RE.finditer(case_number or "")
+                if not _NOT_A_KIND_RE.fullmatch(m.group(2))][:1]
     if not keys:
         raise ValueError(
             f"사건번호를 해석할 수 없습니다: {case_number!r} (예: '94므1713', '2013므2250', '2018다248909')")
@@ -156,7 +173,19 @@ def clean(text: Any) -> str:
 
 _ENTRY_RE = re.compile(
     r"(?:대법원|헌법재판소|[가-힣]{2,10}(?:지방법원|고등법원|법원|지원))\s*\d{4}\.\s*\d{1,2}\.\s*\d{1,2}\.")
-_MARKER_RE = re.compile(r"\(\s*(변경|폐기)\s*\)")
+# marker spellings seen in 참조판례 of 전원합의체 decisions: "(변경)", "(폐기)", "[폐기]", "(일부폐기)",
+# "(공1993하, 3120, 변경)" (marker last inside a parenthesised info list), "(변경, 공1993…)",
+# ": 본결정으로 변경" (marker after the cited case, no brackets)
+_MARKER_RE = re.compile(
+    r"[(\[【]\s*(?:[^()\[\]【】]{0,60}?[,，]\s*)?(?P<p>일부\s*)?(?P<m>변경|폐기)\s*(?:[,，][^()\[\]【】]{0,60})?[)\]】]"
+    r"|(?P<q>본\s*(?:판결|결정)(?:에\s*의하여|으로))\s*(?P<m2>변경|폐기)(?!된|하지|되지|할\s*수|할\s*것|할\s*필요)")
+# heading form: the entries after "변경된 판례" / "[본판결에 의하여 변경된 판결]" are the changed ones
+# Only a real heading counts: bracketed, or a line of its own (the field's <br/> are kept as newlines for this).
+_HEADING_RE = re.compile(
+    r"[\[【]\s*(?:본\s*(?:판결|결정)에\s*의하여\s*)?변경된\s*(?:판례|판결|결정)\s*[\]】]"
+    r"|(?m:^[ \t]*변경된[ \t]*(?:판례|판결|결정)[ \t]*$)")
+_LIST_BREAK_RE = re.compile(r"/|[\[【]")        # section separator, [2] group marker or any other heading
+_ENTRY_START_RE = re.compile(r"\s*(?:(?:대법원|헌법재판소|[가-힣]{2,10}(?:지방법원|고등법원|법원|지원))\s*)?\d{4}\.\s*\d{1,2}\.")
 _SENT_END_RE = re.compile(r"다\.(?=\s|$)")
 # explicit wording: measured on 180 en banc decisions, 135 of 137 case-naming sentences that match it sit
 # next to a (변경) marker for the same case (the 2 others look like genuine omissions of the marker)
@@ -197,7 +226,11 @@ def opinion_role(text: str, pos: int) -> str:
 
 _LIST_FILLER_RE = re.compile(
     r"대법원|헌법재판소|\d{4}\.\s*\d{1,2}\.\s*\d{1,2}\.|선고|자|판결|결정|전원합의체|등|및|와|과|또는|각|[,，·ㆍ()\s]"
-    r"|공\d{2,4}[상하]?[,\s\d]*|집\d[\d\-①②]*")
+    r"|공\d{2,4}[상하]?[,\s\d]*|집\d[\d\-①②]*"
+    # the closing clause of a declaration that lists the cases first: "… 판결 등을 비롯한 같은 취지의 판결들은 이 판결의
+    # 견해에 배치되는 범위 내에서 이를 모두 변경하기로 한다", "… 판결과 그 밖에 이 판결의 견해와 다른 대법원 판결들은 모두
+    # 이 판결의 견해에 배치되는 범위 안에서 이를 변경하기로 한다"
+    r"|그\s*밖에|비롯한|같은|취지의|취지|이\s*판결의|이\s*판결|견해와|견해에|견해|다른|판례들|판결들|결정들|배치되는|범위|내에서|안에서|이를|모두|들|을|를|은|는")
 
 
 def change_ties_to_case(text: str, hs: int, he: int, change_start: int) -> bool:
@@ -216,6 +249,12 @@ def change_ties_to_case(text: str, hs: int, he: int, change_start: int) -> bool:
         rest = rest[:m.start()] + " " + rest[m.end():]
     rest = _LIST_FILLER_RE.sub("", rest)
     return rest in ("", "은", "는", "을", "를", "도")      # the subject/object particle of the last case in the list
+# right after the closing parenthesis of a citation list: ", 이러한 견해는 폐기한다" / "위와 같은 견해는 이로써 변경한다"
+_PAREN_VIEW_RE = re.compile(
+    r"\s*[,，]?\s*(?:이러한|이와\s*같은|위와\s*같은|그러한)\s*(?:견해|입장|판단|법리|해석|판시)(?:는|은|를|을)?\s*(?:이로써\s*)?"
+    r"(?:변경|폐기)\s*(?:하기로\s*한다|한다)")
+# "… 판결 중 이 부분은 폐기하기로 한다" / "일부 변경한다": only part of the decision is changed
+_PARTIAL_BEFORE_RE = re.compile(r"(?:(?:이|그|위)\s*부분(?:은|에\s*한(?:하여|해))?|일부(?:를|는|은)?)\s*(?:이를\s*)?$")
 _NEGATED_RE = re.compile(r"(변경|폐기)\s*(?:할\s*필요가?\s*없|하지\s*(?:아니|않)|할\s*수\s*없|할\s*이유가?\s*없|(?:하고\s*있는|한|하는)\s*것(?:이|은)\s*아니)")
 _GENERIC_RE = re.compile(r"(?:대법원|판결|판례|견해|결정|선례|법리)")
 
@@ -250,6 +289,50 @@ def _quote(text: str, s: int, e: int, hit: Optional[tuple[int, int]] = None) -> 
     return seg[:QUOTE_MAX] + "…"
 
 
+def _heading_start(ref: str, pos: int) -> int:
+    """Start of the "변경된 판례" heading whose list runs over ``pos`` (-1 if none).
+
+    The entries must follow the heading directly; the list ends at any "/", any "[...]" group marker or other
+    heading, so nothing after a separator is ever swept in."""
+    start, end = -1, -1
+    for m in _HEADING_RE.finditer(ref, 0, pos):
+        start, end = m.start(), m.end()
+    if start < 0 or not _ENTRY_START_RE.match(ref, end):
+        return -1
+    if _LIST_BREAK_RE.search(ref, end, pos):
+        return -1
+    return start
+
+
+def _in_changed_heading(ref: str, pos: int) -> bool:
+    return _heading_start(ref, pos) >= 0
+
+
+def _paren_view_ok(text: str, sent_start: int, hs: int, close: int, view: "re.Match") -> bool:
+    """The case must sit inside the parenthesis (the one that says 참조) that ``close`` ends, and the sentence must be
+    the court's own, not quoted lower-court text ("'… 참조), 이러한 견해는 폐기한다'는 원심의 판단")."""
+    depth, opener = 0, -1
+    for i in range(close, sent_start - 1, -1):
+        c = text[i]
+        if c == ")":
+            depth += 1
+        elif c == "(":
+            depth -= 1
+            if depth == 0:
+                opener = i
+                break
+    if opener < 0 or opener > hs or "참조" not in text[opener:close]:
+        return False
+    before = text[sent_start:hs]
+    if before.count("'") % 2 or before.count('"') % 2 or before.count("‘") > before.count("’") \
+            or before.count("“") > before.count("”"):
+        return False
+    return not _QUOTED_VIEW_TAIL_RE.match(text, view.end(), min(len(text), view.end() + 30))
+
+
+_QUOTED_VIEW_TAIL_RE = re.compile(r"\s*[’”'\"]?\s*(?:는|라는|라고|고|며)\s*(?:원심|제1심|항소심|판단|판시|주장|취지|논지|상고)")
+
+
 def find_evidence(fields: dict, key: CaseKey) -> dict:
     """Evidence that the decision whose fields are given changes the case ``key``.
 
@@ -262,7 +345,11 @@ def find_evidence(fields: dict, key: CaseKey) -> dict:
     soft: list[dict] = []
     seen: set = set()
 
-    ref = clean(fields.get("참조판례"))
+    raw_ref = fields.get("참조판례")
+    # <br/> kept as newlines so a heading on a line of its own can be told from prose; quotes show spaces
+    ref = clean(raw_ref) if not isinstance(raw_ref, str) else "\n".join(
+        re.sub(r"[ \t\r\f\v]+", " ", ln).strip() for ln in re.sub(r"<br\s*/?>|</?p\s*/?>", "\n", raw_ref, flags=re.I).split("\n")
+        if ln.strip())
     for hs, he in case_mentions(ref, key):
         for es, ee in reference_entries(ref):
             if es <= hs < ee:
@@ -273,9 +360,17 @@ def find_evidence(fields: dict, key: CaseKey) -> dict:
                 other = CASE_RE.search(after)
                 limit = other.start() if other else len(after)
                 mk = _MARKER_RE.search(after[:limit])
-                item = {"field": "참조판례", "quote": entry.strip().rstrip(",").strip()}
+                item = {"field": "참조판례", "quote": re.sub(r"\s+", " ", entry).strip().rstrip(",").strip()}
                 if mk:
-                    item["marker"] = f"({mk.group(1)})"
+                    word = mk.group("m") or mk.group("m2")
+                    item["marker"] = mk.group(0) if mk.group("q") else f"({'일부' if mk.group('p') else ''}{word})"
+                    item["marker_text"] = mk.group(0)
+                    item["partial"] = bool(mk.group("p"))
+                    explicit.append({**item, "evidence": "explicit_marker"})
+                elif _in_changed_heading(ref, hs):
+                    item["marker"] = "(변경된 판례 목록)"
+                    item["marker_text"] = re.sub(r"\s+", " ", _HEADING_RE.match(ref, _heading_start(ref, hs)).group(0)).strip()
+                    item["partial"] = False
                     explicit.append({**item, "evidence": "explicit_marker"})
                 else:
                     cited.append(item)
@@ -301,11 +396,30 @@ def find_evidence(fields: dict, key: CaseKey) -> dict:
             role = opinion_role(text, hs)
             soft_after = next((c for c in _SOFT_CHANGE_RE.finditer(text, he, e)
                                if change_ties_to_case(text, hs, he, c.start())), None)
-            if change_after and not supportive and not _NEGATED_RE.search(sent) and role == "majority":
+            # "(… 1982. 12. 28. 선고 81다카545 판결 … 각 참조), 이러한 견해는 폐기한다": the parenthesis lists the
+            # decisions that expressed the position, the next clause discards that position
+            paren_view = None
+            for pm in re.finditer(r"\)", tail):
+                if _SENT_END_RE.search(tail[:pm.start()]):
+                    break
+                cp = he + pm.end()
+                paren_view = _PAREN_VIEW_RE.match(text, cp, min(len(text), cp + 80))
+                if paren_view and not _paren_view_ok(text, s, hs, he + pm.start(), paren_view):
+                    paren_view = None
+                if paren_view or re.match(r"\s*[.。]", tail[pm.end():pm.end() + 3]):
+                    break          # matched, or this parenthesis ends its sentence: never look past it
+            if paren_view and not _NEGATED_RE.search(text[he:e]) and role == "majority":
                 q = _quote(text, s, e, (hs, he))
                 if (field, s) not in seen:
                     seen.add((field, s))
-                    explicit.append({"field": field, "quote": q, "evidence": "explicit_sentence"})
+                    explicit.append({"field": field, "quote": q, "evidence": "explicit_sentence",
+                                     "pattern": "cited_in_parenthesis_then_view_changed"})
+            elif change_after and not supportive and not _NEGATED_RE.search(sent) and role == "majority":
+                q = _quote(text, s, e, (hs, he))
+                if (field, s) not in seen:
+                    seen.add((field, s))
+                    explicit.append({"field": field, "quote": q, "evidence": "explicit_sentence",
+                                     "partial": bool(_PARTIAL_BEFORE_RE.search(text[max(he, change_after.start() - 25):change_after.start()]))})
             elif soft_after and not supportive and not _NEGATED_RE.search(sent) and role == "majority":
                 soft.append({"field": field, "quote": _quote(text, s, e, (hs, he))})
             else:
@@ -447,7 +561,7 @@ def check_status(
         found = find_evidence(fields, key)
         for ev in found["explicit"]:
             evidence.append({**ev, "source": info,
-                             "confidence": "high" if ev["evidence"] == "explicit_marker" else "medium"})
+                             "confidence": "high" if ev["evidence"] == "explicit_marker" and not ev.get("partial") else "medium"})
         if not found["explicit"] and found["soft"]:
             leads.append({"source": info, "cited_as": found["soft"][0], "wording": "soft_change_wording",
                           "generic_change": None})
