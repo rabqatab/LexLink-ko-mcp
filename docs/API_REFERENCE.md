@@ -49,11 +49,11 @@
 | `prec_service` | id | lm, sections, offset, max_chars, type=JSON |
 | `prec_status` | - (case_number 또는 id 중 하나) | case_number, id, max_scan=5 |
 | `law_constitutional_check` | law_name, article | article_branch=0, max_scan=6 |
-| `detc_search` | - | query=*, display=20, page=1, type=JSON, search, gana, sort, date, ed_yd, nb (문자열), pop_yn |
+| `detc_search` | - | query=*, display=20, page=1, type=JSON, search (키워드 기본 2), gana, sort, date, ed_yd, nb (문자열), pop_yn |
 | `detc_service` | id | lm, sections, offset, max_chars, type=JSON |
-| `expc_search` | - | query=*, display=20, page=1, type=JSON, search=1, inq, rpl, gana, itmno, reg_yd, expl_yd, sort, pop_yn |
+| `expc_search` | - | query=*, display=20, page=1, type=JSON, search (키워드 기본 2), inq, rpl, gana, itmno, reg_yd, expl_yd, sort, pop_yn |
 | `expc_service` | id | lm, sections, offset, max_chars, type=JSON |
-| `decc_search` | - | query=*, display=20, page=1, type=JSON, search=1, cls, gana, date, dpa_yd, rsl_yd, sort, pop_yn |
+| `decc_search` | - | query=*, display=20, page=1, type=JSON, search (키워드 기본 2), cls, gana, date, dpa_yd, rsl_yd, sort, pop_yn |
 | `decc_service` | id | lm, sections, offset, max_chars, type=JSON |
 | `committee_search` | committee | query=*, display=20, page=1, type=JSON, search, sort, gana |
 | `committee_service` | committee, id | type=JSON |
@@ -1029,7 +1029,7 @@ http://www.law.go.kr/DRF/lawService.do?OC=test&target=prec&ID=228541&type=XML
 | OC | string(필수) | 사용자 이메일의 ID |
 | target | string: detc(필수) | 서비스 대상 |
 | type | char(필수) | 출력 형태: HTML/XML/JSON |
-| search | int | 검색범위 (기본: 1 헌재결정례명) 2: 본문검색 |
+| search | int | 검색범위 (업스트림 기본: 1 헌재결정례명, LexLink 기본: 키워드 질의는 2) 2: 본문검색 |
 | query | string | 검색을 원하는 질의 |
 | display | int | 검색된 결과 개수 |
 | page | int | 검색 결과 페이지 |
@@ -1047,6 +1047,11 @@ http://www.law.go.kr/DRF/lawSearch.do?OC=test&target=detc&type=HTML&date=2015021
 ```
 
 ---
+
+**LexLink `detc_search` 동작 (2026-11-21 기본값 변경, `prec_search`와 같은 규칙)**
+- **기본 검색범위는 본문(`search=2`).** 쟁점어는 결정명에 거의 없다(실험 020, 870회 검색: 쟁점어 hit@20 0.00 → 0.82). `search=1`을 명시하면 결정명 검색을 그대로 쓴다. `query="*"`(목록·필터 호출)는 검색범위를 보내지 않는다. 응답에 `search_applied: {"search": n, "scope": "...", "defaulted": bool}`가 붙는다.
+- 사건명(안건명) 관련도 재정렬은 `search=1`이고 `sort`가 없을 때만 한다. 본문 검색(`search=2`)은 업스트림 순서(관련도 순; 날짜순 아님)를 유지한다.
+- **사건번호 하나만 `query`로 넣으면 `nb`로 라우팅**(`nb`가 없고 `search`가 생략·1일 때): `query="2013헌바1"`(공백은 제거)는 `query="*"`와 `nb`로 바뀌어 조회된다(detc는 `nb`와 `query`를 함께 받지 않음). 응답에 `query_routed_to_nb: true`, `routed_nb`, 안내 `notes`가 붙고 0건이면 `hints`가 붙는다. `nb`는 업스트림에서 접두 일치다. 따옴표 구문(`"2013헌바1"`), 섞인 문장, 명시적 `search=2`는 라우팅하지 않는다.
 
 ## 4.4 헌재결정례 본문 조회 — `detc_service` ✅ IMPLEMENTED
 **Endpoint**: `GET http://www.law.go.kr/DRF/lawService.do?target=detc`
@@ -1074,7 +1079,7 @@ http://www.law.go.kr/DRF/lawService.do?OC=test&target=detc&ID=58386&type=HTML
 | OC | string(필수) | 사용자 이메일의 ID |
 | target | string: expc(필수) | 서비스 대상 |
 | type | char(필수) | 출력 형태: HTML/XML/JSON |
-| search | int | 검색범위 (기본: 1 법령해석례명) 2: 본문검색 |
+| search | int | 검색범위 (업스트림 기본: 1 법령해석례명, LexLink 기본: 키워드 질의는 2) 2: 본문검색 |
 | query | string | 검색을 원하는 질의 |
 | display | int | 검색된 결과 개수 |
 | page | int | 검색 결과 페이지 |
@@ -1093,6 +1098,11 @@ http://www.law.go.kr/DRF/lawSearch.do?OC=test&target=expc&type=XML&query=임차
 ```
 
 ---
+
+**LexLink `expc_search` 동작 (2026-11-21 기본값 변경, `prec_search`와 같은 규칙)**
+- **기본 검색범위는 본문(`search=2`).** 쟁점어는 안건명에 거의 없다(실험 020, 870회 검색: 쟁점어 hit@20 0.22 → 0.79). `search=1`을 명시하면 안건명 검색을 그대로 쓴다. `query="*"`(목록·필터 호출)는 검색범위를 보내지 않는다. 응답에 `search_applied: {"search": n, "scope": "...", "defaulted": bool}`가 붙는다.
+- 사건명(안건명) 관련도 재정렬은 `search=1`이고 `sort`가 없을 때만 한다. 본문 검색(`search=2`)은 업스트림 순서(관련도 순; 날짜순 아님)를 유지한다.
+- 사건번호 변수가 없으므로 사건번호 라우팅은 하지 않는다.
 
 ## 4.6 법령해석례 본문 조회 — `expc_service` ✅ IMPLEMENTED
 **Endpoint**: `GET http://www.law.go.kr/DRF/lawService.do?target=expc`
@@ -1120,7 +1130,7 @@ http://www.law.go.kr/DRF/lawService.do?OC=test&target=expc&ID=334617&type=HTML
 | OC | string(필수) | 사용자 이메일의 ID |
 | target | string: decc(필수) | 서비스 대상 |
 | type | char(필수) | 출력 형태: HTML/XML/JSON |
-| search | int | 검색범위 (기본: 1 행정심판례명) 2: 본문검색 |
+| search | int | 검색범위 (업스트림 기본: 1 행정심판례명, LexLink 기본: 키워드 질의는 2) 2: 본문검색 |
 | query | string | 검색을 원하는 질의 |
 | display | int | 검색된 결과 개수 |
 | page | int | 검색 결과 페이지 |
@@ -1139,6 +1149,11 @@ http://www.law.go.kr/DRF/lawSearch.do?OC=test&target=decc&type=XML&gana=ga
 ```
 
 ---
+
+**LexLink `decc_search` 동작 (2026-11-21 기본값 변경, `prec_search`와 같은 규칙)**
+- **기본 검색범위는 본문(`search=2`).** 쟁점어는 사건명에 거의 없다(실험 020, 870회 검색: 쟁점어 hit@20 0.01 → 0.42). `search=1`을 명시하면 사건명 검색을 그대로 쓴다. `query="*"`(목록·필터 호출)는 검색범위를 보내지 않는다. 응답에 `search_applied: {"search": n, "scope": "...", "defaulted": bool}`가 붙는다.
+- 사건명(안건명) 관련도 재정렬은 `search=1`이고 `sort`가 없을 때만 한다. 본문 검색(`search=2`)은 업스트림 순서(관련도 순; 날짜순 아님)를 유지한다.
+- 사건번호 변수가 없으므로 사건번호 라우팅은 하지 않는다.
 
 ## 4.8 행정심판례 본문 조회 — `decc_service` ✅ IMPLEMENTED
 **Endpoint**: `GET http://www.law.go.kr/DRF/lawService.do?target=decc`
