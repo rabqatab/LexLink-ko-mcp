@@ -155,7 +155,8 @@ def test_detc_routed_exact_row_has_no_zero_hint_and_uses_display_100(tool):
     assert str(p["display"]) == "100" and str(p["page"]) == "1" and p["nb"] == "2022헌마1312"
     assert "hints" not in out
     assert [r["사건번호"] for r in out["ranked_data"]["Detc"]] == ["2022헌마1312"]
-    assert any("display=100" in n for n in out["notes"])
+    assert any("display=100, page=1" in n and "nb=" in n for n in out["notes"])
+    assert len(out["notes"]) == 1
 
 
 @pytest.mark.unit
@@ -179,3 +180,17 @@ def test_prec_search_does_not_route_constitutional_numbers(tool, q):
     p = Rec.calls[-1]
     assert "nb" not in p and "query_routed_to_nb" not in out
     assert any("헌법재판소" in n for n in out["notes"])
+
+
+@pytest.mark.unit
+def test_prec_search_court_case_number_still_routed(tool):
+    out = tool("prec_search", query="2013다61381")
+    assert Rec.calls[-1]["nb"] == "2013다61381" and out["query_routed_to_nb"] is True
+
+
+@pytest.mark.unit
+def test_detc_routed_has_no_display_cap_warning(tool):
+    out = tool("detc_search", query="2013헌바1", display=500)
+    assert str(Rec.calls[-1]["display"]) == "100"
+    from lexlink.guards import DISPLAY_CAPPED_WARNING
+    assert DISPLAY_CAPPED_WARNING.format(d=500) not in out.get("warnings", [])
