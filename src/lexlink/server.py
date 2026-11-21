@@ -1976,7 +1976,9 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
 
         law.go.kr has no citator, so this scans: decisions that quote the case number
         (prec_search query=사건번호, search=2) -> the later 대법원 전원합의체 ones -> their
-        참조판례 "(변경)" markers and the sentences that name the case and say 변경/폐기. Returns
+        참조판례 markers ("(변경)", "(폐기)", "[폐기]", "(공…, 변경)", a "변경된 판례" list) and the sentences that
+        name the case and say 변경/폐기 (also "... 판결 등을 비롯한 ... 변경하기로 한다" lists). A declaration that
+        names no case ("... 판결 등은 ... 변경한다") cannot be tied to a case not cited by number. Returns
         quoted evidence with the source decision, never a bare verdict.
 
         Args:

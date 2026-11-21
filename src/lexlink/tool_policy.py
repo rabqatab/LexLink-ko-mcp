@@ -111,7 +111,7 @@ TOOL_POLICIES: dict[str, dict] = {
     "trty_service": _p("treaty", "primary", "normal", 1, "측정 5KB~약 970KB(id 7297), 중앙값 약 50KB, 크기 제어 없음"),
     "prec_search": _p("precedent", "primary", "normal", 1, "키워드 기본 search=2(본문). case_type은 업스트림 한 쪽 100행을 LexLink가 거른 결과(display 무시, totalCnt는 거르기 전). 같은 판결의 중복 판례일련번호는 ranked_data에서 same_case_ids로 묶음(raw_content는 그대로). 사건번호 하나인 query는 nb로 라우팅. 선고일자 이상은 date_warning으로만 표시"),
     "prec_service": _p("precedent", "primary", "normal", 1, "전문 측정 10~110KB. sections 생략 시 본문 2만자 이하는 전문, 초과는 brief(축약본). full=전문 그대로, offset/max_chars=쪽 단위. 본문 미제공 판례는 NOT_FOUND"),
-    "prec_status": _p("precedent", "heuristic", "normal", 7, "변경 여부 추정. 사건번호 확인 1~2(연도 두 표기) + 인용 판결 목록 1~3쪽(100건/쪽, 표기가 다르면 한 번 더) + 후보 전원합의체 본문 max_scan(기본 5, 최대 10)회. 통상 7회 이내, 최대 약 18회. '변경 없음'을 단정하지 않음"),
+    "prec_status": _p("precedent", "heuristic", "normal", 7, "변경 여부 추정. 사건번호 확인 1~2(연도 두 표기) + 인용 판결 목록 1~3쪽(100건/쪽, 표기가 다르면 한 번 더) + 후보 전원합의체 본문 max_scan(기본 5, 최대 10)회. 통상 7회 이내, 최대 약 18회(표지 형식·사건번호 해석 보완으로 호출 수는 불변). 인식: (변경)·(폐기)·[폐기]·(…, 변경)·'변경된 판례' 목록·'… 판결 등 … 변경하기로 한다' 문장. 사건을 지목하지 않는 '등' 선언은 연결 못 함. '변경 없음'을 단정하지 않음"),
     "law_constitutional_check": _p("constitutional", "heuristic", "normal", 10, "헌재 결정 주문 분류, 단서일 뿐 효력 판단 아님. 법령명 확인 1 + 본문 검색 1 + 결정 본문 max_scan(기본 8, 최대 12)회, 통상 10회 이내 최대 14회. law_as_of(5회 상한)와 분리"),
     "detc_search": _p("constitutional", "primary", "normal", 1),
     "detc_service": _p("constitutional", "primary", "normal", 1),

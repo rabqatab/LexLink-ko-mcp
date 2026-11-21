@@ -8,6 +8,12 @@ All notable changes to LexLink are documented here in both English and Korean.
 
 ### Unreleased
 
+#### `prec_status` misses from experiment 014 (more overrulings found, same call budget)
+- Case numbers: `4290민재항고58` and other kinds not in the kind list now parse (`민재항고` and other real kinds are in the kind whitelist; a kind that is not listed is accepted only for the typed target, glued form, never when scanning prose, so statute numbers like `제92조의6` cannot become case keys; it was a `VALIDATION_ERROR` before, now `case_not_found` when the index has no such row); one space between a multi-letter kind and the number (`4294민상 1350`) and a number glued to 판결/결정 (`93누21255판결은`) are read as that case.
+- 참조판례 markers: besides `(변경)`/`(폐기)`: `[폐기]`, `(일부폐기)` (confidence `medium`, `partial: true`), `(공1993하, 3120, 변경)` (marker last in an info list), `: 본결정으로 변경`, and the heading form (`【변경된 판례】`, `변경된 판결`, `[본판결에 의하여 변경된 판결]`: the heading must be bracketed or on a line of its own and the entries must follow it directly; the list ends at any `/`, `[n]` group marker or other heading, marker text `(변경된 판례 목록)`); entries listed before the heading stay unmarked. Evidence items now carry `marker_text` and `partial`.
+- Sentences: a list declaration whose case numbers are followed by a closing clause (`… 판결 등을 비롯한 같은 취지의 판결들은 이 판결의 견해에 배치되는 범위 내에서 이를 모두 변경하기로 한다`, `… 판결과 그 밖에 이 판결의 견해와 다른 대법원 판결들은 … 이를 변경하기로 한다`) is tied to every listed case; `(… 81다카545 판결 각 참조), 이러한 견해는 폐기한다` (same sentence, directly after the parenthesis) is `explicit_sentence` with `pattern: cited_in_parenthesis_then_view_changed`, confidence `medium`. A citation in an earlier parenthesis that ends its sentence is never tied to a later one.
+- Measured live: the five misses (71누196, 81다카545, 95도1035, 4294민상1350, 93누21255) are now `overruled_found` (all `explicit_sentence`, `medium`) in 3 upstream calls each; the three #182 pairs and the earlier controls are unchanged. Unchanged limit: a declaration that names no case ("… 판결 등은 … 변경한다") cannot be matched to a case that is not cited by number; no search by legal issue was added (it would need extra upstream calls per candidate and cannot be made precise).
+
 #### prec_search defaults, case-number routing, case_type, duplicates, date warnings
 - **Default change:** `prec_search` with a keyword `query` now searches the judgment text (`search=2`) instead of case names (`search=1`); issue keywords returned 0 rows under the old default (91 of 93 family-law issue terms, exp 012). `search=1`/`3` still work when passed. `search_applied` shows the scope and `defaulted`. Full-text and 참조판례 searches keep the upstream order (the 사건명 re-ranking applies to `search=1` only). `query="*"` sends no scope. Internal callers (chain tools, `check_precedent_odds`, `legal_resolver`, `prec_status`) do not use the tool function and keep their explicit `search` values.
 - `query` that is exactly one case number (`63다131`, `2013다61381`, `4294민상1350`) is routed to `nb` when `nb` is not given and `search` is omitted or 1 (`query_routed_to_nb: true`, `routed_nb`, a note). Mixed text, quoted phrases, joined numbers and explicit `search=2/3` are not routed.
@@ -714,6 +720,12 @@ All notable changes to LexLink are documented here in both English and Korean.
 ## 한국어 (Korean)
 
 ### 미배포 (Unreleased)
+
+#### 실험 014에서 나온 `prec_status` 누락 보완 (찾는 변경 판결 증가, 호출 수 동일)
+- 사건번호: `4290민재항고58`처럼 종류 목록에 없는 사건 종류도 해석합니다(실제 종류를 목록에 추가; 목록에 없는 종류는 입력한 대상 사건번호에만 붙여 쓴 형태로 허용하고 본문 스캔에는 쓰지 않아 `제92조의6` 같은 조문 번호가 사건번호가 되지 않음). 전에는 `VALIDATION_ERROR`였고 이제 색인에 없으면 `case_not_found`입니다. 두 글자 이상 종류와 번호 사이의 공백 한 칸(`4294민상 1350`)과 판결·결정에 붙여 쓴 번호(`93누21255판결은`)도 그 사건으로 읽습니다.
+- 참조판례 표지: `(변경)`/`(폐기)` 외에 `[폐기]`, `(일부폐기)`(신뢰도 `medium`, `partial: true`), `(공1993하, 3120, 변경)`(정보 목록 끝의 표지), `: 본결정으로 변경`, 제목 목록 형식(`【변경된 판례】`, `변경된 판결`, `[본판결에 의하여 변경된 판결]`: 제목은 괄호 또는 한 줄 단독이어야 하고 항목이 바로 이어져야 하며 `/`, `[n]` 묶음 표시, 다른 제목에서 목록이 끝남, 표지 문구 `(변경된 판례 목록)`). 제목 앞에 적힌 항목은 표지가 없는 것으로 봅니다. 근거 항목에 `marker_text`, `partial`이 붙습니다.
+- 문장: 사건번호를 나열한 뒤 맺음절이 오는 선언(`… 판결 등을 비롯한 같은 취지의 판결들은 이 판결의 견해에 배치되는 범위 내에서 이를 모두 변경하기로 한다`, `… 판결과 그 밖에 이 판결의 견해와 다른 대법원 판결들은 … 이를 변경하기로 한다`)은 나열된 모든 사건에 연결합니다. `(… 81다카545 판결 각 참조), 이러한 견해는 폐기한다`(같은 문장, 괄호 바로 뒤)는 `explicit_sentence`(`pattern: cited_in_parenthesis_then_view_changed`, 신뢰도 `medium`)입니다. 문장을 끝내는 앞 괄호의 인용은 뒤 괄호의 선언과 연결하지 않습니다.
+- 실제 호출 측정: 누락 5건(71누196, 81다카545, 95도1035, 4294민상1350, 93누21255)이 각 3회 호출로 `overruled_found`(모두 `explicit_sentence`, `medium`)가 되었고, #182의 3건과 기존 대조군은 그대로입니다. 한계는 그대로입니다: 사건을 지목하지 않는 선언("… 판결 등은 … 변경한다")은 번호로 인용되지 않은 사건과 연결할 수 없습니다. 쟁점별 검색은 추가하지 않았습니다(후보마다 호출이 늘고 정밀도를 보장할 수 없음).
 
 #### prec_search 기본값, 사건번호 라우팅, case_type, 중복 묶음, 날짜 경고
 - **기본 동작 변경:** `prec_search`는 키워드 `query`를 이제 판결 본문(`search=2`)에서 찾는다(종전 사건명 `search=1`에서는 쟁점어가 0건: 가사 쟁점어 93개 중 91개, exp 012). `search=1`/`3`을 명시하면 그대로 동작한다. `search_applied`에 범위와 `defaulted`가 나온다. 본문·참조판례 검색은 업스트림 순서를 유지한다(사건명 재정렬은 `search=1`만). `query="*"`는 범위를 보내지 않는다. 내부 호출자(chain 도구, `check_precedent_odds`, `legal_resolver`, `prec_status`)는 이 도구 함수를 거치지 않고 명시한 `search`를 그대로 쓴다.
