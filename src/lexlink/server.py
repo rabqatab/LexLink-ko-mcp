@@ -44,7 +44,7 @@ from .law_extras import (
 from .ranking import detect_query_language, should_apply_ranking, rank_search_results
 from .resolver import get_resolver
 from .tool_policy import policy_meta
-from . import guards
+from . import guards, prec_extras
 from ._helpers import (
     TOOL_ANNOTATIONS, stringify_id, handle_tool_error, ToolValidationError,
     slim_response, run_search, run_service, annotate_prec_body_availability,
@@ -122,7 +122,9 @@ renames it to `rank`. Never pass it to a *_service call. Use the real key per fa
 Case-law tools (prec_service, detc_service, expc_service, decc_service) and law_service/eflaw_service
 choose the size themselves when `sections` is omitted: a body of 20,000 characters or less comes back
 whole, a longer one comes back as a brief view (`truncated: true`, `full_body_chars`, `truncated_note`).
-`sections="summary"` (case law only) returns the key sections without the body; `sections="brief"` forces
+Omit `sections` for case law: the size-based default returns the whole body when it is short and the
+brief view when it is long. `sections="summary"` (case law only) returns the fields WITHOUT the body
+(metadata and headnotes only, so it cannot be used to read or cite a judgment); `sections="brief"` forces
 the brief view. `sections="full"` returns everything exactly as sent; add `offset`/`max_chars` (characters,
 1000..24000) to read a long text page by page, following `next_offset`. Laws: omit `jo` and a long law
 returns a table of contents (`lexlink_toc`); use `jo` for one article.
@@ -1694,6 +1696,11 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
 
     # ==================== PHASE 3: CASE LAW & LEGAL RESEARCH ====================
 
+    def _ranked_prec_count(response: dict) -> int:
+        ranked = response.get("ranked_data")
+        rows = ranked.get("prec") if isinstance(ranked, dict) else None
+        return 1 if isinstance(rows, dict) else (len(rows) if isinstance(rows, list) else 0)
+
     # ==================== TOOL 16: prec_search ====================
     @server.tool(annotations=TOOL_ANNOTATIONS)
     @handle_tool_error
@@ -1714,6 +1721,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         nb: Optional[str] = None,
         dat_src_nm: Optional[str] = None,
         pop_yn: Optional[str] = None,
+        case_type: Optional[str] = None,
         ctx: Context = None,
     ) -> dict:
         """
@@ -1721,19 +1729,41 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
 
         Search Korean court precedents from Supreme Court and lower courts.
 
-        Row order: without `sort`, a keyword query (not "*") is re-ranked by 사건명 relevance
-        (exact, starts-with, word, substring, shorter first) inside the first 100 upstream rows; the
-        upstream's own order is 선고일자 descending. This is a behaviour change from earlier versions
-        (the old ranking field never matched, so rows came back in upstream order). Pass
-        `sort="ddes"` (or any sort) to keep upstream order.
+        Search scope: the default is full text (`search=2`, 본문 전문검색) because issue keywords
+        ("재산분할 기여도") almost never occur in a case name: with the old case-name default 91 of 93
+        family-law issue terms returned 0 rows. Pass `search=1` for case-name-only search (사건명,
+        e.g. "손해배상(기)") or `search=3` for 참조판례. The result carries `search_applied`
+        (`defaulted: true` when the default was used). `query="*"` (list/filter calls) sends no search scope.
+
+        Row order: with `search=1` and no `sort`, a keyword query (not "*") is re-ranked by 사건명
+        relevance (exact, starts-with, word, substring, shorter first) inside the first 100 upstream
+        rows. Full-text and 참조판례 searches (`search=2`/`3`) keep the upstream order, because a title
+        match says nothing about body relevance. Pass `sort="ddes"` (or any sort) to keep upstream
+        order with `search=1` too.
+
+        Case number as query: `query="63다131"` (exactly one case number, nothing else) is routed to
+        `nb` when `nb` is not given and `search` is omitted or 1 (a case-name search for a number returns ~100
+        unrelated rows). The result has `query_routed_to_nb: true`. Mixed text ("63다131 손해배상"), a quoted
+        phrase ('"63다131"', full-text citation search) and an explicit `search=2`/`3` are not routed.
+
+        Same-case rows: the upstream lists some rows more than once under different 판례일련번호 (same 사건번호,
+        선고일자, 법원명; they may be copies from different sources whose content differs). `ranked_data` keeps one row per group with
+        `same_case_ids` (the other ids); `duplicate_groups` lists every group; `raw_content` (when present)
+        keeps every upstream row. The rows are not guaranteed to have the same text: they can come from different
+        sources (대법원 vs 지방세법령정보시스템) with different 판시사항/판결유형/사건종류. The kept row prefers the
+        대법원 source; `duplicate_groups[].members` lists every id with 데이터출처명, 판결유형, 사건종류명, 사건명 and what
+        differs, so record which id you read. After grouping `rank` can have gaps and a page can hold fewer rows than
+        `display`; `rows_before_grouping` is the count before grouping. Rows whose 선고일자 year is earlier than the case-number year (impossible)
+        carry `date_warning`; the upstream date is never changed.
 
         Args:
-            query: Search keyword (default "*" for all)
+            query: Search keyword (default "*" for all). An issue keyword searches the judgment text.
             display: Number of results per page (max 100, default 20)
             page: Page number (1-based, default 1)
             oc: Optional OC override (defaults to env var)
             type: Response format - "JSON" (default), "XML", or "HTML"
-            search: Search type (1=case name, 2=full text, 3=참조판례, default 1); other values are rejected
+            search: Search scope (1=case name, 2=full text, 3=참조판례). Default: 2 (full text) for a keyword
+                query; other values are rejected
             sort: Sort order - "lasc"|"ldes"|"dasc"|"ddes"|"nasc"|"ndes" (a sort disables the relevance re-ranking)
             org: Court type code (400201=Supreme Court, 400202=lower courts)
             curt: Court name (대법원, 서울고등법원, etc.)
@@ -1746,17 +1776,33 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 "대법원-2025-두-34754" is converted). A comma list is rejected: the upstream returns 0 rows for it.
             dat_src_nm: Data source name (국세법령정보시스템, 근로복지공단산재판례, 대법원)
             pop_yn: Popup flag ("Y" or "N")
+            case_type: 사건종류 filter: 민사, 형사, 가사, 특허, 일반행정(행정), 세무, or a 6-digit 사건종류코드
+                (400101 민사, 400102 형사, 400103 가사, 400106 특허, 400107 일반행정, 400108 세무). The upstream
+                has NO such parameter (unknown parameters are ignored), so LexLink post-filters one upstream window:
+                it fetches 100 rows for `page` (page = 100-row pages, `display` is ignored), keeps the matching
+                rows and reports `case_type_filter` (`rows_before_filter`, `rows_after_filter`, `upstream_total`).
+                `totalCnt` stays the unfiltered upstream count; a page can hold few or no matching rows while a
+                later page still has more. Needs type="JSON" (case-insensitive). `case_type_filter.scope` repeats these semantics even for 0 rows. Combine with `curt`/`org`/`jo` to narrow upstream.
 
         Returns:
             Search results with precedent list or error.
             국세법령정보시스템 항목은 본문제공="API 미제공"; dat_src_nm 으로 출처 필터 가능.
 
         Examples:
-            Search for precedents mentioning "담보권":
-            >>> prec_search(query="담보권", display=10)
+            Search the judgment text for an issue (full text by default):
+            >>> prec_search(query="재산분할 기여도", display=10)
 
-            Search Supreme Court precedents:
+            Case-name search only:
+            >>> prec_search(query="담보권", search=1)
+
+            Supreme Court judgments mentioning an issue:
             >>> prec_search(query="담보권", curt="대법원")
+
+            One case number (routed to nb):
+            >>> prec_search(query="2013다61381")
+
+            Family-case judgments for an issue (post-filter, 100-row pages):
+            >>> prec_search(query="재산분할 기여도", case_type="가사")
         """
         query = reject_blank(query, "query")
         resolved_oc = resolve_oc(override_oc=oc)
@@ -1766,6 +1812,24 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             prnc_yd = validate_date_range(prnc_yd, "prnc_yd")
         prnc_yd, date_applied = guards.resolve_date_filter("prec", date, prnc_yd)
         nb = guards.normalize_case_number(nb)
+        ct = prec_extras.normalize_case_type(case_type)
+        type = type.strip().upper() if isinstance(type, str) and type.strip().upper() in ("JSON", "XML", "HTML") else type
+        if ct and type != "JSON":
+            raise ToolValidationError(
+                "case_type은 type=\"JSON\"에서만 쓸 수 있습니다 (LexLink가 행을 걸러야 해서 JSON 행이 필요합니다)",
+                hints=['type="JSON"(기본값)으로 호출하세요'])
+        routed_nb = None
+        if not nb and search in (None, 1):
+            routed_nb = prec_extras.sole_case_number(query)
+            if routed_nb:
+                nb = guards.normalize_case_number(routed_nb)
+                query = "*"
+        constitutional_hint = (not nb and search in (None, 1) and prec_extras.is_constitutional_case_number(query))
+        search_defaulted = False
+        if search is None and query != "*":
+            search, search_defaulted = 2, True
+        if ct:
+            display = 100  # one whole upstream window is filtered; display is not honored
         snake_params = {
             "oc": resolved_oc, "target": "prec", "type": type,
             "query": query, "display": display, "page": page,
@@ -1780,15 +1844,44 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         if nb: snake_params["nb"] = nb
         if dat_src_nm: snake_params["dat_src_nm"] = dat_src_nm
         if pop_yn: snake_params["pop_yn"] = pop_yn
-        # the title field of a prec row is 사건명 (there is no 판례명 key); an explicit sort is kept as is
+        # the title field of a prec row is 사건명 (there is no 판례명 key); an explicit sort is kept as is.
+        # Title relevance only means something for a case-name search: full-text/참조판례 keep the upstream order.
         response = annotate_prec_body_availability(run_search(
             get_client=_get_client, target="prec", query=query,
             snake_params=snake_params, response_type=type, display=display,
-            ranking_field=None if sort else "사건명", list_type="items", item_category="prec",
+            ranking_field=None if (sort or search in (2, 3)) else "사건명", list_type="items", item_category="prec",
             over_fetch_key="display",
         ))
         guards.attach_filters_applied(response, date_applied)
         guards.check_nb_exactness(response, nb)
+        if isinstance(response, dict) and response.get("status") == "ok":
+            if search:
+                response["search_applied"] = {
+                    "search": search, "scope": {1: "사건명", 2: "본문 전문검색", 3: "참조판례"}[search],
+                    "defaulted": search_defaulted}
+            if routed_nb:
+                response["query_routed_to_nb"] = True
+                response["routed_nb"] = nb
+                guards.add_notes(response, f"query={routed_nb!r}는 사건번호 하나라서 nb={nb!r}로 조회했습니다 "
+                                 "(사건명 검색은 번호로 무관한 행을 돌려줍니다). 본문에 이 번호가 인용된 판결을 찾으려면 "
+                                 "query='\"사건번호\"', search=2를 쓰세요")
+            if constitutional_hint:
+                scope_txt = ("본문 검색(search=2, 기본값)" if search_defaulted else
+                             f"search={search}({'사건명' if search == 1 else '지정한 검색범위'}) 검색")
+                guards.add_notes(response, "헌법재판소 사건번호(헌가/헌바/헌마 등)는 법원 판례 색인(prec)에 없습니다. "
+                                 f"detc_search(nb 또는 query)로 헌재 결정례를 조회하세요. 이 호출은 {scope_txt}으로 처리되었고 nb로 바꾸지 않았습니다")
+            if routed_nb and not _ranked_prec_count(response):
+                response["hints"] = [
+                    "사건번호로 조회한 결과가 0건입니다: 법제처 판례 DB에 수록되지 않은 판결이거나 결합사건의 두 번째 번호일 수 있습니다",
+                    "이 번호를 인용한 판결을 찾으려면 prec_search(query='\"사건번호\"', search=2)를 사용하세요"]
+            warnings_extra = []
+            if ct:
+                prec_extras.apply_case_type_filter(response, ct)
+                if ct[2]:
+                    warnings_extra.append(ct[2])
+            prec_extras.group_duplicate_rows(response)
+            prec_extras.add_row_date_warnings(response)
+            guards.add_warnings(response, *warnings_extra)
         return guards.add_warnings(response, capped, guards.nb_numeric_warning(nb),
                                    guards.nb_year_form_hint(nb, response))
 
@@ -1838,10 +1931,14 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             body is unavailable (unknown id or source not served by the API).
             sections="summary" falls back to including 판례내용 when both 판시사항
             and 판결요지 are empty (sections="summary_fallback").
+            `warnings` (type="JSON" only) has `date_before_case_year` / `date_before_lower_court` when the upstream 선고일자 is
+            impossible (earlier than the case-number year, or than the 원심판결 date in the body); the date
+            itself is never changed.
 
         Examples:
             >>> prec_service(id="228541")
-            >>> prec_service(id="228541", sections="summary")  # PlayMCP-safe
+            Check size first without the body (headnotes/metadata only, not for citing):
+            >>> prec_service(id="228541", sections="summary")
             Page through a long judgment (units are characters):
             >>> prec_service(id="228541", sections="full", max_chars=20000)             # page 1, see next_offset
             >>> prec_service(id="228541", sections="full", offset=19873, max_chars=20000)  # next page
@@ -1861,7 +1958,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                           full_text_fields=["판례내용"],
                           summary_required_fields=["판시사항", "판결요지"],
                           body_fields=["판시사항", "판결요지", "판례내용"])
-        return guards.add_notes(dict(response), guards.LM_NOT_SENT_NOTE if lm else None)
+        out = guards.add_notes(dict(response), guards.LM_NOT_SENT_NOTE if lm else None)
+        return guards.add_warnings(out, *prec_extras.service_date_warnings(out))
 
     # ==================== prec_status (precedent citator) ====================
     @server.tool(annotations=TOOL_ANNOTATIONS)
@@ -2086,6 +2184,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
 
         Examples:
             >>> detc_service(id="58386")
+            Check size first without the body (not for citing):
             >>> detc_service(id="58386", sections="summary")
             >>> detc_service(id="58386", sections="full", max_chars=20000)  # paged; follow next_offset
         """
@@ -4297,7 +4396,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         elif relevance_warnings:
             result["warnings"] = relevance_warnings
         if slim_cut:
-            mark_slim_cut(result, "SLIM_RESPONSE: 판시사항/요지(500자)와 key_factors(100자·10개)가 줄었습니다. 전문은 prec_service(id=사건 id, sections=\"summary\")로 조회하세요.")
+            mark_slim_cut(result, "SLIM_RESPONSE: 판시사항/요지(500자)와 key_factors(100자·10개)가 줄었습니다. 본문은 prec_service(id=사건 id)로 조회하세요(sections를 생략하면 본문 크기에 맞게 전문 또는 brief로 옵니다).")
         return result
 
     # ==================== TOOL 46: legal_resolver ====================
