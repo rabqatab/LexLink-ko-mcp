@@ -12,7 +12,8 @@ from lexlink.cache import get_cache
 
 FAKE_OC = "unit-test-oc"
 
-ROOTS = {"detc": ("DetcSearch", "Detc", "사건명"),
+ROOTS = {"prec": ("PrecSearch", "prec", "사건명"),
+         "detc": ("DetcSearch", "Detc", "사건명"),
          "expc": ("ExpcSearch", "Expc", "안건명"),
          "decc": ("DeccSearch", "Decc", "사건명")}
 
@@ -144,3 +145,37 @@ def test_detc_routed_zero_rows_gets_hints(tool, monkeypatch):
     out = server_mod.create_server()._tool_manager.get_tool("detc_search").fn(query="2099헌바1")
     assert out["query_routed_to_nb"] is True
     assert out["hints"] and "0건" in out["hints"][0]
+
+
+@pytest.mark.unit
+def test_detc_routed_exact_row_has_no_zero_hint_and_uses_display_100(tool):
+    Rec.rows = [mkrow("detc", 1, "가", no="2022헌마13120"), mkrow("detc", 2, "나", no="2022헌마1312")]
+    out = tool("detc_search", query="2022헌마1312", display=5, page=3)
+    p = Rec.calls[-1]
+    assert str(p["display"]) == "100" and str(p["page"]) == "1" and p["nb"] == "2022헌마1312"
+    assert "hints" not in out
+    assert [r["사건번호"] for r in out["ranked_data"]["Detc"]] == ["2022헌마1312"]
+    assert any("display=100" in n for n in out["notes"])
+
+
+@pytest.mark.unit
+def test_detc_routed_exact_absent_gets_note_not_zero_hint(tool):
+    Rec.rows = [mkrow("detc", 1, "가", no="2013헌바178"), mkrow("detc", 2, "나", no="2013헌바191")]
+    out = tool("detc_search", query="2013헌바1")
+    assert "hints" not in out
+    assert any("100건" in n for n in out["notes"])
+
+
+@pytest.mark.unit
+def test_detc_routed_xml_has_no_false_hint(tool):
+    out = tool("detc_search", query="2013헌바1", type="XML")
+    assert "hints" not in out
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("q", ["2022헌마1312", "2013 헌바 1", "２０１３헌바１"])
+def test_prec_search_does_not_route_constitutional_numbers(tool, q):
+    out = tool("prec_search", query=q)
+    p = Rec.calls[-1]
+    assert "nb" not in p and "query_routed_to_nb" not in out
+    assert any("헌법재판소" in n for n in out["notes"])

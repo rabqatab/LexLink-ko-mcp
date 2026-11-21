@@ -1701,10 +1701,17 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         rows = ranked.get("prec") if isinstance(ranked, dict) else None
         return 1 if isinstance(rows, dict) else (len(rows) if isinstance(rows, list) else 0)
 
-    def _ranked_count(response: dict, key: str) -> int:
-        ranked = response.get("ranked_data")
-        rows = ranked.get(key) if isinstance(ranked, dict) else None
-        return 1 if isinstance(rows, dict) else (len(rows) if isinstance(rows, list) else 0)
+    def _ranked_rows(response: dict, key: str):
+        """Rows of ranked_data[key] (either spelling), [] when the list is empty, None when there is no
+        ranked_data (XML/HTML, errors)."""
+        ranked = response.get("ranked_data") if response.get("status") == "ok" else None
+        if not isinstance(ranked, dict):
+            return None
+        rows = ranked.get(key.capitalize(), ranked.get(key.lower()))
+        if rows is None:
+            return [] if str(ranked.get("totalCnt", "")).strip() in ("0", "") else None
+        rows = [rows] if isinstance(rows, dict) else rows
+        return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else None
 
     # ==================== TOOL 16: prec_search ====================
     @server.tool(annotations=TOOL_ANNOTATIONS)
@@ -2093,7 +2100,9 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         Case number as query: `query="2013헌바1"` (exactly one 헌재 case number, nothing else; spaces such as
         "2013 헌바 1" are removed) is routed to `nb` with `query="*"` when `nb` is not given and `search` is
         omitted or 1 (the upstream rejects nb together with a query). The result has `query_routed_to_nb: true`
-        and `routed_nb`. `nb` is a prefix match upstream (see `nb`). Mixed text, a quoted phrase
+        and `routed_nb` (and no `search_applied`). Routing is an exact lookup, so it always requests display=100,
+        page=1 (a note says so when other values were passed) because `nb` is a prefix match upstream: when
+        exactly one row matches exactly, `ranked_data` keeps only it. Mixed text, a quoted phrase
         ('"2013헌바1"', full-text citation search) and an explicit `search=2` are not routed.
 
         Args:
@@ -2140,11 +2149,14 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         ed_yd, date_applied = guards.resolve_date_filter("detc", date, ed_yd)
         nb = guards.normalize_case_number(nb)
         routed_nb = None
+        routed_override = False
         if not nb and search in (None, 1):
             routed_nb = prec_extras.sole_constitutional_case_number(query)
             if routed_nb:
                 nb = routed_nb
                 query = "*"
+                routed_override = (display, page) != (100, 1)
+                display, page = 100, 1  # routing is an exact lookup; nb is a prefix match upstream
         search_defaulted = False
         if search is None and query != "*" and not nb:
             search, search_defaulted = 2, True
@@ -2185,10 +2197,20 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
                 guards.add_notes(response, f"query={routed_nb!r}는 헌재 사건번호 하나라서 nb={nb!r}로 조회했습니다 "
                                  "(결정명 검색은 번호로 무관한 행을 돌려줍니다; nb는 업스트림에서 앞부분 일치). "
                                  "본문에 이 번호가 인용된 결정을 찾으려면 query='\"사건번호\"', search=2를 쓰세요")
-                if not _ranked_count(response, "detc"):
-                    response["hints"] = [
-                        "사건번호로 조회한 결과가 0건입니다: 헌재 결정례 DB에 수록되지 않은 사건이거나 번호가 다를 수 있습니다",
-                        "이 번호를 인용한 결정을 찾으려면 detc_search(query='\"사건번호\"', search=2)를 사용하세요"]
+                if routed_override:
+                    guards.add_notes(response, "사건번호 조회는 정확 일치 확인을 위해 display=100, page=1로 조회했습니다 "
+                                     "(호출에서 지정한 display/page는 무시)")
+                rows = _ranked_rows(response, "Detc")
+                if rows is not None:
+                    exact = [r for r in rows if str(r.get("사건번호", "")).strip() == nb]
+                    total = str(response.get("ranked_data", {}).get("totalCnt", "")).strip()
+                    if not rows:
+                        response["hints"] = [
+                            "사건번호로 조회한 결과가 0건입니다: 헌재 결정례 DB에 수록되지 않은 사건이거나 번호가 다를 수 있습니다",
+                            "이 번호를 인용한 결정을 찾으려면 detc_search(query='\"사건번호\"', search=2)를 사용하세요"]
+                    elif not exact:
+                        guards.add_notes(response, f"정확히 일치하는 사건번호 {nb!r}는 처음 100건의 접두 일치 행에 없습니다. "
+                                         "번호를 확인하거나 nb로 page=2 이후를 조회하세요")
         return guards.add_warnings(response, capped, guards.nb_numeric_warning(nb))
 
     # ==================== TOOL 19: detc_service ====================
