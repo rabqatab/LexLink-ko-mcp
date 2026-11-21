@@ -162,7 +162,7 @@ def test_prec_ranking_uses_real_title_field(tool):
 
 @pytest.mark.unit
 def test_expc_ranking_uses_real_title_field(tool):
-    out = tool("expc_search", query="임차", display=5)
+    out = tool("expc_search", query="임차", display=5, search=1)
     titles = [r["안건명"] for r in out["ranked_data"]["expc"]]
     assert titles[0] == "임차"                  # exact match first
 

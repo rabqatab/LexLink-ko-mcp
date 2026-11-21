@@ -1701,6 +1701,18 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         rows = ranked.get("prec") if isinstance(ranked, dict) else None
         return 1 if isinstance(rows, dict) else (len(rows) if isinstance(rows, list) else 0)
 
+    def _ranked_rows(response: dict, key: str):
+        """Rows of ranked_data[key] (either spelling), [] when the list is empty, None when there is no
+        ranked_data (XML/HTML, errors)."""
+        ranked = response.get("ranked_data") if response.get("status") == "ok" else None
+        if not isinstance(ranked, dict):
+            return None
+        rows = ranked.get(key.capitalize(), ranked.get(key.lower()))
+        if rows is None:
+            return [] if str(ranked.get("totalCnt", "")).strip() in ("0", "") else None
+        rows = [rows] if isinstance(rows, dict) else rows
+        return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else None
+
     # ==================== TOOL 16: prec_search ====================
     @server.tool(annotations=TOOL_ANNOTATIONS)
     @handle_tool_error
@@ -2075,13 +2087,32 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
 
         Search Korean Constitutional Court decisions.
 
+        Search scope: the default is full text (`search=2`, 본문 전문검색) because issue keywords
+        ("재판청구권 제척기간") rarely occur in a decision name (measured on 870 searches: hit@20 for issue
+        terms 0.00 with the old decision-name default, 0.82 with full text). Pass `search=1` for decision-name-only
+        search (사건명). The result carries `search_applied` (`defaulted: true` when the default was used).
+        `query="*"` (list/filter calls) sends no search scope.
+
+        Row order: with `search=1` and no `sort`, a keyword query (not "*") is re-ranked by 사건명 relevance
+        inside the first 100 upstream rows. A full-text search (`search=2`) keeps the upstream order (a title
+        match says nothing about body relevance). Pass `sort` to keep upstream order with `search=1` too.
+
+        Case number as query: `query="2013헌바1"` (exactly one 헌재 case number, nothing else; spaces such as
+        "2013 헌바 1" are removed) is routed to `nb` with `query="*"` when `nb` is not given and `search` is
+        omitted or 1 (the upstream rejects nb together with a query). The result has `query_routed_to_nb: true`
+        and `routed_nb` (and no `search_applied`). Routing is an exact lookup, so it always requests display=100,
+        page=1 (the routing note says so) because `nb` is a prefix match upstream: when
+        exactly one row matches exactly, `ranked_data` keeps only it. Mixed text, a quoted phrase
+        ('"2013헌바1"', full-text citation search) and an explicit `search=2` are not routed.
+
         Args:
-            query: Search keyword (default "*" for all)
+            query: Search keyword (default "*" for all). An issue keyword searches the decision text.
             display: Number of results per page (max 100, default 20)
             page: Page number (1-based, default 1)
             oc: Optional OC override (defaults to env var)
             type: Response format - "JSON" (default), "XML", or "HTML"
-            search: Search type (1=decision name, 2=full text, default 1); other values are rejected
+            search: Search scope (1=decision name, 2=full text). Default: 2 (full text) for a keyword
+                query; other values are rejected
             gana: Dictionary search (ga, na, da, ...)
             sort: Sort order - "lasc"|"ldes"|"dasc"|"ddes"|"nasc"|"ndes"|"efasc"|"efdes"
             date: Final date (YYYYMMDD). The upstream ignores `date`, so it is sent as
@@ -2097,8 +2128,14 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             Search results with Constitutional Court decision list or error
 
         Examples:
-            Search for decisions mentioning "벌금":
-            >>> detc_search(query="벌금", display=10)
+            Search the decision text for an issue (full text by default):
+            >>> detc_search(query="재판청구권 제척기간", display=10)
+
+            Decision-name search only:
+            >>> detc_search(query="벌금", search=1)
+
+            One case number (routed to nb):
+            >>> detc_search(query="2022헌마1312")
 
             Search by date:
             >>> detc_search(date=20150210)
@@ -2111,11 +2148,21 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             ed_yd = validate_date_range(ed_yd, "ed_yd")
         ed_yd, date_applied = guards.resolve_date_filter("detc", date, ed_yd)
         nb = guards.normalize_case_number(nb)
+        routed_nb = None
+        if not nb and search in (None, 1):
+            routed_nb = prec_extras.sole_constitutional_case_number(query)
+            if routed_nb:
+                nb = routed_nb
+                query = "*"
+                display, page, capped = 100, 1, None  # routing is an exact lookup; nb is a prefix match upstream
+        search_defaulted = False
+        if search is None and query != "*" and not nb:
+            search, search_defaulted = 2, True
         snake_params = {
             "oc": resolved_oc, "target": "detc", "type": type,
             "query": query, "display": display, "page": page,
         }
-        if search: snake_params["search"] = search
+        if search and not routed_nb: snake_params["search"] = search
         if gana: snake_params["gana"] = gana
         if sort: snake_params["sort"] = sort
         if ed_yd: snake_params["ed_yd"] = ed_yd
@@ -2132,11 +2179,33 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         response = run_search(
             get_client=_get_client, target="detc", query=query,
             snake_params=snake_params, response_type=type, display=display,
-            ranking_field=None if sort else "사건명", list_type="items", item_category="detc",
+            ranking_field=None if (sort or search == 2) else "사건명", list_type="items", item_category="detc",
             over_fetch_key="display",
         )
         guards.attach_filters_applied(response, date_applied)
         guards.check_nb_exactness(response, nb)
+        if isinstance(response, dict) and response.get("status") == "ok":
+            if search and not routed_nb:
+                response["search_applied"] = {
+                    "search": search, "scope": {1: "사건명", 2: "본문 전문검색"}[search],
+                    "defaulted": search_defaulted}
+            if routed_nb:
+                response["query_routed_to_nb"] = True
+                response["routed_nb"] = nb
+                guards.add_notes(response, f"query={routed_nb!r}는 헌재 사건번호 하나라서 nb={nb!r}로 조회했습니다 "
+                                 "(결정명 검색은 번호로 무관한 행을 돌려줍니다; nb는 업스트림에서 앞부분 일치라 "
+                                 "정확 일치 확인을 위해 display=100, page=1로 조회했습니다). 본문에 이 번호가 인용된 결정을 찾으려면 query='\"사건번호\"', search=2를 쓰세요")
+                rows = _ranked_rows(response, "Detc")
+                if rows is not None:
+                    exact = [r for r in rows if str(r.get("사건번호", "")).strip() == nb]
+                    total = str(response.get("ranked_data", {}).get("totalCnt", "")).strip()
+                    if not rows:
+                        response["hints"] = [
+                            "사건번호로 조회한 결과가 0건입니다: 헌재 결정례 DB에 수록되지 않은 사건이거나 번호가 다를 수 있습니다",
+                            "이 번호를 인용한 결정을 찾으려면 detc_search(query='\"사건번호\"', search=2)를 사용하세요"]
+                    elif not exact:
+                        guards.add_notes(response, f"정확히 일치하는 사건번호 {nb!r}는 처음 100건의 접두 일치 행에 없습니다. "
+                                         "번호를 확인하거나 nb로 page=2 이후를 조회하세요")
         return guards.add_warnings(response, capped, guards.nb_numeric_warning(nb))
 
     # ==================== TOOL 19: detc_service ====================
@@ -2213,7 +2282,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         page: int = 1,
         oc: Optional[str] = None,
         type: str = "JSON",
-        search: int = 1,
+        search: Optional[int] = None,
         inq: Optional[Union[str, int]] = None,
         rpl: Optional[int] = None,
         gana: Optional[str] = None,
@@ -2230,9 +2299,16 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         This tool searches Korean legal interpretation precedents issued by government
         agencies in response to inquiries about how to interpret specific laws.
 
-        Row order: without `sort`, a keyword query (not "*") is re-ranked by 안건명 relevance inside the
-        first 100 upstream rows. Earlier versions ranked on a field that does not exist, so rows came
-        back in upstream order; pass `sort` to keep upstream order.
+        Search scope: the default is full text (`search=2`, 본문 전문검색) because issue keywords
+        ("겸직 허가") rarely occur in an interpretation title (measured on 870 searches: hit@20 for issue terms
+        0.22 with the old title default, 0.79 with full text). Pass `search=1` for title-only search (안건명).
+        The result carries `search_applied` (`defaulted: true` when the default was used). `query="*"`
+        (list/filter calls) sends no search scope. There is no case-number parameter, so a case number as
+        query is not routed.
+
+        Row order: with `search=1` and no `sort`, a keyword query (not "*") is re-ranked by 안건명 relevance
+        inside the first 100 upstream rows. A full-text search (`search=2`) keeps the upstream order. Pass `sort`
+        to keep upstream order with `search=1` too.
 
         Args:
             query: Search keyword (default "*")
@@ -2240,7 +2316,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             page: Page number (1-based, default 1)
             oc: Optional OC override (defaults to env var)
             type: Response format - "JSON" (default), "XML", or "HTML"
-            search: 1=법령해석례명 (interpretation name, default), 2=본문검색 (full text); other values are rejected
+            search: 1=법령해석례명 (interpretation name), 2=본문검색 (full text). Default: 2 for a keyword query;
+                other values are rejected
             inq: Inquiry organization CODE (질의기관코드, digits, e.g. 1290000 for 국방부; see 질의기관코드 in
                 expc_search rows). Names are rejected with VALIDATION_ERROR: the upstream does not map a name to
                 a code and returns unrelated rows.
@@ -2257,8 +2334,11 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             Search results with legal interpretations list or error
 
         Examples:
-            Search for "임차":
-            >>> expc_search(query="임차", display=10, type="XML")
+            Search the interpretation text for an issue (full text by default):
+            >>> expc_search(query="겸직 허가", display=10)
+
+            Title-only search:
+            >>> expc_search(query="임차", search=1, display=10, type="XML")
 
             Search by date range:
             >>> expc_search(query="자동차", expl_yd="20240101~20241231", type="XML")
@@ -2267,6 +2347,9 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         resolved_oc = resolve_oc(override_oc=oc)
         page, display, capped = guards.cap_display(page, display)
         search, sort, gana, _ = guards.check_search_args("expc", search, sort, gana)
+        search_defaulted = False
+        if search is None and query != "*":
+            search, search_defaulted = 2, True
         inq = guards.validate_inq(inq)
         if reg_yd:
             reg_yd = validate_date_range(reg_yd, "reg_yd")
@@ -2275,8 +2358,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         snake_params = {
             "oc": resolved_oc, "target": "expc", "type": type,
             "query": query, "display": display, "page": page,
-            "search": search,
         }
+        if search: snake_params["search"] = search
         if inq: snake_params["inq"] = inq
         if rpl is not None: snake_params["rpl"] = rpl
         if gana: snake_params["gana"] = gana
@@ -2289,9 +2372,13 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         response = run_search(
             get_client=_get_client, target="expc", query=query,
             snake_params=snake_params, response_type=type, display=display,
-            ranking_field=None if sort else "안건명", list_type="items", item_category="expc",
+            ranking_field=None if (sort or search == 2) else "안건명", list_type="items", item_category="expc",
             over_fetch_key="display",
         )
+        if isinstance(response, dict) and response.get("status") == "ok" and search:
+            response["search_applied"] = {
+                "search": search, "scope": {1: "안건명", 2: "본문 전문검색"}[search],
+                "defaulted": search_defaulted}
         return guards.add_warnings(response, capped)
 
     # ==================== TOOL 17: expc_service ====================
@@ -2373,7 +2460,7 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         page: int = 1,
         oc: Optional[str] = None,
         type: str = "JSON",
-        search: int = 1,
+        search: Optional[int] = None,
         cls: Optional[str] = None,
         gana: Optional[str] = None,
         date: Optional[int] = None,
@@ -2390,13 +2477,25 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         Administrative appeals are decisions made by administrative tribunals
         on appeals against government agency dispositions.
 
+        Search scope: the default is full text (`search=2`, 본문 전문검색) because issue keywords
+        ("영업정지 감경") rarely occur in a case name (measured on 870 searches: hit@20 for issue terms 0.01
+        with the old case-name default, 0.42 with full text). Pass `search=1` for case-name-only search (사건명).
+        The result carries `search_applied` (`defaulted: true` when the default was used). `query="*"`
+        (list/filter calls) sends no search scope. There is no case-number parameter, so a case number as
+        query is not routed.
+
+        Row order: with `search=1` and no `sort`, a keyword query (not "*") is re-ranked by 사건명 relevance
+        inside the first 100 upstream rows. A full-text search (`search=2`) keeps the upstream order. Pass `sort`
+        to keep upstream order with `search=1` too.
+
         Args:
             query: Search keyword (default "*")
             display: Number of results per page (max 100, default 20)
             page: Page number (1-based, default 1)
             oc: Optional OC override (defaults to env var)
             type: Response format - "JSON" (default), "XML", or "HTML"
-            search: 1=사건명 (case name, default), 2=본문검색 (full text); other values are rejected
+            search: 1=사건명 (case name), 2=본문검색 (full text). Default: 2 for a keyword query;
+                other values are rejected
             cls: Decision type filter (재결구분코드, digits, e.g. 429022; non-numeric values are rejected)
             gana: Dictionary search (ga, na, da, ...)
             date: Decision date (YYYYMMDD). The upstream ignores `date`, so it is sent as
@@ -2415,8 +2514,11 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
             Search for all decisions:
             >>> decc_search(type="XML")
 
-            Search by keyword:
-            >>> decc_search(query="과징금", display=10, type="XML")
+            Search the decision text for an issue (full text by default):
+            >>> decc_search(query="영업정지 감경", display=10)
+
+            Case-name search only:
+            >>> decc_search(query="과징금", search=1, display=10, type="XML")
 
             Search by date range:
             >>> decc_search(rsl_yd="20200101~20201231", type="XML")
@@ -2425,6 +2527,9 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         resolved_oc = resolve_oc(override_oc=oc)
         page, display, capped = guards.cap_display(page, display)
         search, sort, gana, cls = guards.check_search_args("decc", search, sort, gana, cls)
+        search_defaulted = False
+        if search is None and query != "*":
+            search, search_defaulted = 2, True
         if dpa_yd:
             dpa_yd = validate_date_range(dpa_yd, "dpa_yd")
         if rsl_yd:
@@ -2433,8 +2538,8 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         snake_params = {
             "oc": resolved_oc, "target": "decc", "type": type,
             "query": query, "display": display, "page": page,
-            "search": search,
         }
+        if search: snake_params["search"] = search
         if cls: snake_params["cls"] = cls
         if gana: snake_params["gana"] = gana
         if dpa_yd: snake_params["dpa_yd"] = dpa_yd
@@ -2444,10 +2549,14 @@ For article_citation: you MUST first call eflaw_search to get the current MST (�
         response = run_search(
             get_client=_get_client, target="decc", query=query,
             snake_params=snake_params, response_type=type, display=display,
-            ranking_field=None if sort else "사건명", list_type="items", item_category="decc",
+            ranking_field=None if (sort or search == 2) else "사건명", list_type="items", item_category="decc",
             over_fetch_key="display",
         )
         guards.attach_filters_applied(response, date_applied)
+        if isinstance(response, dict) and response.get("status") == "ok" and search:
+            response["search_applied"] = {
+                "search": search, "scope": {1: "사건명", 2: "본문 전문검색"}[search],
+                "defaulted": search_defaulted}
         return guards.add_warnings(response, capped, guards.DPA_YD_WARNING if dpa_yd else None)
 
     # ==================== TOOL 19: decc_service ====================

@@ -27,12 +27,22 @@ CASE_TYPE_ALIASES = {"행정": "일반행정", "조세": "세무", "세금": "�
 _CODE_TO_NAME = {v: k for k, v in CASE_TYPES.items()}
 
 
-_CONSTITUTIONAL_KIND_RE = re.compile(r"\d{2,4}(헌가|헌바|헌마|헌라|헌사|헌아|헌나|헌다)\d")
 
 
 def is_constitutional_case_number(query: str) -> bool:
     """헌재 사건번호 (헌가/헌바/헌마/헌라/헌사/헌아...): not in the court precedent index; use detc_search."""
-    return bool(_CONSTITUTIONAL_KIND_RE.fullmatch((query or "").strip()))
+    return sole_constitutional_case_number(query) is not None
+
+
+_DETC_SOLE_RE = re.compile(r"(\d{2,4})\s*(헌가|헌바|헌마|헌라|헌사|헌아|헌나|헌다)\s*(\d{1,6})")
+
+
+def sole_constitutional_case_number(query: str) -> Optional[str]:
+    """``2013헌바1`` when ``query`` is exactly one 헌재 사건번호 (spaces such as ``2013 헌바 1`` are removed,
+    full-width digits become ASCII), else None. Quoted phrases and mixed text are not case numbers here."""
+    from .law_extras import ascii_digits
+    m = _DETC_SOLE_RE.fullmatch(ascii_digits(query or "").strip())
+    return f"{m.group(1)}{m.group(2)}{m.group(3)}" if m else None
 
 
 def sole_case_number(query: str) -> Optional[str]:

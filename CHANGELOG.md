@@ -8,6 +8,12 @@ All notable changes to LexLink are documented here in both English and Korean.
 
 ### Unreleased
 
+#### detc/expc/decc_search default to full-text scope (+ detc case-number routing)
+- **Default change:** `detc_search`, `expc_search` and `decc_search` with a keyword `query` now search the body text (`search=2`) instead of the decision/title name (`search=1`), exactly like `prec_search`. Measured in experiment 020 (870 searches), hit@20 for issue-term queries: detc 0.00 -> 0.82, expc 0.22 -> 0.79, decc 0.01 -> 0.42; statute/article queries were not worse (detc 0.33 -> 0.50, expc 0.61 -> 0.75, decc 0.00 -> 0.09). `search` is now `Optional[int] = None`; pass `search=1` for the old name-only search. `query="*"` sends no search scope. The response carries `search_applied {search, scope, defaulted}`.
+- Ranking: title re-ranking (사건명/안건명) only for `search=1` without `sort`; full-text results keep the upstream order (relevance order, not date order for these three tools).
+- `detc_search`: a `query` that is exactly one Constitutional Court case number (`2013헌바1`, `2022 헌마 1312`) is routed to `nb` with `query="*"` when `nb` is not given and `search` is omitted or 1; the response has `query_routed_to_nb: true`, `routed_nb` and a `notes` entry (0 rows add `hints`). Quoted phrases, mixed text and an explicit `search=2` are not routed. `expc_search`/`decc_search` have no case-number parameter and are not routed.
+- Internal callers (`law_constitutional_check`, `legal_resolver`, `chain_dispute_prep`, `check_precedent_odds`) always pass their own `search` and are unchanged.
+
 #### `law_as_of`: in-force period, data warnings, period paging
 - New `in_force_period {start, end, end_inclusive: true, open_ended}` on every `in_force: true` result, on the `ARTICLE_NOT_FOUND` error, on `article.in_force_period` (plus `upstream_article_effective_date`) and on every `period.revisions[]` row. `end` is the day before the next listed version's 시행일 (`null` = no later version). `valid_from`/`valid_until` stay as aliases (in period rows they are clipped to the query range; `in_force_period` is the version's full run).
 - New `data_warnings` (list, always present) and `announcement_order_inversion`. When a version is promulgated before an earlier-in-force one (공포 order != 시행 order), law.go.kr can serve a body that lacks the intermediate amendment (measured: 민법 MST 60400, 79107). With an article, LexLink compares the article with that earlier version (and the next one) and warns `SUSPECT_SNAPSHOT_ARTICLE_MISSING` / `_PARAGRAPHS_DROPPED` / `_WORDING_FLIP`; period queries warn `..._BETWEEN_IDENTICAL_VERSIONS` when one version differs from identical neighbours. Without an article only a `notice` (`ANNOUNCEMENT_ORDER_INVERSION`). Text is never altered; an article missing in the chosen version is still `ARTICLE_NOT_FOUND` but now carries the warning. Extra upstream calls only when an inversion exists or the article is missing.
@@ -727,6 +733,12 @@ All notable changes to LexLink are documented here in both English and Korean.
 ## 한국어 (Korean)
 
 ### 미배포 (Unreleased)
+
+#### detc/expc/decc_search 기본 검색범위를 본문 전문검색으로 변경 (+ detc 사건번호 라우팅)
+- **기본값 변경:** `detc_search`, `expc_search`, `decc_search`는 키워드 `query`일 때 결정명·안건명(`search=1`) 대신 본문(`search=2`)을 검색합니다(`prec_search`와 같은 규칙). 실험 020(870회 검색)의 쟁점어 hit@20: detc 0.00 -> 0.82, expc 0.22 -> 0.79, decc 0.01 -> 0.42. 조문·법령 질의도 나빠지지 않았습니다(detc 0.33 -> 0.50, expc 0.61 -> 0.75, decc 0.00 -> 0.09). `search`는 `Optional[int] = None`이며 이전 동작은 `search=1`로 지정합니다. `query="*"`는 검색범위를 보내지 않습니다. 응답에 `search_applied {search, scope, defaulted}`가 붙습니다.
+- 순위: 사건명/안건명 재정렬은 `search=1`이고 `sort`가 없을 때만 합니다. 본문 검색은 업스트림 순서(이 세 도구는 날짜순이 아닌 관련도 순)를 유지합니다.
+- `detc_search`: `query`가 헌재 사건번호 하나뿐이면(`2013헌바1`, `2022 헌마 1312`) `nb`가 없고 `search`가 생략·1일 때 `query="*"`와 `nb`로 바꿔 조회합니다. 응답에 `query_routed_to_nb: true`, `routed_nb`, `notes`가 붙고 0건이면 `hints`가 붙습니다. 따옴표 구문, 섞인 문장, 명시적 `search=2`는 라우팅하지 않습니다. `expc_search`/`decc_search`는 사건번호 변수가 없어 라우팅하지 않습니다.
+- 내부 호출(`law_constitutional_check`, `legal_resolver`, `chain_dispute_prep`, `check_precedent_odds`)은 항상 자기 `search`를 명시하므로 변하지 않습니다.
 
 #### 실험 014에서 나온 `prec_status` 누락 보완 (찾는 변경 판결 증가, 호출 수 동일)
 - 사건번호: `4290민재항고58`처럼 종류 목록에 없는 사건 종류도 해석합니다(실제 종류를 목록에 추가; 목록에 없는 종류는 입력한 대상 사건번호에만 붙여 쓴 형태로 허용하고 본문 스캔에는 쓰지 않아 `제92조의6` 같은 조문 번호가 사건번호가 되지 않음). 전에는 `VALIDATION_ERROR`였고 이제 색인에 없으면 `case_not_found`입니다. 두 글자 이상 종류와 번호 사이의 공백 한 칸(`4294민상 1350`)과 판결·결정에 붙여 쓴 번호(`93누21255판결은`)도 그 사건으로 읽습니다.

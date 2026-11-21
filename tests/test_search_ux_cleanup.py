@@ -102,7 +102,7 @@ def test_detc_search_past_end_raw_content_matches_empty_ranked_data(monkeypatch)
             root["detc"] = rows
         return json.dumps({"DetcSearch": root}, ensure_ascii=False)
 
-    out = _tool(monkeypatch, "detc_search", body)(query="재산권", page=11, display=10)
+    out = _tool(monkeypatch, "detc_search", body)(query="재산권", page=11, display=10, search=1)
     assert out["ranked_data"]["detc"] == []
     assert json.loads(out["raw_content"])["DetcSearch"]["page"] == "11"
     assert json.loads(out["raw_content"])["DetcSearch"]["detc"] == []
