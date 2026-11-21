@@ -8,6 +8,14 @@ All notable changes to LexLink are documented here in both English and Korean.
 
 ### Unreleased
 
+#### prec_search defaults, case-number routing, case_type, duplicates, date warnings
+- **Default change:** `prec_search` with a keyword `query` now searches the judgment text (`search=2`) instead of case names (`search=1`); issue keywords returned 0 rows under the old default (91 of 93 family-law issue terms, exp 012). `search=1`/`3` still work when passed. `search_applied` shows the scope and `defaulted`. Full-text and 참조판례 searches keep the upstream order (the 사건명 re-ranking applies to `search=1` only). `query="*"` sends no scope. Internal callers (chain tools, `check_precedent_odds`, `legal_resolver`, `prec_status`) do not use the tool function and keep their explicit `search` values.
+- `query` that is exactly one case number (`63다131`, `2013다61381`, `4294민상1350`) is routed to `nb` when `nb` is not given and `search` is omitted or 1 (`query_routed_to_nb: true`, `routed_nb`, a note). Mixed text, quoted phrases, joined numbers and explicit `search=2/3` are not routed.
+- New `case_type` (민사/형사/가사/특허/일반행정/세무 or the 6-digit 사건종류코드): the upstream has no such parameter, so it is a post-filter over one 100-row upstream page (`display` ignored, `totalCnt` unfiltered, `case_type_filter` with `rows_before_filter`/`rows_after_filter`/`upstream_total`). JSON only.
+- Rows with the same 사건번호, 선고일자 and 법원명 but different 판례일련번호 (possibly copies from different sources with different content) are grouped in `ranked_data` (`same_case_ids`, `duplicate_groups`, `rows_before_grouping`); `raw_content` is untouched.
+- `date_warning` on search rows and `warnings` (`date_before_case_year`, `date_before_lower_court`) in `prec_service` when the upstream 선고일자 is impossible; the date is never changed.
+- Server instructions and docstrings no longer present `sections="summary"` as the way to read case law (it has no body); omit `sections` for the size-based default.
+
 #### Size-aware responses for long texts (default behaviour change)
 - `prec_service`, `detc_service`, `expc_service`, `decc_service`, `law_service`, `eflaw_service` gain `sections="brief"` and the paging parameters `offset` (int >= 0) and `max_chars` (int 1000..24000, default 20000 when paging). `law_service`/`eflaw_service` also gain `sections` (`"brief"`|`"full"`; `"summary"` is a `VALIDATION_ERROR`). All lengths are characters (Unicode code points), not bytes.
 - **Default change:** when `sections` is omitted, a body of **20,000 characters or less** (case law: the body field 판례내용/전문/이유/이유; laws: the rendered article text of all 조문단위, and only when `jo` is not given) is returned whole exactly as before; a **longer** one comes back as the brief view with `truncated: true`, `truncated_fields`, `truncated_note`, `truncated_detail` and the size fields. `sections="full"` without paging returns everything exactly as before (citation verification relies on it). Threshold: `sizing.AUTO_BRIEF_THRESHOLD = 20000` (strictly greater than 20,000 triggers brief).
@@ -706,6 +714,14 @@ All notable changes to LexLink are documented here in both English and Korean.
 ## 한국어 (Korean)
 
 ### 미배포 (Unreleased)
+
+#### prec_search 기본값, 사건번호 라우팅, case_type, 중복 묶음, 날짜 경고
+- **기본 동작 변경:** `prec_search`는 키워드 `query`를 이제 판결 본문(`search=2`)에서 찾는다(종전 사건명 `search=1`에서는 쟁점어가 0건: 가사 쟁점어 93개 중 91개, exp 012). `search=1`/`3`을 명시하면 그대로 동작한다. `search_applied`에 범위와 `defaulted`가 나온다. 본문·참조판례 검색은 업스트림 순서를 유지한다(사건명 재정렬은 `search=1`만). `query="*"`는 범위를 보내지 않는다. 내부 호출자(chain 도구, `check_precedent_odds`, `legal_resolver`, `prec_status`)는 이 도구 함수를 거치지 않고 명시한 `search`를 그대로 쓴다.
+- `query`가 사건번호 하나(`63다131`, `2013다61381`, `4294민상1350`)이면 `nb`가 없고 `search`가 생략·1일 때 `nb`로 라우팅한다(`query_routed_to_nb: true`, `routed_nb`, 안내). 혼합 문장, 따옴표 인용, 결합 번호, 명시 `search=2/3`는 라우팅하지 않는다.
+- 새 `case_type`(민사/형사/가사/특허/일반행정/세무 또는 6자리 사건종류코드): 업스트림에 해당 변수가 없어 100행 한 쪽을 받아 거르는 후처리다(`display` 무시, `totalCnt`는 거르기 전 값, `case_type_filter`에 `rows_before_filter`/`rows_after_filter`/`upstream_total`). JSON만.
+- 사건번호·선고일자·법원명이 같고 판례일련번호가 다른 행(출처가 달라 내용이 다를 수 있음)은 `ranked_data`에서 묶는다(`same_case_ids`, `duplicate_groups`, `rows_before_grouping`). `raw_content`는 그대로.
+- 선고일자가 불가능하면 검색 행에 `date_warning`, `prec_service`에 `warnings`(`date_before_case_year`, `date_before_lower_court`)를 단다. 날짜는 바꾸지 않는다.
+- 서버 안내와 도구 설명이 더는 `sections="summary"`를 판례를 읽는 방법으로 권하지 않는다(본문이 없다). 크기 기본값을 쓰려면 `sections`를 생략한다.
 
 #### 긴 본문의 크기 인식 응답 (기본 동작 변경)
 - `prec_service`, `detc_service`, `expc_service`, `decc_service`, `law_service`, `eflaw_service`에 `sections="brief"`와 쪽 나누기 `offset`(0 이상 정수), `max_chars`(1000~24000, 쪽 나누기 기본 20000)를 추가했다. `law_service`/`eflaw_service`에는 `sections`(`"brief"`|`"full"`, `"summary"`는 `VALIDATION_ERROR`)도 생겼다. 길이 단위는 바이트가 아니라 글자(유니코드 코드포인트)다.

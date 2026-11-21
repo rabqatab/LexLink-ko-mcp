@@ -45,7 +45,7 @@
 
 | Tool | 필수 인자 | 선택 인자 (기본값) |
 |---|---|---|
-| `prec_search` | - | query=*, display=20, page=1, type=JSON, search, sort, org, curt, jo, gana, date, prnc_yd, nb, dat_src_nm, pop_yn |
+| `prec_search` | - | query=*, display=20, page=1, type=JSON, search(기본 2=본문), sort, org, curt, jo, gana, date, prnc_yd, nb, dat_src_nm, pop_yn, case_type |
 | `prec_service` | id | lm, sections, offset, max_chars, type=JSON |
 | `prec_status` | - (case_number 또는 id 중 하나) | case_number, id, max_scan=5 |
 | `law_constitutional_check` | law_name, article | article_branch=0, max_scan=6 |
@@ -236,7 +236,7 @@ for t in asyncio.run(create_server().list_tools()):
 
 - 기본: 이미 가져온 내용은 자르지 않습니다. JSON `raw_content`는 요청한 페이지의 행만 담습니다.
 - `SLIM_RESPONSE=true`: `ranked_data`가 있으면 `raw_content`를 지우고, 압축 상한(발췌 500자, 상위 10/3건, 위임 항목 80건)을 유지하며, 20,000바이트를 넘는 결과는 줄이고 `truncated`, `truncated_notes`(그리고 `truncated_fields`)로 표시합니다. 이 모드에서는 `sections="full"` 전문을 받을 수 없습니다.
-- `jo`, `page`/`display`, `sections="summary"`로 나누어 조회하세요.
+- `jo`, `page`/`display`로 나누어 조회하세요. 판례 본문은 `sections`를 생략하거나 `sections="full"`에 `offset`/`max_chars`를 쓰세요(`sections="summary"`는 본문 없는 판시사항·메타데이터만 줍니다).
 
 ---
 
@@ -251,7 +251,7 @@ for t in asyncio.run(create_server().list_tools()):
 - **계정 단위 API 신청**: OC마다 신청한 API 범위가 다릅니다. 신청하지 않은 API는 `API_NOT_SUBSCRIBED` 오류가 됩니다(예: 현행법령 시행일 본문 `eflaw`는 `law_service`/`eflaw_josub`으로 대신할 수 있음). 같은 페이지가 잘못된 인자(없는 id, 해당 MST에 없는 `ef_yd`)와 본문 API만 미신청인 계정에도 나옵니다(바이트 단위로 동일). 그래서 본문(lawService) 호출에서 이 페이지가 오면 같은 target의 목록 조회를 **추가로 1회** 호출합니다(오류 경로에서만, 10초 제한): 목록도 미신청이면 `API_NOT_SUBSCRIBED`, 목록이 정상이면 원인을 알 수 없으므로(인자 거부 또는 본문 API만 미신청) `UPSTREAM_HTML_ERROR` + `may_be_not_subscribed: true`(대안 도구 안내 유지), 확인 불가면 '확인하지 못함' 힌트가 붙은 `API_NOT_SUBSCRIBED`입니다. 잘못된 `type`은 호출 전 `VALIDATION_ERROR`입니다.
 - **서버 IP 등록**: law.go.kr은 OC와 호출 IP를 함께 검증합니다. 등록되지 않은 IP에서는 "사용자 정보 검증에 실패하였습니다" 오류가 납니다([OPERATIONS.md](OPERATIONS.md)).
 - **`simplify_article`**: 본문을 쉬운 말로 바꾸지 않고(`text_simplified: false`) 용어 해설도 제공하지 않습니다(`glossary_status: withheld`). 법령용어DB는 배우자-반려자, 위법행위-불법행위, 재산관리인-관재인, 피한정후견인-한정치산자처럼 법적 의미가 다른 쌍을 '동의어'로 표시하고, 관계 종류(동의어/연관어 등)로는 이를 정상 쌍과 가려낼 수 없으며 DB에 `채급자` 같은 항목도 있습니다. 용어는 `lstrm_search`/`lstrm_service`로 직접 확인하세요.
-- **`prec_search`의 `nb`는 접두 일치이고 결합사건은 첫 번호로만 색인됩니다.** `nb=2013므`는 2013년 므 사건 전체(11건)를, `nb=2013므3`은 `2013므3383`만 돌려줍니다. 결합사건 "94므1713, 1720"은 `nb=94므1713`으로만 찾아지고 `nb=94므1720`은 0건이며, `nb="94므1713, 1720"`처럼 쉼표로 묶으면 LexLink가 `VALIDATION_ERROR`로 거부합니다(번호마다 따로 호출). `query`는 사건명 검색(`search=1`)이고 사건번호를 본문에서 찾으려면 `search=2`와 따옴표 구문(`query='"94므1713"'`)을 쓰세요(따옴표가 없으면 `70도29`가 6,403건과 맞고 따옴표를 쓰면 3건).
+- **`prec_search`의 `nb`는 접두 일치이고 결합사건은 첫 번호로만 색인됩니다.** `nb=2013므`는 2013년 므 사건 전체(11건)를, `nb=2013므3`은 `2013므3383`만 돌려줍니다. 결합사건 "94므1713, 1720"은 `nb=94므1713`으로만 찾아지고 `nb=94므1720`은 0건이며, `nb="94므1713, 1720"`처럼 쉼표로 묶으면 LexLink가 `VALIDATION_ERROR`로 거부합니다(번호마다 따로 호출). `query`는 이제 기본이 본문 검색(`search=2`)이고, 번호 하나만 넣은 `query`(`63다131`)는 `nb`로 라우팅됩니다(아래 4.1). 사건번호를 인용한 판결을 본문에서 찾으려면 `search=2`와 따옴표 구문(`query='"94므1713"'`)을 쓰세요(따옴표가 없으면 `70도29`가 6,403건과 맞고 따옴표를 쓰면 3건).
 - **대법원 2015.6.24. 선고 2013므3963, 3970 판결은 법제처 판례 DB에 없습니다(검색 버그가 아니라 업스트림 공백).** 2026-11-01 직접 확인: `nb`를 `2013므3963` / `2013므3970` / `2013므3963, 3970` / `2013므3963,2013므3970` / `2013므3963ㆍ3970` / `2013므 3963`으로 호출하면 모두 0건, `nb=2013므`(접두)는 11건(2013므4133, 568, 2397, 2441, 4591, 4201, 2250, 1196, 5495, 3383, 1455)에 3963·3970이 없고, 선고일 2015-06-24 전체 57건에도 므 사건이 없으며, LexLink의 검색 계층(`run_search`)을 거치지 않고 HTTP 클라이언트로 `lawSearch.do`를 직접 호출해도 같은 결과입니다. 이런 판결은 `prec_search`/`prec_service`로 찾을 수 없으니 "확인 필요"로 다루세요. 다만 이 번호는 다른 판결 안에서 인용으로는 나옵니다: 대법원 2026.1.29. 선고 2025므10716 판결(판례일련번호 616571)의 본문이 "대법원 2015. 6. 24. 선고 2013므3963, 3970 판결 참조"(민법 제766조 제1항 단기소멸시효 설시에 붙은 인용)라고 적고 있어 `prec_search query='"2013므3963"' search=2`로 인용한 판결은 찾을 수 있습니다(원 판결의 본문은 아님). `prec_status`는 이런 사건번호에 `case_not_found`를 돌려줍니다.
 - **`prec_status`**: 변경 표시를 찾은 경우에만 `overruled_found`입니다. `no_overruling_found_in_searched_set`은 변경되지 않았다는 뜻이 아니며, 법제처가 본문을 제공하지 않는 판결, 인용 표기가 다른 판결, 목록 상한(3쪽 300건)·`max_scan`을 넘는 후보는 확인하지 못합니다. 방식과 측정은 CHANGELOG 참조.
 - **`check_precedent_odds`**: 판례 주문의 분포이며 승소율이나 결과 예측이 아닙니다. 집계는 `sample`에 적힌 표본(검색 결과 중 사건명·판시사항·판결요지에 질의의 핵심 단어가 있고 본문 조회가 된 앞쪽 몇 건)에 대한 것이고 무작위·전수 표본이 아닙니다. 관련성 표시(`low_relevance`, `uncounted_cases`)는 질의 단어와의 글자 일치 검사라 약어·바꿔 말한 표현은 맞아도 빠질 수 있고(상간녀 위자료: 찾은 1건이 미집계) 흔한 단어는 무관한 판례도 통과시킵니다.
@@ -944,7 +944,7 @@ http://www.law.go.kr/DRF/lawSearch.do?OC=test&target=lnkOrg&org=3270000&type=JSO
 | OC | string(필수) | 사용자 이메일의 ID |
 | target | string: prec(필수) | 서비스 대상 |
 | type | char(필수) | 출력 형태: HTML/XML/JSON |
-| search | int | 검색범위 (기본: 1 판례명) 2: 본문검색 |
+| search | int | 검색범위. 업스트림 기본은 1(판례명)이나 **LexLink `prec_search`는 키워드 query에 기본 2(본문 전문검색)** 를 보낸다(`query="*"`이면 보내지 않음). 1=판례명, 3=참조판례. 응답의 `search_applied`에 값과 `defaulted`가 나온다 |
 | query | string | 검색을 원하는 질의 |
 | display | int | 검색된 결과 개수 (default=20, max=100) |
 | page | int | 검색 결과 페이지 (default=1) |
@@ -964,6 +964,13 @@ http://www.law.go.kr/DRF/lawSearch.do?OC=test&target=lnkOrg&org=3270000&type=JSO
 http://www.law.go.kr/DRF/lawSearch.do?OC=test&target=prec&type=XML&query=담보권
 http://www.law.go.kr/DRF/lawSearch.do?OC=test&target=prec&type=HTML&query=담보권&curt=대법원
 ```
+
+**LexLink `prec_search` 동작 (2026-11-20, 라이브 확인)**
+- **기본 검색범위는 본문(`search=2`).** 사건명(`search=1`) 기본에서는 쟁점어가 거의 0건이었다(가사 쟁점어 93개 중 91개가 0건, legal-research exp 012). `search=1`/`3`을 명시하면 그대로 쓴다. 전문·참조판례 검색은 업스트림 순서(선고일 내림차순)를 유지하고, 사건명 관련도 재정렬은 `search=1`일 때만 한다.
+- **사건번호 하나만 `query`로 넣으면 `nb`로 라우팅**(`nb`가 없고 `search`가 생략·1일 때): `query="63다131"`은 사건명 검색이 무관한 약 99행을 돌려주지만 `nb`는 1건이다. 응답에 `query_routed_to_nb: true`, `routed_nb`, 안내 `notes`가 붙는다. `63다131 손해배상`, `"63다131"`(따옴표 인용 검색), `94므1713, 1720`, `search=2/3`는 라우팅하지 않는다.
+- **`case_type`(사건종류)**: 업스트림에 사건종류 변수가 없다(알 수 없는 변수는 무시됨; `org`는 법원종류 400201/400202뿐, `curt`는 법원명). 행에는 `사건종류명`/`사건종류코드`가 있다(민사 400101, 형사 400102, 가사 400103, 특허 400106, 일반행정 400107, 세무 400108). `case_type`은 LexLink가 업스트림 한 쪽(100행)을 받아 거르는 후처리다: `page`는 100행 단위 쪽이고 `display`는 무시되며 `totalCnt`는 거르기 전 건수다. `case_type_filter`에 `rows_before_filter`/`rows_after_filter`/`upstream_total`이 나온다(예: 가사 쟁점어 100행 중 22행). 남은 행이 적어도 다음 쪽에 더 있을 수 있다. `type=JSON`만 된다. 가사 법원명(`curt=서울가정법원`)과 함께 쓰면 좁히기 쉽다.
+- **같은 사건번호·선고일자·법원명 묶음**: 업스트림은 같은 번호·날짜·법원의 행을 다른 판례일련번호로 여러 번 돌려주기도 한다(92므68 = 602511/123909, 93스6 = 604435/189896/603259). 데이터출처가 다른 사본일 수 있어(예 2024두67238: 대법원 vs 지방세법령정보시스템) 본문·판시사항·판결유형·사건종류가 다를 수 있다. `ranked_data`는 그룹당 한 행(데이터출처명 `대법원` 우선, 다음으로 판시사항이 있는 행, 아니면 업스트림 순서)만 두고 `same_case_ids`에 나머지 번호를 적는다. `duplicate_groups[].members`는 모든 번호의 데이터출처명·판결유형·사건종류명·사건명과 대표 행과 다른 필드(`differs_from_representative`)를 담고, `rows_before_grouping`은 묶기 전 행 수다. `rank`에 빈 번호가 생기고 한 쪽이 `display`보다 적을 수 있다. `raw_content`(있으면)는 업스트림 행 그대로다. 같은 쪽 안에서만 비교한다. 어느 번호를 읽었는지 기록할 것.
+- **선고일자 경고**: 선고일자의 연도가 사건번호 연도보다 앞서면(2024므14761, 판례일련번호 609449, 선고일자 2023.12.26) 행에 `date_warning`, 결과에 `date_warning_rows`가 붙는다. 사건번호 연도는 두 자리(63다131 = 1963)와 단기(4294민상1350 = 1961)를 환산한다. `prec_service`는 같은 검사에 더해 본문 `【원심판결】` 뒤의 첫 날짜보다 선고일자가 앞서면 `warnings`에 `date_before_lower_court`를 단다. 업스트림 값은 바꾸지 않는다.
 
 ---
 
