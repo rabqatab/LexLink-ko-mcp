@@ -37,7 +37,7 @@ def test_description_head_and_schema_point_to_law_as_of(as_of):
         props = tools[name].parameters["properties"]
         assert "description" in props["id"] and "description" in props["mst"]
     props = tools["law_as_of"].parameters["properties"]
-    assert set(props) == {"law_name", "as_of", "article", "article_branch", "as_of_end", "oc", "type"}
+    assert set(props) == {"law_name", "as_of", "article", "article_branch", "as_of_end", "period_after", "oc", "type"}
     assert all("description" in props[k] for k in ("law_name", "as_of", "article", "article_branch", "as_of_end"))
     assert tools["law_as_of"].parameters["required"] == ["law_name", "as_of"]
     assert "description" in tools["eflaw_search"].parameters["properties"]["nw"]

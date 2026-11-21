@@ -410,3 +410,125 @@ def expired_unknown(cands: list[dict]) -> bool:
         return False
     statuses = {c["row"].get("현행연혁코드", "") for c in cands}
     return not (statuses & {"현행", "시행예정"}) and not is_repeal(cands[-1]["row"])
+
+
+# ---------------------------------------------------------------------------
+# data_warnings: upstream snapshots that look stale (공포 order != 시행 order)
+# ---------------------------------------------------------------------------
+
+def _announce_key(c: dict) -> tuple:
+    row = c["row"]
+    return (row.get("공포일자", "") or "", _int(row.get("공포번호")))
+
+
+def announcement_inversion(cands: list[dict], chosen: dict) -> Optional[dict]:
+    """The earlier-in-force candidate that was *promulgated later* than ``chosen``, or ``None``.
+
+    law.go.kr builds each (MST, 시행일자) body from that amendment's own chain. When an amendment
+    promulgated first takes effect after one promulgated later (공포 A < 공포 B but 시행 A > 시행 B),
+    the body served for A can lack B's changes (measured: 민법 MST 60400 / 79107). The returned
+    candidate is the one whose changes the chosen body may be missing (latest 공포 among them).
+    An empty 공포일자 on either side means unknown, never "earliest": no inversion is reported.
+    """
+    mine = _announce_key(chosen)
+    if not re.fullmatch(r"\d{8}", mine[0]):
+        return None
+    earlier = [c for c in cands if c["effective_date"] < chosen["effective_date"]
+               and re.fullmatch(r"\d{8}", _announce_key(c)[0]) and _announce_key(c) > mine]
+    return max(earlier, key=_announce_key) if earlier else None
+
+
+def _norm(text: Optional[str]) -> str:
+    """Comparison form: no whitespace, 〈〉 as <>, tag dates as Y.M.D whatever the separator (. ㆍ ·)."""
+    t = (text or "").replace("〈", "<").replace("〉", ">")
+    t = re.sub(r"(\d{4})\s*[.ㆍ·]\s*(\d{1,2})\s*[.ㆍ·]\s*(\d{1,2})", r"\1.\2.\3", t)
+    return re.sub(r"\s+", "", t)
+
+
+def same_text(a: Optional[str], b: Optional[str]) -> bool:
+    return _norm(a) == _norm(b)
+
+
+def paragraph_count(text: Optional[str]) -> int:
+    """Number of distinct circled-number 항 markers (①..⑳); they only appear as paragraph numbers."""
+    return len({ch for ch in (text or "") if ch in _CIRCLED})
+
+
+_TAG_RE = re.compile(r"<[^<>]*?(?:개정|신설|삭제|제정)[^<>]*>|<\s*\d{4}\s*[.ㆍ·]\s*\d{1,2}\s*[.ㆍ·]\s*\d{1,2}[^<>]*>")
+_TAG_DATE_RE = re.compile(r"(\d{4})\s*[.ㆍ·]\s*(\d{1,2})\s*[.ㆍ·]\s*(\d{1,2})")
+
+
+def latest_tag_date(text: Optional[str]) -> Optional[str]:
+    """Latest YYYYMMDD in the text's own amendment tags (<개정 2002.1.14>, <신설 ...>, <삭제 ...>), or None."""
+    found = []
+    for tag in _TAG_RE.findall((text or "").replace("〈", "<").replace("〉", ">")):
+        for y, m, d in _TAG_DATE_RE.findall(tag):
+            try:
+                found.append(date(int(y), int(m), int(d)).strftime("%Y%m%d"))
+            except ValueError:
+                pass
+    return max(found) if found else None
+
+
+def lacks_later_amendment(chosen_text: Optional[str], other_text: Optional[str]) -> bool:
+    """True when ``other_text`` carries an amendment tag dated later than anything in ``chosen_text``.
+
+    This is the signature of a stale snapshot: the chosen body does not show an amendment that the
+    neighbour shows. A difference explained by the chosen text's own (equal or later) tag is a
+    legitimate amendment, and a neighbour without any tag gives no evidence.
+    """
+    other = latest_tag_date(other_text)
+    if other is None:
+        return False
+    mine = latest_tag_date(chosen_text)
+    return mine is None or other > mine
+
+
+def assess_snapshot(chosen_text: Optional[str], inverted_text: Optional[str],
+                    next_text: Optional[str] = None) -> Optional[str]:
+    """Why ``chosen_text`` (None = article absent) looks like a stale snapshot, or ``None``.
+
+    ``inverted_text`` is the article in the version of ``announcement_inversion``;
+    ``next_text`` the article in the following version (``None`` when unknown / absent).
+    A warning needs evidence that the chosen text LACKS an amendment tag the comparison text carries
+    (``lacks_later_amendment``); a drop or deletion explained by the text's own tag is legitimate.
+    Returns ``"ARTICLE_MISSING"``, ``"DELETED_PLACEHOLDER"``, ``"PARAGRAPHS_DROPPED"`` or
+    ``"REVERTS_TO_EARLIER_WORDING"``.
+    """
+    if inverted_text is None:
+        return None
+    if chosen_text is None:
+        return "ARTICLE_MISSING" if lacks_later_amendment(None, inverted_text) else None
+    if _norm(chosen_text) == _norm(inverted_text) or not lacks_later_amendment(chosen_text, inverted_text):
+        return None
+    if is_deleted_article(chosen_text):
+        return "DELETED_PLACEHOLDER"
+    if paragraph_count(chosen_text) < paragraph_count(inverted_text):
+        return "PARAGRAPHS_DROPPED"
+    if next_text is not None and _norm(next_text) == _norm(inverted_text):
+        return "REVERTS_TO_EARLIER_WORDING"
+    return None
+
+
+def flip_back_rows(texts: list) -> list[tuple[int, str]]:
+    """Indexes ``i`` whose article differs from ``i-1`` while ``i+1`` equals ``i-1`` again.
+
+    ``texts`` holds one entry per consecutive version (``None`` = article absent in that version).
+    Returns ``(i, kind)`` with kind ``ARTICLE_MISSING`` (absent between two identical versions),
+    ``DELETED_PLACEHOLDER``, ``PARAGRAPHS_DROPPED`` or ``REVERTS_TO_EARLIER_WORDING``. The caller decides
+    which of the three rows is to blame (the one promulgated out of order).
+    """
+    out = []
+    for i in range(1, len(texts) - 1):
+        a, b, c = texts[i - 1], texts[i], texts[i + 1]
+        if a is None or c is None or _norm(a) != _norm(c) or (b is not None and _norm(b) == _norm(a)):
+            continue
+        if b is None:
+            out.append((i, "ARTICLE_MISSING"))
+        elif is_deleted_article(b):
+            out.append((i, "DELETED_PLACEHOLDER"))
+        elif paragraph_count(b) < paragraph_count(a):
+            out.append((i, "PARAGRAPHS_DROPPED"))
+        else:
+            out.append((i, "REVERTS_TO_EARLIER_WORDING"))
+    return out

@@ -81,11 +81,12 @@ def test_period_statement_reflects_article_status(as_of):
     assert "MST 300(시행 20180301): 조문 없음" in st and "MST 300(시행 20180901): 있음" in st
 
 
-def test_period_truncation_is_stated(as_of):
+def test_header_only_period_is_not_truncated(as_of):
+    # header-only periods cost no upstream call per revision, so there is no cap
     out = as_of(law_name="다개정법", as_of="20000101", as_of_end="20201231")
     p = out["period"]
-    assert p["truncated"] is True and p["total_revisions_in_period"] == 14 and p["revision_count"] == 12
-    assert "14개" in out["statement"] and "처음 12개만 조회" in out["statement"]
+    assert "truncated" not in p and p["revision_count"] == 14
+    assert "14개" in out["statement"]
 
 
 # ---- 4. id + mst + ef_yd
